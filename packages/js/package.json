@@ -1,0 +1,31 @@
+{
+  "name": "@seatlayer/js",
+  "version": "0.1.0",
+  "description": "The SeatLayer embed SDK — render an interactive seat picker and hold seats from the browser. Works in any JS framework.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "keywords": ["seating", "seat-map", "seatlayer", "ticketing", "reserved-seating"],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@seatlayer/core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.0"
+  }
+}

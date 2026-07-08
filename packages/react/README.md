@@ -1,0 +1,62 @@
+# @seatlayer/react
+
+React component for the [SeatLayer](https://seatlayer.io) embed SDK. Render an
+interactive seat map, let buyers select and **hold** seats in the browser, then
+**book** them from your server. Full docs: <https://docs.seatlayer.io>
+
+```bash
+npm install @seatlayer/react
+```
+
+## Usage
+
+```tsx
+import { useRef } from 'react';
+import { SeatingChart, type SeatingChartHandle } from '@seatlayer/react';
+
+export function Checkout() {
+  const chart = useRef<SeatingChartHandle>(null);
+
+  return (
+    <SeatingChart
+      ref={chart}
+      event="ev_9f3a"
+      style={{ width: '100%', height: 520 }}
+      onSelectionChange={(seats) => console.log('selected', seats)}
+      onHold={({ holdId }) => bookOnYourServer(holdId)}
+    />
+  );
+}
+```
+
+Drive it imperatively through the ref:
+
+```tsx
+const hold = await chart.current?.hold();              // hold the selection (null on conflict)
+const best = await chart.current?.bestAvailable(4);    // auto-pick 4 seats and hold them
+await chart.current?.release();                        // release the current hold
+```
+
+## Props
+
+Extends the vanilla SDK options minus `container` (the component owns its own mount).
+
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `event` | `string` | **Required.** The event key, e.g. `ev_9f3a`. |
+| `apiBase` | `string?` | API origin. Defaults to the SeatLayer production API. |
+| `maxSelection` | `number?` | Max seats selectable at once (default 10). |
+| `onSelectionChange` | `(seats) => void` | Fires when the selection changes. |
+| `onHold` | `(result) => void` | Fires when seats are held; hand `holdId` to your server. |
+| `onError` | `(err) => void` | Fires on errors. |
+| `className` / `style` | — | Applied to the container element. |
+
+Changing a callback prop does **not** rebuild the canvas; only `event`, `apiBase`,
+`maxSelection`, and `publicKey` do.
+
+## The model
+
+The browser **holds**; your **server books** with a secret key — a browser never
+books directly. See the [integration guide](https://docs.seatlayer.io/getting-started/how-it-works/).
+
+Built on [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js).
