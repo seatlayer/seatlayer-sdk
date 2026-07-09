@@ -6,9 +6,11 @@
   "type": "module",
   "scripts": {
     "sync:core": "node scripts/sync-core.mjs",
+    "check:sync": "node scripts/sync-core.mjs --check",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "clean": "pnpm -r exec rm -rf dist"
+    "clean": "pnpm -r exec rm -rf dist",
+    "release:prep": "pnpm sync:core && pnpm check:sync && pnpm -r build && pnpm -r typecheck"
   },
   "devDependencies": {
     "typescript": "^5.9.0"
