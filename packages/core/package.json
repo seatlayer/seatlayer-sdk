@@ -1,16 +1,16 @@
 {
   "name": "@seatlayer/core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Framework-agnostic seat-rendering engine (Konva) shared by the SeatLayer SDKs.",
   "license": "MIT",
   "homepage": "https://docs.seatlayer.io",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/paiteq/seatlayer-sdk.git",
+    "url": "git+https://github.com/seatlayer/seatlayer-sdk.git",
     "directory": "packages/core"
   },
   "bugs": {
-    "url": "https://github.com/paiteq/seatlayer-sdk/issues"
+    "url": "https://github.com/seatlayer/seatlayer-sdk/issues"
   },
   "type": "module",
   "main": "./dist/index.cjs",
