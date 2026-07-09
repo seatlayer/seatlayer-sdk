@@ -1,8 +1,17 @@
 {
   "name": "@seatlayer/react",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "React component for the SeatLayer embed SDK — render an interactive seat picker and hold seats.",
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "homepage": "https://docs.seatlayer.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paiteq/seatlayer-sdk.git",
+    "directory": "packages/react"
+  },
+  "bugs": {
+    "url": "https://github.com/paiteq/seatlayer-sdk/issues"
+  },
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -22,7 +31,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@seatlayer/js": "workspace:*"
+    "@seatlayer/js": "workspace:^"
   },
   "peerDependencies": {
     "react": ">=17.0.0"
