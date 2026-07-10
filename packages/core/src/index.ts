@@ -8,6 +8,7 @@
  */
 export * from './core/types';
 export * from './core/layout';
+export * from './core/ga';
 export * from './core/sections';
 export * from './engine/SeatmapRenderer';
 export * from './picker/PickerController';

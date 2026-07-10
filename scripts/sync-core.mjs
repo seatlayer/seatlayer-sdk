@@ -28,6 +28,7 @@ const appRepo = process.env.SEATMAP_REPO
 const FILES = [
   ['src/core/types.ts', 'packages/core/src/core/types.ts'],
   ['src/core/layout.ts', 'packages/core/src/core/layout.ts'],
+  ['src/core/ga.ts', 'packages/core/src/core/ga.ts'],
   ['src/core/sections.ts', 'packages/core/src/core/sections.ts'],
   // Orphan-seat (stranded single) detection — imported by PickerController for
   // the non-blocking `onHint` selection advice.

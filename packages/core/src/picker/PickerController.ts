@@ -29,6 +29,7 @@ import type {
   SeatStatus,
   SectionObject,
 } from '../core/types';
+import { gaAreasOf, gaUnitLabels } from '../core/ga';
 
 const DEFAULT_MAX_SELECTION = 10;
 const MAX_BACKOFF_MS = 15_000;
@@ -47,7 +48,7 @@ export interface PickerSeat {
 
 export interface HoldConflict {
   label: string;
-  reason: string;
+  status: string;
 }
 
 /** An open hold — its id, the labels it covers, and the server's expiry time (ms epoch). */
@@ -57,6 +58,8 @@ export interface HoldInfo {
   expiresAt: number;
   /** The held seats with their chosen ticket tier — what the host books against. */
   seats: PickerSeat[];
+  /** Server-authoritative commercial line items, including GA units and resolved prices. */
+  items?: HoldServerItem[];
 }
 
 /** One category's slice of a section (dot + price + count) for the summary card. */
@@ -91,7 +94,19 @@ export interface SectionSummary {
 interface HoldResponse {
   holdId: string;
   expiresAt: number;
+  items?: HoldServerItem[];
 }
+export interface HoldServerItem {
+  label: string;
+  objectId: string;
+  objectType: 'seat' | 'booth' | 'ga';
+  categoryKey: string;
+  tierId: string | null;
+  unitPrice: number;
+  currency: string;
+  quantity?: number;
+}
+export interface HoldSelectionRequest { label: string; tierId?: string | null }
 interface BestAvailableResponse extends HoldResponse {
   labels: string[];
 }
@@ -100,10 +115,10 @@ interface BestAvailableResponse extends HoldResponse {
 export interface PickerTransport {
   chart(key: string): Promise<{
     doc: ChartDoc;
-    event: { key: string; name: string; salesClosed?: boolean; venue?: string | null; startsAt?: number | null; currency?: string };
+    event: { key: string; name: string; salesClosed?: boolean; venue?: string | null; startsAt?: number | null; currency?: string; mode?: string };
   }>;
   objects(key: string): Promise<{ seats: Record<string, string>; hidden?: string[] }>;
-  hold(key: string, labels: string[]): Promise<HoldResponse>;
+  hold(key: string, selections: HoldSelectionRequest[], ttlMs?: number, replaceHoldId?: string): Promise<HoldResponse>;
   bestAvailable(key: string, qty: number, categoryKey?: string): Promise<BestAvailableResponse>;
   release(key: string, labels: string[], holdId: string): Promise<unknown>;
   /** Optional — the SDK omits booking (it hands the holdId to the host page). */
@@ -196,6 +211,8 @@ export class PickerController {
 
   // hold state
   private hold_: HoldInfo | null = null;
+  private liveStatuses = new Map<string, string>();
+  private currency = 'USD';
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: PickerOptions) {
@@ -243,6 +260,8 @@ export class PickerController {
     venue?: string | null;
     startsAt?: number | null;
     currency?: string;
+    /** 'test' ⇒ sandbox event (hosts show a TEST MODE ribbon). */
+    mode?: string;
   } | null> {
     if (this.renderer) return null; // already rendered — never mount twice on one controller
     this.closed = false;
@@ -272,6 +291,7 @@ export class PickerController {
     // The organizer's currency travels with the chart payload; it wins over any
     // option passed at construction (the SDK host may not know it up front).
     const currency = res.event.currency ?? this.opts.currency;
+    this.currency = currency ?? 'USD';
     const renderer = createRenderer(host, {
       maxSelection: this.maxSelection,
       confirmSelection: this.opts.confirmSelection,
@@ -326,6 +346,8 @@ export class PickerController {
       venue: res.event.venue,
       startsAt: res.event.startsAt,
       currency,
+      // 'test' ⇒ sandbox event: hosts render a TEST MODE ribbon (Phase 11).
+      mode: res.event.mode ?? 'live',
     };
   }
 
@@ -352,23 +374,81 @@ export class PickerController {
    * re-throws so the caller can choose the banner copy. Returns null only when
    * there's nothing to hold.
    */
-  async hold(labelsArg?: string[]): Promise<HoldInfo | null> {
+  async hold(labelsArg?: string[], ttlMs?: number): Promise<HoldInfo | null> {
     const r = this.renderer;
     if (!r) return null;
     const labels = labelsArg ?? r.getSelection().map((s) => s.label);
-    if (!labels.length) return null;
+    const existingGA = (this.hold_?.items ?? []).filter((item) => item.objectType === 'ga');
+    const combinedLabels = [...new Set([...existingGA.map((item) => item.label), ...labels])];
+    if (!combinedLabels.length) return null;
 
     // Reuse an existing hold that exactly covers this selection (re-holding 409s).
-    if (this.hold_ && this.holdCovers(labels)) return this.hold_;
-
+    if (this.hold_ && this.holdCovers(combinedLabels)) return this.hold_;
     try {
-      const result = await this.api.hold(this.key, labels);
-      this.setHold({ holdId: result.holdId, labels: [...labels], expiresAt: result.expiresAt });
+      const selections = combinedLabels.map((label) => {
+        const ga = existingGA.find((item) => item.label === label);
+        if (ga) return { label, tierId: ga.tierId };
+        const seat = this.labelToSeat.get(label);
+        const resolved = seat ? this.toSeat(seat) : null;
+        return { label, ...(resolved?.tierId ? { tierId: resolved.tierId } : {}) };
+      });
+      const result = await this.api.hold(this.key, selections, ttlMs, this.hold_?.holdId);
+      this.setHold({ holdId: result.holdId, labels: combinedLabels, expiresAt: result.expiresAt, items: result.items });
       return this.hold_;
     } catch (err) {
       this.handle409Conflicts(err);
       throw err;
     }
+  }
+
+  /** Public GA inventory derived from the live synthetic-unit status stream. */
+  getGAAreas(): { id: string; label: string; capacity: number; available: number; categoryKey: string; price: number; currency: string; tiers?: CategoryTier[] }[] {
+    const doc = this.visibleDoc();
+    if (!doc) return [];
+    return gaAreasOf(doc).map((area) => {
+      const category = doc.categories.find((candidate) => candidate.key === area.categoryKey);
+      return {
+        id: area.id,
+        label: area.label,
+        capacity: Math.max(0, Math.floor(area.capacity)),
+        available: gaUnitLabels(area).filter((label) => (this.liveStatuses.get(label) ?? 'free') === 'free').length,
+        categoryKey: area.categoryKey,
+        tiers: category?.tiers,
+        price: category?.tiers?.[0]?.price ?? category?.price ?? 0,
+        currency: this.currency,
+      };
+    });
+  }
+
+  /** Select a quantity from one GA area and hold it atomically. */
+  async holdGA(
+    areaId: string,
+    qty: number,
+    options: { tierId?: string | null; ttlMs?: number } = {},
+  ): Promise<HoldInfo | null> {
+    const doc = this.visibleDoc();
+    if (!doc || !Number.isFinite(qty) || qty < 1) return null;
+    const area = gaAreasOf(doc).find((candidate) => candidate.id === areaId);
+    if (!area) return null;
+    const labels = gaUnitLabels(area)
+      .filter((label) => !this.hold_?.labels.includes(label) && (this.liveStatuses.get(label) ?? 'free') === 'free')
+      .slice(0, Math.floor(qty));
+    if (labels.length !== Math.floor(qty)) return null;
+    const selections = new Map<string, { label: string; tierId?: string | null }>();
+    for (const item of this.hold_?.items ?? []) selections.set(item.label, { label: item.label, tierId: item.tierId });
+    if (this.hold_ && !this.hold_?.items?.length) {
+      for (const seat of this.hold_.seats) selections.set(seat.label, { label: seat.label, ...(seat.tierId ? { tierId: seat.tierId } : {}) });
+    }
+    for (const seat of this.renderer?.getSelection() ?? []) {
+      const resolved = this.labelToSeat.get(seat.label);
+      const chosen = resolved ? this.toSeat(resolved) : null;
+      selections.set(seat.label, { label: seat.label, ...(chosen?.tierId ? { tierId: chosen.tierId } : {}) });
+    }
+    for (const label of labels) selections.set(label, { label, ...(options.tierId ? { tierId: options.tierId } : {}) });
+    const combined = [...selections.values()];
+    const result = await this.api.hold(this.key, combined, options.ttlMs, this.hold_?.holdId);
+    this.setHold({ holdId: result.holdId, labels: combined.map((s) => s.label), expiresAt: result.expiresAt, items: result.items });
+    return this.hold_;
   }
 
   /** Server-picks `qty` best free seats and holds them atomically. Throws on failure. */
@@ -382,7 +462,7 @@ export class PickerController {
       r.clearSelection();
       const ids = result.labels.map((l) => this.labelToId.get(l)).filter((v): v is string => !!v);
       if (ids.length) r.setStatus(ids, 'held');
-      this.setHold({ holdId: result.holdId, labels: [...result.labels], expiresAt: result.expiresAt });
+      this.setHold({ holdId: result.holdId, labels: [...result.labels], expiresAt: result.expiresAt, items: result.items });
       const seats = result.labels
         .map((l) => this.labelToSeat.get(l))
         .filter((s): s is ExpandedSeat => !!s)
@@ -416,9 +496,19 @@ export class PickerController {
       if (this.hold_ && this.holdCovers(labels)) {
         holdId = this.hold_.holdId; // already held server-side — re-holding would 409
       } else {
-        const h = await this.api.hold(this.key, labels);
+        const replaceHoldId = this.hold_?.holdId;
+        const h = await this.api.hold(
+          this.key,
+          labels.map((label) => {
+            const seat = this.labelToSeat.get(label);
+            const resolved = seat ? this.toSeat(seat) : null;
+            return { label, ...(resolved?.tierId ? { tierId: resolved.tierId } : {}) };
+          }),
+          undefined,
+          replaceHoldId,
+        );
         holdId = h.holdId;
-        this.setHold({ holdId, labels: [...labels], expiresAt: h.expiresAt });
+        this.setHold({ holdId, labels: [...labels], expiresAt: h.expiresAt, items: h.items });
       }
       await this.api.book(this.key, labels, holdId, bookingRef);
     } catch (err) {
@@ -768,7 +858,13 @@ export class PickerController {
 
   private holdCovers(labels: string[]): boolean {
     const h = this.hold_;
-    return !!h && h.labels.length === labels.length && labels.every((l) => h.labels.includes(l));
+    if (!h || h.labels.length !== labels.length || !labels.every((l) => h.labels.includes(l))) return false;
+    const tiers = new Map((h.items ?? []).map((item) => [item.label, item.tierId]));
+    return labels.every((label) => {
+      const seat = this.labelToSeat.get(label);
+      const currentTier = seat ? this.toSeat(seat).tierId ?? null : null;
+      return !tiers.has(label) || tiers.get(label) === currentTier;
+    });
   }
 
   private handle409Conflicts(err: unknown): void {
@@ -792,7 +888,7 @@ export class PickerController {
     this.hold_ = full;
     if (this.expiryTimer) clearTimeout(this.expiryTimer);
     const ms = Math.max(0, full.expiresAt - Date.now());
-    this.expiryTimer = setTimeout(() => this.onHoldExpired(), ms);
+    this.expiryTimer = setTimeout(() => void this.expireActiveHold(), ms);
     this.opts.onHold?.(full);
   }
   private clearHold(): void {
@@ -802,19 +898,34 @@ export class PickerController {
       this.expiryTimer = null;
     }
   }
-  private onHoldExpired(): void {
+  private async expireActiveHold(): Promise<void> {
     const hold = this.hold_;
-    this.clearHold();
-    if (hold) {
-      const ids = hold.labels.map((l) => this.labelToId.get(l)).filter((v): v is string => !!v);
-      if (ids.length) this.renderer?.setStatus(ids, 'free');
+    if (!hold) return;
+    try {
+      const snap = await this.api.objects(this.key);
+      if (this.hold_?.holdId !== hold.holdId) return;
+      this.applySeatsMap(snap.seats);
+    } catch {
+      // Do not report expiry from a disconnected/stale client. Reconcile once
+      // the authoritative snapshot becomes reachable.
+      if (this.hold_?.holdId === hold.holdId) {
+        this.expiryTimer = setTimeout(() => void this.expireActiveHold(), 2_000);
+      }
+      return;
     }
+    if (this.hold_?.holdId !== hold.holdId) return; // booked snapshot cleared it
+    if (hold.labels.some((label) => this.liveStatuses.get(label) === 'held')) {
+      this.expiryTimer = setTimeout(() => void this.expireActiveHold(), 1_000);
+      return;
+    }
+    this.clearHold();
     this.opts.onHoldExpired?.();
   }
 
   private applySeatsMap(seats: Record<string, string>): void {
     const r = this.renderer;
     if (!r) return;
+    this.liveStatuses = new Map(Object.entries(seats));
     if (this.allIds.length) r.setStatus(this.allIds, 'free');
     const byStatus: Record<SeatStatus, string[]> = { free: [], held: [], booked: [], not_for_sale: [] };
     for (const [label, st] of Object.entries(seats)) {
@@ -825,6 +936,11 @@ export class PickerController {
       if (byStatus[st].length) r.setStatus(byStatus[st], st);
     });
     this.opts.onStatusChange?.();
+    this.clearBookedHoldIfSettled();
+  }
+
+  private clearBookedHoldIfSettled(): void {
+    if (this.hold_?.labels.every((label) => this.liveStatuses.get(label) === 'booked')) this.clearHold();
   }
 
   private async resnapshot(): Promise<void> {
@@ -874,6 +990,7 @@ export class PickerController {
         this.applySeatsMap(m.seats);
       } else if (Array.isArray(m.changes)) {
         for (const ch of m.changes) {
+          this.liveStatuses.set(ch.label, ch.status);
           const id = this.labelToId.get(ch.label);
           if (!id) continue;
           const next = mapStatus(ch.status);
@@ -890,6 +1007,7 @@ export class PickerController {
           }
           r.setStatus([id], next);
         }
+        this.clearBookedHoldIfSettled();
         this.opts.onStatusChange?.();
       }
     };

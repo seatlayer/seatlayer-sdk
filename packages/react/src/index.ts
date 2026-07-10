@@ -8,4 +8,6 @@ export type {
   SelectedSeat,
   HoldResult,
   BestAvailableResult,
+  GAAreaAvailability,
+  HoldLineItem,
 } from './SeatingChart';

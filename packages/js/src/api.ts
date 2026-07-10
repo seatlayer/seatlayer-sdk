@@ -11,7 +11,16 @@ import type { ChartDoc, PickerSeat as SelectedSeat } from '@seatlayer/core';
 
 export interface HoldConflict {
   label: string;
-  reason: string;
+  status: string;
+}
+
+export interface HoldLineItem {
+  label: string; objectId: string; objectType: 'seat' | 'booth' | 'ga'; categoryKey: string;
+  tierId: string | null;
+  /** Price in major currency units (for example 45 means $45.00). */
+  unitPrice: number;
+  currency: string;
+  quantity?: number;
 }
 
 export class ApiError extends Error {
@@ -48,6 +57,7 @@ export interface HoldResult {
   expiresAt: number;
   /** The held seats with the buyer's chosen ticket tier per seat (present on hold). */
   seats?: SelectedSeat[];
+  items?: HoldLineItem[];
 }
 
 /** Best-available response — the server-picked seats plus the hold they landed in. */
@@ -56,6 +66,7 @@ export interface BestAvailableResult {
   expiresAt: number;
   labels: string[];
   seats?: SelectedSeat[];
+  items?: HoldResult['items'];
 }
 
 async function request<T>(
@@ -97,10 +108,10 @@ export class PubApi {
     return request(this.base, `/pub/events/${encodeURIComponent(key)}/objects`);
   }
 
-  hold(key: string, labels: string[]): Promise<HoldResult> {
+  hold(key: string, selections: Array<{ label: string; tierId?: string | null }>, ttlMs?: number, replaceHoldId?: string): Promise<HoldResult> {
     return request(this.base, `/pub/events/${encodeURIComponent(key)}/hold`, {
       method: 'POST',
-      body: { labels },
+      body: { selections, ...(ttlMs ? { ttlMs } : {}), ...(replaceHoldId ? { replaceHoldId } : {}) },
     });
   }
 

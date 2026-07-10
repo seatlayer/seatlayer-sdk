@@ -20,6 +20,7 @@ export const es: Dict = {
   'picker.holdExpired': 'Tu retención expiró — los asientos fueron liberados. Elige de nuevo.',
   'picker.seatTaken': 'El asiento {label} fue tomado por otro comprador.',
   'picker.poweredBy': 'Con la tecnología de SeatLayer',
+  'picker.testMode': 'MODO DE PRUEBA',
   'picker.colorblind': 'Colores aptos para daltonismo',
   'picker.orphanHint': 'Esto deja un asiento aislado — considera desplazarte un asiento.',
   'picker.seats.one': '{count} asiento',

@@ -5,6 +5,6 @@
  * Framework wrappers (@seatlayer/react, …) build on top of this.
  */
 export { SeatingChart } from './SeatingChart';
-export type { SeatingChartOptions, SelectedSeat } from './SeatingChart';
+export type { SeatingChartOptions, SelectedSeat, GAAreaAvailability } from './SeatingChart';
 export { ApiError } from './api';
-export type { HoldResult, HoldConflict, BestAvailableResult } from './api';
+export type { HoldResult, HoldConflict, HoldLineItem, BestAvailableResult } from './api';

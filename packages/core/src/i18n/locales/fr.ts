@@ -20,6 +20,7 @@ export const fr: Dict = {
   'picker.holdExpired': 'Votre réservation a expiré — les sièges ont été libérés. Sélectionnez à nouveau.',
   'picker.seatTaken': 'Le siège {label} vient d\'être réservé par un autre acheteur.',
   'picker.poweredBy': 'Propulsé par SeatLayer',
+  'picker.testMode': 'MODE TEST',
   'picker.colorblind': 'Couleurs adaptées au daltonisme',
   'picker.orphanHint': "Cela laisse un siège isolé — pensez à vous décaler d'un siège.",
   'picker.seats.one': '{count} siège',

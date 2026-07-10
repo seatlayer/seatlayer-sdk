@@ -11,14 +11,20 @@ import {
   type SelectedSeat,
   type HoldResult,
   type BestAvailableResult,
+  type GAAreaAvailability,
+  type HoldLineItem,
 } from '@seatlayer/js';
 
-export type { SelectedSeat, HoldResult, BestAvailableResult } from '@seatlayer/js';
+export type { SelectedSeat, HoldResult, BestAvailableResult, GAAreaAvailability, HoldLineItem } from '@seatlayer/js';
 
 /** Imperative handle exposed via `ref` — call these to drive the picker from your app. */
 export interface SeatingChartHandle {
   /** Hold the current selection. Resolves the hold, or `null` on a 409 conflict. */
-  hold(): Promise<HoldResult | null>;
+  hold(options?: { ttlMs?: number }): Promise<HoldResult | null>;
+  /** GA areas with live remaining capacity. */
+  getGAAreas(): GAAreaAvailability[];
+  /** Atomically hold a quantity from one GA area. */
+  holdGA(areaId: string, qty: number, options?: { tierId?: string | null; ttlMs?: number }): Promise<HoldResult | null>;
   /** Ask the server for the `qty` best free seats and hold them atomically. */
   bestAvailable(qty: number, categoryKey?: string): Promise<BestAvailableResult | null>;
   /** Release the current hold (if any). */
@@ -83,6 +89,8 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
         messages: callbacks.current.messages,
         onSelectionChange: (seats) => callbacks.current.onSelectionChange?.(seats),
         onHold: (result) => callbacks.current.onHold?.(result),
+        onHoldExpired: () => callbacks.current.onHoldExpired?.(),
+        onGAClick: (area) => callbacks.current.onGAClick?.(area),
         onError: (err) => callbacks.current.onError?.(err),
         onDeckTap: (floorId) => callbacks.current.onDeckTap?.(floorId),
         onHint: (message) => callbacks.current.onHint?.(message),
@@ -101,7 +109,9 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
     useImperativeHandle(
       ref,
       (): SeatingChartHandle => ({
-        hold: () => chartRef.current?.hold() ?? Promise.resolve(null),
+        hold: (options) => chartRef.current?.hold(options) ?? Promise.resolve(null),
+        getGAAreas: () => chartRef.current?.getGAAreas() ?? [],
+        holdGA: (areaId, qty, options) => chartRef.current?.holdGA(areaId, qty, options) ?? Promise.resolve(null),
         bestAvailable: (qty, categoryKey) =>
           chartRef.current?.bestAvailable(qty, categoryKey) ?? Promise.resolve(null),
         release: () => chartRef.current?.release() ?? Promise.resolve(),

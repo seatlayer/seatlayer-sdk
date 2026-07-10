@@ -7,7 +7,7 @@
  * + booking to the controller, so the SDK inherits every fix made for the live
  * buyer page and the demo picker.
  */
-import { PickerController, loadLocale, setStringOverrides, type PickerSeat } from '@seatlayer/core';
+import { PickerController, loadLocale, setStringOverrides, t, type PickerSeat } from '@seatlayer/core';
 import { PubApi, type BestAvailableResult, type HoldResult } from './api';
 
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
@@ -15,6 +15,10 @@ const DEFAULT_MAX_SELECTION = 10;
 
 /** A seat as surfaced to the host page (prices resolved from the chart's categories). */
 export type SelectedSeat = PickerSeat;
+export interface GAAreaAvailability {
+  id: string; label: string; capacity: number; available: number; categoryKey: string; price: number; currency: string;
+  tiers?: Array<{ id: string; name: string; price: number }>;
+}
 
 export interface SeatingChartOptions {
   /** CSS selector or an HTMLElement to render into. */
@@ -48,6 +52,8 @@ export interface SeatingChartOptions {
   colorblindSafe?: boolean;
   onSelectionChange?: (seats: SelectedSeat[]) => void;
   onHold?: (result: HoldResult) => void;
+  onHoldExpired?: () => void;
+  onGAClick?: (area: GAAreaAvailability) => void;
   onError?: (err: unknown) => void;
   /**
    * Multi-floor charts only: fires when the buyer taps a deck in the stacked
@@ -99,7 +105,12 @@ export class SeatingChart {
       maxSelection: options.maxSelection ?? DEFAULT_MAX_SELECTION,
       currency: options.currency,
       onSelectionChange: (seats) => this.opts.onSelectionChange?.(seats),
-      onHold: (h) => this.opts.onHold?.({ holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats }),
+      onHold: (h) => this.opts.onHold?.({ holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items }),
+      onHoldExpired: () => this.opts.onHoldExpired?.(),
+      onGAClick: (areaId) => {
+        const area = this.controller.getGAAreas().find((candidate) => candidate.id === areaId);
+        if (area) this.opts.onGAClick?.(area);
+      },
       onError: (err) => this.opts.onError?.(err),
       onDeckTap: (floorId) => this.opts.onDeckTap?.(floorId),
       onHint: (message) => this.opts.onHint?.(message),
@@ -128,8 +139,23 @@ export class SeatingChart {
     this.mount.appendChild(host);
     this.hostEl = host;
 
-    const ok = await this.controller.render(host);
-    if (!ok) this.rendered = false; // render() already emitted the error
+    const info = await this.controller.render(host);
+    if (!info) {
+      this.rendered = false;
+      return this;
+    }
+    if (info.mode === 'test') {
+      host.style.overflow = 'hidden';
+      const ribbon = document.createElement('div');
+      ribbon.textContent = t('picker.testMode');
+      ribbon.setAttribute('aria-label', t('picker.testMode'));
+      ribbon.style.cssText =
+        'position:absolute;top:18px;right:-34px;z-index:6;transform:rotate(45deg);' +
+        'width:140px;text-align:center;padding:4px 0;background:#f4b740;color:#1a1200;' +
+        'font:800 10.5px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;' +
+        'box-shadow:0 2px 8px rgba(0,0,0,.25);pointer-events:none;';
+      host.appendChild(ribbon);
+    }
     return this;
   }
 
@@ -139,10 +165,28 @@ export class SeatingChart {
   }
 
   /** Hold the current selection. Resolves the hold, or null on a 409 conflict. */
-  async hold(): Promise<HoldResult | null> {
+  async hold(options: { ttlMs?: number } = {}): Promise<HoldResult | null> {
     try {
-      const h = await this.controller.hold();
-      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats } : null;
+      const h = await this.controller.hold(undefined, options.ttlMs);
+      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
+    } catch (err) {
+      this.opts.onError?.(err);
+      return null;
+    }
+  }
+
+  getGAAreas(): GAAreaAvailability[] {
+    return this.controller.getGAAreas();
+  }
+
+  async holdGA(
+    areaId: string,
+    qty: number,
+    options: { tierId?: string | null; ttlMs?: number } = {},
+  ): Promise<HoldResult | null> {
+    try {
+      const h = await this.controller.holdGA(areaId, qty, options);
+      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
     } catch (err) {
       this.opts.onError?.(err);
       return null;
@@ -153,7 +197,7 @@ export class SeatingChart {
   async bestAvailable(qty: number, categoryKey?: string): Promise<BestAvailableResult | null> {
     try {
       const h = await this.controller.bestAvailable(qty, categoryKey);
-      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, labels: h.labels, seats: h.seats } : null;
+      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, labels: h.labels, seats: h.seats, items: h.items } : null;
     } catch (err) {
       this.opts.onError?.(err);
       return null;

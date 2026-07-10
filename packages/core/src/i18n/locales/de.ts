@@ -24,6 +24,7 @@ export const de: Dict = {
   'picker.holdExpired': 'Ihre Reservierung ist abgelaufen — die Plätze wurden freigegeben. Bitte erneut auswählen.',
   'picker.seatTaken': 'Platz {label} wurde gerade von einem anderen Käufer gebucht.',
   'picker.poweredBy': 'Bereitgestellt von SeatLayer',
+  'picker.testMode': 'TESTMODUS',
   'picker.colorblind': 'Farbenblind-freundliche Farben',
   'picker.orphanHint': 'Dadurch bleibt ein einzelner Platz übrig — rücken Sie ggf. einen Platz weiter.',
   'picker.seats.one': '{count} Platz',

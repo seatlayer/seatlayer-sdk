@@ -15,6 +15,7 @@
  */
 import type { ChartDoc, ChartObject, SectionObject } from './types';
 import { allObjects, expandBooth, expandRow, expandTable, objectCenter, pointInPolygon } from './layout';
+import { gaUnitLabels } from './ga';
 
 /** Synthetic section id for seat objects that fall in no drawn section. */
 export const UNGROUPED_ID = '__ungrouped__';
@@ -54,11 +55,12 @@ function objectSeatLabels(o: ChartObject): string[] {
   if (o.type === 'row') return expandRow(o).map((s) => s.label);
   if (o.type === 'table') return expandTable(o).map((s) => s.label);
   if (o.type === 'booth') return expandBooth(o).map((s) => s.label);
+  if (o.type === 'gaArea') return gaUnitLabels(o);
   return [];
 }
 
 function isSeatObject(o: ChartObject): boolean {
-  return o.type === 'row' || o.type === 'table' || o.type === 'booth';
+  return o.type === 'row' || o.type === 'table' || o.type === 'booth' || o.type === 'gaArea';
 }
 
 /**
