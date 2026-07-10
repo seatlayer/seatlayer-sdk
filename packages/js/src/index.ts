@@ -8,3 +8,9 @@ export { SeatingChart } from './SeatingChart';
 export type { SeatingChartOptions, SelectedSeat, GAAreaAvailability } from './SeatingChart';
 export { ApiError } from './api';
 export type { HoldResult, HoldConflict, HoldLineItem, BestAvailableResult } from './api';
+export { EmbeddedDesigner } from './EmbeddedDesigner';
+export type {
+  EmbeddedDesignerOptions,
+  EmbeddedDesignerMessage,
+  EmbeddedDesignerEventType,
+} from './EmbeddedDesigner';

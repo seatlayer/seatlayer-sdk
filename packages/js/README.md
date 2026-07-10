@@ -40,6 +40,36 @@ onUnmounted(() => chart?.destroy());
 
 Svelte → `onMount` / `onDestroy`. Angular → `ngAfterViewInit` / `ngOnDestroy`.
 
+## Embed the chart Designer
+
+For organizer-facing venue design, use `EmbeddedDesigner`. Your backend mints the
+short-lived `designerUrl`; the browser receives no SeatLayer secret key. The wrapper
+creates the iframe, recreates it for a new session URL, and validates every
+`postMessage` by iframe source and exact Designer origin.
+
+```js
+import { EmbeddedDesigner } from '@seatlayer/js';
+
+const designer = new EmbeddedDesigner({
+  container: '#venue-designer',
+  designerUrl: session.designerUrl, // returned by YOUR backend
+  expectedChartId: session.chartId,
+  expectedWorkspaceId: session.workspaceId,
+  onPublished: ({ chartId }) => refreshVenue(chartId),
+  onClose: () => closeVenueEditor(),
+  onError: ({ code, message }) => showError(code ?? message),
+});
+designer.mount();
+
+// On a new editor opening, use a new session and iframe:
+designer.setDesignerUrl(nextSession.designerUrl);
+// On route teardown:
+designer.destroy();
+```
+
+Give the container a height, for example `min-height: 760px`. Keep the default
+`referrerPolicy: 'origin'`; the Designer uses it to verify the parent origin.
+
 ## API
 
 `new SeatingChart(options)` — options: `container` (selector or element, required),

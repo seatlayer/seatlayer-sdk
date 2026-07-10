@@ -60,3 +60,34 @@ The browser **holds**; your **server books** with a secret key — a browser nev
 books directly. See the [integration guide](https://docs.seatlayer.io/getting-started/how-it-works/).
 
 Built on [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js).
+
+## Embed the chart Designer
+
+`EmbeddedDesigner` gives an organizer a native-feeling Designer inside your React
+application. Mint `designerUrl` from your backend — never from a browser using an
+account secret key. The component verifies messages by iframe source, Designer origin,
+and the chart/workspace ids you provide.
+
+```tsx
+import { EmbeddedDesigner } from '@seatlayer/react';
+
+export function VenueEditor({ session }: { session: {
+  designerUrl: string; chartId: string; workspaceId: string;
+} }) {
+  return (
+    <EmbeddedDesigner
+      designerUrl={session.designerUrl}
+      expectedChartId={session.chartId}
+      expectedWorkspaceId={session.workspaceId}
+      style={{ width: '100%', height: 'calc(100vh - 96px)' }}
+      onSaved={({ chartId }) => refreshVenue(chartId)}
+      onPublished={({ chartId }) => refreshVenue(chartId)}
+      onClose={() => closeVenueEditor()}
+      onError={({ code, message }) => showError(code ?? message)}
+    />
+  );
+}
+```
+
+Changing `designerUrl` replaces the iframe, so a newly-minted fragment token never
+continues an earlier session. See [the embedded Designer guide](https://docs.seatlayer.io/guides/embedded-designer/).

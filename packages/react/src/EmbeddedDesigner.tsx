@@ -1,0 +1,90 @@
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  type CSSProperties,
+} from 'react';
+import {
+  EmbeddedDesigner as CoreEmbeddedDesigner,
+  type EmbeddedDesignerMessage,
+} from '@seatlayer/js';
+
+export type { EmbeddedDesignerMessage } from '@seatlayer/js';
+
+export interface EmbeddedDesignerHandle {
+  /** Recreate the iframe with a newly-minted session URL. */
+  setDesignerUrl(designerUrl: string): void;
+  /** The currently mounted iframe, if any. */
+  getIframe(): HTMLIFrameElement | null;
+}
+
+export interface EmbeddedDesignerProps {
+  /** Short-lived `designerUrl` returned by your backend. Never pass an `sk_` key. */
+  designerUrl: string;
+  expectedChartId?: string;
+  expectedWorkspaceId?: string;
+  title?: string;
+  className?: string;
+  style?: CSSProperties;
+  iframeClassName?: string;
+  iframeStyle?: Partial<CSSStyleDeclaration>;
+  allow?: string;
+  referrerPolicy?: ReferrerPolicy;
+  onReady?: (message: EmbeddedDesignerMessage) => void;
+  onSaved?: (message: EmbeddedDesignerMessage) => void;
+  onPublished?: (message: EmbeddedDesignerMessage) => void;
+  onClose?: (message: EmbeddedDesignerMessage) => void;
+  onError?: (message: EmbeddedDesignerMessage) => void;
+}
+
+/**
+ * Native-feeling React host for the secure SeatLayer Designer iframe.
+ * A new `designerUrl` always recreates the iframe, so a new fragment token can
+ * never retain state from an earlier chart session.
+ */
+export const EmbeddedDesigner = forwardRef<EmbeddedDesignerHandle, EmbeddedDesignerProps>(
+  function EmbeddedDesigner(props, ref) {
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const designerRef = useRef<CoreEmbeddedDesigner | null>(null);
+    const callbacks = useRef(props);
+    callbacks.current = props;
+
+    useEffect(() => {
+      const container = containerRef.current;
+      if (!container) return;
+      const designer = new CoreEmbeddedDesigner({
+        designerUrl: props.designerUrl,
+        container,
+        expectedChartId: props.expectedChartId,
+        expectedWorkspaceId: props.expectedWorkspaceId,
+        title: props.title,
+        className: props.iframeClassName,
+        style: props.iframeStyle,
+        allow: props.allow,
+        referrerPolicy: props.referrerPolicy,
+        onReady: (message) => callbacks.current.onReady?.(message),
+        onSaved: (message) => callbacks.current.onSaved?.(message),
+        onPublished: (message) => callbacks.current.onPublished?.(message),
+        onClose: (message) => callbacks.current.onClose?.(message),
+        onError: (message) => callbacks.current.onError?.(message),
+      });
+      designer.mount();
+      designerRef.current = designer;
+      return () => {
+        designer.destroy();
+        designerRef.current = null;
+      };
+      // Session/chart identity changes must recreate the iframe. Callback changes are
+      // picked up from the ref without reloading an in-progress Designer session.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [props.designerUrl, props.expectedChartId, props.expectedWorkspaceId, props.title, props.iframeClassName, props.iframeStyle, props.allow, props.referrerPolicy]);
+
+    useImperativeHandle(ref, () => ({
+      setDesignerUrl: (designerUrl) => { designerRef.current?.setDesignerUrl(designerUrl); },
+      getIframe: () => designerRef.current?.getIframe() ?? null,
+    }), []);
+
+    return <div ref={containerRef} className={props.className} style={props.style} />;
+  },
+);
