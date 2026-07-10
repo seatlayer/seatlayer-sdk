@@ -3,14 +3,14 @@
 The rule that makes everything else work:
 
 > **The main app (`seatmap/src`) is the single source of truth for the rendering
-> engine.** The files under `packages/core/src/{core,engine,picker}` are a
+> engine.** The files under `packages/core/src/{core,engine,picker,i18n,lib}` are a
 > generated mirror — never hand-edit them.
 
 ## Who owns what
 
 | Code | Source of truth | How to change it |
 | --- | --- | --- |
-| Engine: `packages/core/src/{core,engine,picker}` | **The app** (`seatmap/src/{core,engine,picker}`) | Edit it in the app, then `pnpm sync:core` |
+| Engine: `packages/core/src/{core,engine,picker,i18n,lib}` | **The app** (`seatmap/src/{core,engine,picker,i18n,lib}`) | Edit it in the app, then `pnpm sync:core` |
 | `@seatlayer/core` barrel (`packages/core/src/index.ts`) | This repo | Edit here |
 | `@seatlayer/js` (`packages/js/src`) | This repo | Edit here |
 | `@seatlayer/react` (`packages/react/src`) | This repo | Edit here |

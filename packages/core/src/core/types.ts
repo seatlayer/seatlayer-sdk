@@ -17,8 +17,22 @@ export interface Category {
   key: string;
   label: string;
   color: string;
-  /** Demo-only convenience; real pricing comes from ticket tiers server-side. */
+  /** Base price — used when the category has no explicit tiers. */
   price?: number;
+  /**
+   * Ticket tiers (Adult / Child / Senior…). When present, a buyer picks a tier
+   * per seat in this category and the tier's price applies; the first tier is the
+   * default. Per-category (not per-seat) pricing — see Batch 3.5. Empty/absent =
+   * a single price (the `price` above).
+   */
+  tiers?: CategoryTier[];
+}
+
+/** One ticket tier within a category: a named price (Adult, Child, Senior…). */
+export interface CategoryTier {
+  id: string;
+  name: string;
+  price: number;
 }
 
 /**
@@ -132,7 +146,9 @@ export interface RowObject {
   seatLabelStart?: number;
   /** Seat numbering within the row (default ltr, step 1). */
   seatNumbering?: {
-    direction: 'ltr' | 'rtl';
+    /** ltr / rtl number from an end; `center` numbers outward from the middle
+     *  (centre seat lowest — the premium-centre theatre convention). */
+    direction: 'ltr' | 'rtl' | 'center';
     /** 2 = odd/even numbering (1,3,5… — start at 2 for evens). */
     step?: 1 | 2;
   };
@@ -202,6 +218,13 @@ export interface TableObject {
   rotation: number;
   /** Round tables. */
   radius?: number;
+  /**
+   * Round tables: the arc (in degrees) the seats occupy, default 360 (full
+   * ring). Below 360 leaves an open side — e.g. a service gap for waiters, a
+   * head table facing the room, or clearance against a wall. The opening is
+   * centred on the `rotation` direction; seats spread across the rest.
+   */
+  seatArc?: number;
   /** Rect tables. */
   width?: number;
   height?: number;
@@ -308,15 +331,34 @@ export type ChartObject =
   | TextObject
   | SectionObject;
 
+/**
+ * One floor / level of a multi-floor venue (Batch 5). Each floor owns its own
+ * geometry, stage focal point, and trace image; categories/zones/tiers stay
+ * chart-global (one event, one inventory). A single-floor chart has NO `floors`
+ * — its `objects[]` is the whole venue — so all existing charts are untouched.
+ */
+export interface Floor {
+  id: string;
+  name: string;
+  objects: ChartObject[];
+  focalPoint: Point;
+  backgroundImage?: ChartDoc['backgroundImage'];
+}
+
 export interface ChartDoc {
   version: 1;
   name: string;
   venueType: 'SIMPLE' | 'MIXED';
-  /** The stage / point every seat looks at. Anchors seat-view + sightlines. */
+  /** The stage / point every seat looks at. Anchors seat-view + sightlines.
+   *  Multi-floor: mirrors floor 0; each floor also carries its own focalPoint. */
   focalPoint: Point;
   categories: Category[];
   /** Section groupings for far-zoom navigation + pricing (optional; sections reference by id). */
   zones?: ZoneDef[];
+  /** Multi-floor venues (Batch 5): present ⇒ floors[] is the source of truth;
+   *  absent ⇒ single-floor and `objects` below is the whole chart. `objects`
+   *  is kept mirroring floor 0 so single-floor readers never branch. */
+  floors?: Floor[];
   objects: ChartObject[];
   /** Floor-plan photo the organizer traces over (designer-only aid, also rendered dimly in picker if kept). */
   backgroundImage?: {
@@ -329,6 +371,10 @@ export interface ChartDoc {
   };
   /** Brand/venue theming (colors); categories carry their own colors separately. */
   theme?: ChartTheme;
+  /** Parametric-template provenance: present ⇒ the chart came from a capacity-
+   *  adjustable template family, and the designer offers a capacity control that
+   *  regenerates it at a new target seat count (Batch 4 "curated singles + resize"). */
+  template?: { family: string; targetSeats: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -371,9 +417,23 @@ export interface RendererCallbacks {
   onFps?: (fps: number) => void;
   /** Fired when a GA area is clicked (quantity picking is UI-side). */
   onGAClick?: (areaId: string) => void;
+  /**
+   * Fired when a tap lands on a section outline while seats are NOT the active
+   * rung (i.e. zoomed out, section/zone LOD). The host glides in + shows a
+   * section-summary card instead of trying to select a 4px seat (Slice 5).
+   */
+  onSectionTap?: (sectionId: string) => void;
+  /**
+   * Fired when a seat/deck is tapped in the 3D all-floors stacked overview — the
+   * host drops back to the flat 2D map on that floor ("tap a deck to enter").
+   */
+  onDeckTap?: (floorId: string) => void;
   /** Fired after any pan/zoom/resize settles — re-anchor screen-space overlays. */
   onViewChange?: () => void;
 }
+
+/** Far-zoom level-of-detail rung: whole zones → section blocks → individual seats. */
+export type LodRung = 'zones' | 'sections' | 'seats';
 
 export interface RendererOptions extends RendererCallbacks {
   /** Max seats selectable at once (default 10). */
@@ -388,11 +448,15 @@ export interface RendererOptions extends RendererCallbacks {
    * pushing straight into the cart; `deselect([seat.id])` on Cancel un-highlights.
    */
   confirmSelection?: boolean;
+  /** ISO 4217 currency for on-map prices ("FROM …"); defaults to money.DEFAULT_CURRENCY.
+   *  Locale for grouping/symbol placement comes from the active i18n locale. */
+  currency?: string;
 }
 
 export interface ISeatmapRenderer {
-  /** Replace the chart. Resets selection and statuses, zooms to fit. */
-  setChart(doc: ChartDoc): void;
+  /** Replace the chart. Resets selection and statuses, zooms to fit.
+   *  `opts.floorId` picks which floor to render on a multi-floor chart (Batch 5). */
+  setChart(doc: ChartDoc, opts?: { floorId?: string }): void;
   /** Bulk status update; re-renders affected seats only. */
   setStatus(seatIds: string[], status: SeatStatus): void;
   getStatus(seatId: string): SeatStatus;
@@ -429,12 +493,23 @@ export interface ISeatmapRenderer {
   setAccessibilityFilter(types: AccessibilityType[] | null): void;
   /** Legend hover-highlight: dim free seats of other categories (null clears). */
   setCategoryHighlight?(key: string | null): void;
+  /** Dim the seats of these section/zone ids (organizer manager: held-back inventory). */
+  setDimmedSections?(ids: string[] | null): void;
   /**
    * Switch the projection. `'flat'` = normal top-down; `'isometric'` = the "3D"
    * view (affine skew/rotate + elevation lift), hit-testing preserved in screen
    * space. Purely visual — the chart is authored flat. Animated unless reduced-motion.
    */
   setViewMode?(mode: 'flat' | 'isometric'): void;
+  /** Current projection (defaults to 'flat' when unimplemented). */
+  getViewMode?(): 'flat' | 'isometric';
+  /** Multi-floor (Batch 5): switch the shown floor; list floors; read the active id. */
+  setActiveFloor?(floorId: string): void;
+  getFloors?(): { id: string; name: string }[];
+  getActiveFloorId?(): string;
+  /** Render all floors stacked (3D overview) vs the active floor. No-op single-floor. */
+  setStacked?(on: boolean): void;
+  isStacked?(): boolean;
   /**
    * Section id whose outline contains a container-relative screen point (or null).
    * Feeds the far-zoom "tap a section to zoom in" flow (Slice 5).
@@ -442,6 +517,19 @@ export interface ISeatmapRenderer {
   sectionAt?(clientPoint: Point): string | null;
   /** Seat ids belonging to a section — for the section-summary card (Slice 5). */
   sectionMembers?(id: string): string[];
+  /**
+   * Smoothly glide (pan+zoom) the camera to frame a section (by id) or a world-
+   * space bounds rect over ~450ms easeInOutCubic. `prefers-reduced-motion` snaps.
+   * A pointer-down (grab/pan) cancels an in-flight glide. Slice 5 "glide in".
+   */
+  focusRegion?(
+    target: string | { x: number; y: number; width: number; height: number },
+    opts?: { animate?: boolean },
+  ): void;
+  /** Current LOD rung derived from zoom (for the ZONES/SECTIONS/SEATS pill). */
+  getRung?(): LodRung;
+  /** Jump the camera to a rung's zoom band, centred on the chart (glided). */
+  setRung?(rung: LodRung): void;
   destroy(): void;
 }
 

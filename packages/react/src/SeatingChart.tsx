@@ -25,6 +25,11 @@ export interface SeatingChartHandle {
   release(): Promise<void>;
   /** The current selection, with prices resolved from the chart categories. */
   getSelection(): SelectedSeat[];
+  /**
+   * Choose a ticket tier for a selected seat (e.g. Adult → Child). Available
+   * `tiers` are on each `SelectedSeat`; `tierId=null` reverts to the default.
+   */
+  setSeatTier(seatId: string, tierId: string | null): void;
 }
 
 export interface SeatingChartProps extends Omit<SeatingChartOptions, 'container'> {
@@ -36,13 +41,14 @@ export interface SeatingChartProps extends Omit<SeatingChartOptions, 'container'
  * React wrapper around the framework-agnostic `@seatlayer/js` SDK.
  *
  * The underlying canvas is created once and torn down on unmount. Callback props
- * (`onSelectionChange`, `onHold`, `onError`) may change freely between renders
- * without re-mounting the canvas — only `event`, `apiBase`, `maxSelection`, and
- * `publicKey` trigger a rebuild.
+ * (`onSelectionChange`, `onHold`, `onError`, `onDeckTap`) may change freely
+ * between renders without re-mounting the canvas — only `event`, `apiBase`,
+ * `maxSelection`, `publicKey`, `locale`, and `currency` trigger a rebuild.
+ * (`messages` is read once per mount; changing it alone does not re-apply.)
  */
 export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
   function SeatingChart(props, ref) {
-    const { className, style, event, apiBase, maxSelection, publicKey } = props;
+    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const chartRef = useRef<CoreSeatingChart | null>(null);
@@ -61,9 +67,13 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
         apiBase,
         maxSelection,
         publicKey,
+        locale,
+        currency,
+        messages: callbacks.current.messages,
         onSelectionChange: (seats) => callbacks.current.onSelectionChange?.(seats),
         onHold: (result) => callbacks.current.onHold?.(result),
         onError: (err) => callbacks.current.onError?.(err),
+        onDeckTap: (floorId) => callbacks.current.onDeckTap?.(floorId),
       });
       chartRef.current = chart;
       void chart.render();
@@ -74,7 +84,7 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
       };
       // Rebuild only when the identity of the chart changes.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [event, apiBase, maxSelection, publicKey]);
+    }, [event, apiBase, maxSelection, publicKey, locale, currency]);
 
     useImperativeHandle(
       ref,
@@ -84,6 +94,7 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
           chartRef.current?.bestAvailable(qty, categoryKey) ?? Promise.resolve(null),
         release: () => chartRef.current?.release() ?? Promise.resolve(),
         getSelection: () => chartRef.current?.getSelection() ?? [],
+        setSeatTier: (seatId, tierId) => chartRef.current?.setSeatTier(seatId, tierId),
       }),
       [],
     );

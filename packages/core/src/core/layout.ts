@@ -9,6 +9,7 @@ import type {
   ChartDoc,
   ChartObject,
   ExpandedSeat,
+  Floor,
   Point,
   RowObject,
   SeatOverride,
@@ -106,7 +107,19 @@ export function expandRowSlots(row: RowObject): RowSeatSlot[] {
   const start = row.seatLabelStart ?? 1;
   const dir = row.seatNumbering?.direction ?? 'ltr';
   const step = row.seatNumbering?.step ?? 1;
-  const seatNumber = (i: number) => start + (dir === 'rtl' ? row.seatCount - 1 - i : i) * step;
+  const n = row.seatCount;
+  let seatNumber: (i: number) => number;
+  if (dir === 'center') {
+    // Number outward from the middle: rank seats by distance from centre
+    // (inner-left wins ties), so the centre seat gets `start`.
+    const rank = new Array<number>(n);
+    Array.from({ length: n }, (_, i) => i)
+      .sort((a, b) => Math.abs(2 * a - (n - 1)) - Math.abs(2 * b - (n - 1)) || a - b)
+      .forEach((idx, k) => (rank[idx] = k));
+    seatNumber = (i) => start + rank[i] * step;
+  } else {
+    seatNumber = (i) => start + (dir === 'rtl' ? n - 1 - i : i) * step;
+  }
   const ov = overrideMap(row);
   return rowSeatPositions(row).map((p, i) => {
     const o = ov.get(i);
@@ -168,8 +181,23 @@ export function expandTable(t: TableObject): ExpandedSeat[] {
   if (t.shape === 'round') {
     const R = (t.radius ?? 40) + TABLE_SEAT_OFFSET;
     const base = t.rotation * DEG;
+    const arc = Math.max(0, Math.min(360, t.seatArc ?? 360));
+    if (arc >= 360 || n === 1) {
+      // Full ring (or a lone seat) — evenly spaced around the whole table.
+      for (let i = 0; i < n; i++) {
+        const a = base + (i / n) * 2 * Math.PI;
+        seats.push(mk(i, t.center.x + R * Math.cos(a), t.center.y + R * Math.sin(a)));
+      }
+      return seats;
+    }
+    // Open side: seats fill the arc, leaving a gap centred on `rotation` (the
+    // opening — face it toward the aisle/wall). Seats span edge-to-edge of the
+    // seated arc so people flank the gap.
+    const arcRad = arc * DEG;
+    const halfGap = (2 * Math.PI - arcRad) / 2;
+    const start = base + halfGap;
     for (let i = 0; i < n; i++) {
-      const a = base + (i / n) * 2 * Math.PI;
+      const a = start + (i / (n - 1)) * arcRad;
       seats.push(mk(i, t.center.x + R * Math.cos(a), t.center.y + R * Math.sin(a)));
     }
     return seats;
@@ -293,10 +321,73 @@ export function objectCenter(o: ChartObject): Point {
   }
 }
 
-/** Expand every seat-bearing object (rows, tables, booths). */
+/**
+ * Normalized floor list (Batch 5): a multi-floor chart's `floors`, or a synthetic
+ * single floor wrapping a single-floor chart's `objects`. Every consumer that needs
+ * to reason about floors goes through this so single-floor charts stay untouched.
+ */
+export function floorsOf(doc: ChartDoc): Floor[] {
+  if (doc.floors && doc.floors.length) return doc.floors;
+  return [{ id: 'floor-0', name: 'Main', objects: doc.objects, focalPoint: doc.focalPoint, backgroundImage: doc.backgroundImage }];
+}
+
+/** Objects of one floor by id (defaults to the first floor). */
+export function floorObjects(doc: ChartDoc, floorId?: string): ChartObject[] {
+  const floors = floorsOf(doc);
+  return (floorId ? floors.find((f) => f.id === floorId) : floors[0])?.objects ?? [];
+}
+
+/** Every object across ALL floors — the whole venue (single-floor = `doc.objects`). */
+export function allObjects(doc: ChartDoc): ChartObject[] {
+  return doc.floors && doc.floors.length ? doc.floors.flatMap((f) => f.objects) : doc.objects;
+}
+
+/** A copy of an object translated by (dx, dy) — every coordinate field shifted. */
+function translateObject(o: ChartObject, dx: number, dy: number): ChartObject {
+  const p = (pt: Point): Point => ({ x: pt.x + dx, y: pt.y + dy });
+  const pts = (a: Point[]): Point[] => a.map(p);
+  switch (o.type) {
+    case 'row':
+      return { ...o, origin: p(o.origin) };
+    case 'table':
+    case 'booth':
+      return { ...o, center: p(o.center) };
+    case 'gaArea':
+      return { ...o, points: pts(o.points) };
+    case 'section':
+      return { ...o, outline: pts(o.outline) };
+    case 'text':
+      return { ...o, position: p(o.position) };
+    case 'shape':
+      return {
+        ...o,
+        ...(o.points ? { points: pts(o.points) } : {}),
+        ...(o.x != null ? { x: o.x + dx } : {}),
+        ...(o.y != null ? { y: o.y + dy } : {}),
+      };
+  }
+}
+
+/**
+ * Multi-floor 3D stack (Batch 5): flatten every floor into ONE doc with floor `i`
+ * lifted by `i * spread` in −y, so the isometric view shows the floors as stacked
+ * decks (ground at the bottom). Returns a single-floor doc (no `floors`). Meant
+ * only for the 3D overview render — 2D still shows one floor via `floorObjects`.
+ */
+export function stackFloors(doc: ChartDoc, spread = 900): ChartDoc {
+  if (!doc.floors || doc.floors.length < 2) return doc;
+  const objects: ChartObject[] = [];
+  doc.floors.forEach((f, i) => {
+    const dy = -i * spread;
+    for (const o of f.objects) objects.push(dy === 0 ? o : translateObject(o, 0, dy));
+  });
+  return { ...doc, objects, floors: undefined };
+}
+
+/** Expand every seat-bearing object across all floors (rows, tables, booths). */
 export function expandChart(doc: ChartDoc): ExpandedSeat[] {
   const out: ExpandedSeat[] = [];
-  for (const obj of doc.objects) {
+  for (const obj of allObjects(doc)) {
     if (obj.type === 'row') out.push(...expandRow(obj));
     else if (obj.type === 'table') out.push(...expandTable(obj));
     else if (obj.type === 'booth') out.push(...expandBooth(obj));
@@ -322,7 +413,7 @@ export function chartBounds(doc: ChartDoc): { x: number; y: number; width: numbe
 
   for (const s of expandChart(doc)) acc(s.x, s.y);
 
-  for (const obj of doc.objects) {
+  for (const obj of allObjects(doc)) {
     if (obj.type === 'gaArea') {
       for (const p of obj.points) acc(p.x, p.y);
     } else if (obj.type === 'section') {

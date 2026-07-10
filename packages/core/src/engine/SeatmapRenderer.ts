@@ -29,12 +29,15 @@ import type {
   ChartTheme,
   ExpandedSeat,
   ISeatmapRenderer,
+  LodRung,
   Point,
   RendererOptions,
   SeatStatus,
   SectionObject,
 } from '../core/types';
-import { chartBounds, expandChart, pointInPolygon } from '../core/layout';
+import { chartBounds, expandChart, floorsOf, pointInPolygon, stackFloors } from '../core/layout';
+import { t } from '../i18n';
+import { formatMoney } from '../lib/money';
 
 const SEAT_RADIUS = 9;
 /** Absolute scale at which a seat (r=9) renders ~legibly (~8px). */
@@ -43,8 +46,17 @@ const SEAT_LEGIBLE_SCALE = 0.9;
 const CACHE_THRESHOLD = 0.55 * SEAT_LEGIBLE_SCALE;
 /** Show per-seat labels above this ABSOLUTE scale (seat ⌀ ≈ 18px) — chart-size independent. */
 const LABEL_SCALE = 1.0;
-/** Below this scale, sections (if any) get a prominent outline/label — the far "overview" LOD. */
-const SECTION_PROMINENT_SCALE = 0.35 * SEAT_LEGIBLE_SCALE;
+/**
+ * At/below this scale, sections read as solid BLOCKS with row-line hints (seats
+ * fully hidden) — the seats.io-style default overview.
+ */
+const SECTION_PROMINENT_SCALE = 0.45 * SEAT_LEGIBLE_SCALE;
+/**
+ * Above this scale, seats are fully shown (dots); between here and
+ * SECTION_PROMINENT the block melts in. Set high so a big sectioned chart OPENS
+ * as named blocks and only reveals seats once you zoom in close.
+ */
+const BLOCK_MELT_TOP = 0.9 * SEAT_LEGIBLE_SCALE;
 /**
  * Below this scale, ZONE blocks/labels take over from per-section detail (the
  * farthest rung). ~0.55× the section rung so: seats → section blocks → zones.
@@ -59,7 +71,7 @@ const ISO_ANGLE_DEG = -11.5;
 /** Full-iso vertical squash (1 = flat). */
 const ISO_SQUASH = 0.58;
 /** World units a section (and its members) lift per elevation step at full iso. */
-const LIFT_PER_STEP = 46;
+const LIFT_PER_STEP = 58;
 /** Flat⇄iso tween duration (ms); reduced-motion snaps. */
 const ISO_TWEEN_MS = 320;
 
@@ -69,8 +81,8 @@ const BLOCK_FILL_ALPHA = 0.85;
 /** How far a fully-sold section's fill darkens toward black. */
 const SOLD_DARKEN = 0.5;
 /** Screen-space target sizes (px) for scale-compensated section/zone labels. */
-const SECTION_LABEL_PX = 18;
-const SECTION_SUB_PX = 11;
+const SECTION_LABEL_PX = 20;
+const SECTION_SUB_PX = 12.5;
 const ZONE_LABEL_PX = 30;
 const ZONE_SUB_PX = 12;
 
@@ -209,6 +221,8 @@ interface SectionRender {
   outlinePoly: Line;
   /** Solid block fill that melts in at the block rung. */
   blockPoly: Line;
+  /** Faint per-row hint lines drawn inside the block (the seats.io "rows" look). */
+  rowLines: Line[];
   /** Section name (always drawn; brightens at the block rung, hides at zone rung). */
   nameLabel: Text;
   /** Mono "N LEFT" availability sublabel (block rung only). */
@@ -244,6 +258,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   private seats: ExpandedSeat[] = [];
   private seatById = new Map<string, ExpandedSeat>();
+  /** Multi-floor (Batch 5): the last-set chart + which floor we're rendering. */
+  private chartDoc: ChartDoc | null = null;
+  private activeFloorId = '';
+  /** When true on a multi-floor chart, render ALL floors stacked (3D overview). */
+  private stacked = false;
   /** Interactive node per seat/booth — a Circle for seats, a Rect for booths. */
   private circleById = new Map<string, Shape>();
   /** Booth block geometry, keyed by booth id (= the unit's rowId). */
@@ -272,6 +291,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private zones: ZoneRender[] = [];
   private seatSection = new Map<string, SectionRender>();
   private catPrice = new Map<string, number>();
+  /** ISO 4217 currency for on-map "FROM …" prices (undefined ⇒ money default). */
+  private currency: string | undefined;
+  /** Section/zone ids to render dimmed (organizer manager: held-back inventory). */
+  private dimmedSections = new Set<string>();
+  /** Object id → floor id (multi-floor only) — resolves a deck tap in the 3D stack. */
+  private objectFloor = new Map<string, string>();
   /** Zone id → colour (drives extruded side faces in iso view). */
   private zoneColor = new Map<string, string>();
   private hasSections = false;
@@ -285,6 +310,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private isoRaf = 0;
   /** Chart centre the iso projection pivots about (bounds centre). */
   private isoCentre = { x: 0, y: 0 };
+  /** rAF for an in-flight camera glide (focusRegion / setRung); 0 = none. */
+  private glideRaf = 0;
   /** Set in destroy() so an in-flight iso tween bails. */
   private destroyed = false;
   /** Cached scale the section/zone labels were last sized for (scale-compensation). */
@@ -322,6 +349,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   constructor(container: HTMLDivElement, options: RendererOptions = {}) {
     this.container = container;
     this.opts = { maxSelection: 10, selectableStatuses: ['free'], ...options };
+    this.currency = options.currency;
 
     Konva.pixelRatio = this.dpr;
 
@@ -342,7 +370,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (container.tabIndex < 0) container.tabIndex = 0;
     container.setAttribute('role', 'application');
     if (!container.getAttribute('aria-label')) {
-      container.setAttribute('aria-label', 'Seating map. Use arrow keys to move between seats, Enter to select.');
+      container.setAttribute('aria-label', t('map.aria'));
     }
     container.addEventListener('keydown', this.onKeyDown);
 
@@ -394,7 +422,20 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   // ---- ISeatmapRenderer -----------------------------------------------------
 
-  setChart(doc: ChartDoc): void {
+  setChart(doc: ChartDoc, opts?: { floorId?: string }): void {
+    // Multi-floor: render the active floor (2D) or all floors stacked (3D). `view`
+    // scopes the chart accordingly — single-floor charts pass through (=== doc).
+    // A fresh chart (new ref) resets to 2D; a re-render (same ref) preserves the mode.
+    if (doc !== this.chartDoc) this.stacked = false;
+    this.chartDoc = doc;
+    this.activeFloorId = opts?.floorId ?? floorsOf(doc)[0].id;
+    // Object id → floor id, for resolving which deck a tap hit in the 3D stack
+    // (stackFloors keeps object ids, so the map holds across the flatten).
+    this.objectFloor.clear();
+    if (doc.floors && doc.floors.length > 1) {
+      for (const f of doc.floors) for (const o of f.objects) this.objectFloor.set(o.id, f.id);
+    }
+    const view = this.floorView(doc);
     this.focusedId = null;
     this.focusRing.visible(false);
     this.bgLayer.destroyChildren();
@@ -420,7 +461,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.isoT = 0;
     this.isoTarget = 0;
     this.resetLayerTransforms();
-    this.hasSections = doc.objects.some((o) => o.type === 'section');
+    this.hasSections = view.objects.some((o) => o.type === 'section');
     for (const z of doc.zones ?? []) if (z.color) this.zoneColor.set(z.id, z.color);
     // Seats fade against the block fill during the melt; reset to fully opaque.
     this.seatLayer.opacity(1);
@@ -442,27 +483,64 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       if (typeof c.price === 'number') this.catPrice.set(c.key, c.price);
     }
 
-    for (const obj of doc.objects) {
+    for (const obj of view.objects) {
       if (obj.type === 'booth') {
         this.boothDims.set(obj.id, { width: obj.width, height: obj.height, rotation: obj.rotation });
       }
     }
 
-    this.seats = expandChart(doc);
+    this.seats = expandChart(view);
     for (const s of this.seats) {
       this.seatById.set(s.id, s);
       this.statusById.set(s.id, 'free');
     }
 
-    this.renderBackground(doc);
+    this.renderBackground(view);
     this.renderSeats();
     // re-add overlay furniture wiped by destroyChildren above
     this.overlayLayer.add(this.labelGroup);
     this.overlayLayer.add(this.hoverRing);
 
-    this.bounds = chartBounds(doc);
+    this.bounds = chartBounds(view);
     this.isoCentre = { x: this.bounds.x + this.bounds.width / 2, y: this.bounds.y + this.bounds.height / 2 };
     this.zoomToFit();
+  }
+
+  /** The chart to render: all floors stacked (3D overview), the active floor, or
+   *  the whole chart for single-floor charts. */
+  private floorView(doc: ChartDoc): ChartDoc {
+    if (!doc.floors || !doc.floors.length) return doc;
+    if (this.stacked && doc.floors.length >= 2) return stackFloors(doc);
+    const floor = doc.floors.find((f) => f.id === this.activeFloorId) ?? doc.floors[0];
+    return { ...doc, objects: floor.objects, focalPoint: floor.focalPoint, backgroundImage: floor.backgroundImage, floors: undefined };
+  }
+
+  /** Toggle the 3D all-floors stacked overview (Batch 5). Re-renders; no-op on
+   *  single-floor charts. The caller re-applies statuses + animates the iso view. */
+  setStacked(on: boolean): void {
+    if (!this.chartDoc || on === this.stacked) return;
+    const multi = !!this.chartDoc.floors && this.chartDoc.floors.length >= 2;
+    if (!multi) return;
+    this.stacked = on;
+    this.setChart(this.chartDoc, { floorId: this.activeFloorId });
+  }
+  isStacked(): boolean {
+    return this.stacked;
+  }
+
+  /** Switch which floor is shown (2D). Re-renders + re-fits; no-op if unchanged. */
+  setActiveFloor(floorId: string): void {
+    if (!this.chartDoc || floorId === this.activeFloorId) return;
+    this.setChart(this.chartDoc, { floorId });
+  }
+
+  /** Floors for the host's switcher (single-floor charts return one synthetic floor). */
+  getFloors(): { id: string; name: string }[] {
+    return this.chartDoc ? floorsOf(this.chartDoc).map((f) => ({ id: f.id, name: f.name })) : [];
+  }
+
+  getActiveFloorId(): string {
+    return this.activeFloorId;
   }
 
   setStatus(seatIds: string[], status: SeatStatus): void {
@@ -749,6 +827,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.isoRaf = requestAnimationFrame(step);
   }
 
+  /** Current projection — reflects the tween target, not the mid-tween isoT. */
+  getViewMode(): 'flat' | 'isometric' {
+    return this.isoTarget === 1 ? 'isometric' : 'flat';
+  }
+
   /** Iso angle (rad) + y-squash for the current isoT. */
   private isoParams(): { th: number; sg: number } {
     return { th: (ISO_ANGLE_DEG * Math.PI) / 180 * this.isoT, sg: 1 - (1 - ISO_SQUASH) * this.isoT };
@@ -899,6 +982,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.destroyed = true;
     if (this.rafId) cancelAnimationFrame(this.rafId);
     if (this.isoRaf) cancelAnimationFrame(this.isoRaf);
+    if (this.glideRaf) cancelAnimationFrame(this.glideRaf);
     if (this.viewChangeRaf) cancelAnimationFrame(this.viewChangeRaf);
     if (this.recacheTimer) clearTimeout(this.recacheTimer);
     this.resizeObs?.disconnect();
@@ -1041,6 +1125,35 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // Legend hover-highlight dims free, unselected seats of other categories.
     if (this.categoryHighlight && status === 'free' && !selected && seat.categoryKey !== this.categoryHighlight) {
       c.opacity(0.25);
+    }
+    // Held-back inventory (organizer manager): seats in a dimmed section/zone
+    // read as inactive so the map matches the Sections list at a glance.
+    if (this.dimmedSections.size) {
+      const sec = this.seatSection.get(id);
+      if (sec && (this.dimmedSections.has(sec.id) || (sec.zone != null && this.dimmedSections.has(sec.zone)))) {
+        c.opacity(0.18);
+      }
+    }
+  }
+
+  /**
+   * Dim the seats of these section/zone ids (organizer manager use) so held-back
+   * inventory is visually distinct on the canvas without hiding it. `null`/empty
+   * clears. Unlike the buyer's applyHidden, the sections stay rendered.
+   */
+  setDimmedSections(ids: string[] | null): void {
+    const next = new Set(ids ?? []);
+    if (next.size === this.dimmedSections.size && [...next].every((i) => this.dimmedSections.has(i))) return;
+    this.dimmedSections = next;
+    for (const seat of this.seats) {
+      const c = this.circleById.get(seat.id);
+      if (c) this.paintSeat(c, seat.id);
+    }
+    if (this.cached) {
+      this.seatLayer.clearCache();
+      this.cacheSeatLayer();
+    } else {
+      this.seatLayer.batchDraw();
     }
   }
 
@@ -1354,13 +1467,16 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     }
     const bgTarget: Group | Layer = liftGroupBg ?? this.bgLayer;
 
-    // Faint outline — the pre-existing under-seat look, unchanged at near zoom.
+    // Zone-coloured outline under the seats — matches the crisp section blocks
+    // the designer draws, so the near-zoom map reads as defined zones too.
+    const outlineTint = obj.color ?? this.zoneColor.get(obj.zone ?? '') ?? '#3a4358';
     const outlinePoly = new Line({
       points: pts,
       closed: true,
-      stroke: '#3a4358',
-      strokeWidth: 1.5,
-      fill: rgba(obj.color ?? '#3a4358', 0.06),
+      stroke: rgba(outlineTint, 0.5),
+      strokeWidth: 1.75,
+      fill: rgba(outlineTint, 0.08),
+      lineJoin: 'round',
       listening: false,
       perfectDrawEnabled: false,
     });
@@ -1379,6 +1495,34 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     });
     bgTarget.add(blockPoly);
 
+    // Faint per-row hint lines (the seats.io "block-with-rows" look): a polyline
+    // through each member row's seats, fading in with the block. Lets a section
+    // read as SEATING — not a flat colour — at the overview zoom, seats hidden.
+    const rowSeats = new Map<string, Array<{ i: number; x: number; y: number }>>();
+    for (const id of memberIds) {
+      const s = this.seatById.get(id);
+      if (!s) continue;
+      const i = Number(id.slice(id.lastIndexOf(':') + 1)) || 0;
+      (rowSeats.get(s.rowId) ?? rowSeats.set(s.rowId, []).get(s.rowId)!).push({ i, x: s.x, y: s.y });
+    }
+    const rowLines: Line[] = [];
+    for (const arr of rowSeats.values()) {
+      if (arr.length < 2) continue;
+      arr.sort((a, b) => a.i - b.i);
+      const line = new Line({
+        points: arr.flatMap((p) => [p.x, p.y]),
+        stroke: rgba('#ffffff', 0.34),
+        strokeWidth: SEAT_RADIUS * 0.55,
+        lineCap: 'round',
+        lineJoin: 'round',
+        opacity: 0,
+        listening: false,
+        perfectDrawEnabled: false,
+      });
+      rowLines.push(line);
+      bgTarget.add(line);
+    }
+
     const nameLabel = new Text({
       x: centroid.x,
       y: centroid.y,
@@ -1387,6 +1531,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       fontStyle: '700',
       fontFamily: this.labelFont(),
       fill: '#8b93a7',
+      // Dark halo so the label reads over the seat dots at any zoom.
+      shadowColor: '#05070c',
+      shadowBlur: 6,
+      shadowOpacity: 0.9,
+      shadowForStrokeEnabled: false,
       listening: false,
       perfectDrawEnabled: false,
     });
@@ -1397,11 +1546,15 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const subLabel = new Text({
       x: centroid.x,
       y: centroid.y,
-      text: `${free} LEFT`,
+      text: t('map.seatsLeft', { count: free }),
       fontSize: 12,
-      fontStyle: '600',
+      fontStyle: '700',
       fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-      fill: rgba('#e6e9f0', 0.8),
+      fill: '#f4f6fb',
+      shadowColor: '#05070c',
+      shadowBlur: 5,
+      shadowOpacity: 0.9,
+      shadowForStrokeEnabled: false,
       opacity: 0,
       listening: false,
       perfectDrawEnabled: false,
@@ -1421,6 +1574,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       baseFill,
       outlinePoly,
       blockPoly,
+      rowLines,
       nameLabel,
       subLabel,
       elevation,
@@ -1437,7 +1591,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private refreshSectionFill(sec: SectionRender): void {
     const sold = sec.total > 0 ? (sec.total - sec.free) / sec.total : 0;
     sec.blockPoly.fill(darken(sec.baseFill, sold * SOLD_DARKEN));
-    sec.subLabel.text(`${sec.free} LEFT`);
+    sec.subLabel.text(t('map.seatsLeft', { count: sec.free }));
     sec.subLabel.offsetX(sec.subLabel.width() / 2);
   }
 
@@ -1456,8 +1610,14 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     for (const z of doc.zones) {
       const members = byZone.get(z.id);
       if (!members || !members.length) continue;
-      const cx = members.reduce((a, s) => a + s.centroid.x, 0) / members.length;
-      const cy = members.reduce((a, s) => a + s.centroid.y, 0) / members.length;
+      // Anchor at the TOPMOST member (min y), not the mean centroid: for a
+      // symmetric bowl (a zone = a full ring around the stage) the mean lands on
+      // the origin and every zone label stacks on the stage. The topmost member
+      // gives a distinct point per ring (labels stack up the vertical axis).
+      let anchor = members[0];
+      for (const s of members) if (s.centroid.y < anchor.centroid.y) anchor = s;
+      const cx = anchor.centroid.x;
+      const cy = anchor.centroid.y;
 
       // "FROM $n" = cheapest category price found among this zone's member seats.
       let minPrice = Infinity;
@@ -1478,6 +1638,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         letterSpacing: 2,
         fontFamily: this.labelFont(),
         fill: z.color ?? '#f2f4f8',
+        shadowColor: '#05070c',
+        shadowBlur: 10,
+        shadowOpacity: 0.95,
+        shadowForStrokeEnabled: false,
         opacity: 0,
         listening: false,
         perfectDrawEnabled: false,
@@ -1491,7 +1655,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         sub = new Text({
           x: cx,
           y: cy,
-          text: `FROM $${minPrice}`,
+          text: t('map.fromPrice', { price: formatMoney(minPrice, this.currency) }),
           fontSize: 14,
           fontStyle: '600',
           fontFamily: 'JetBrains Mono, ui-monospace, monospace',
@@ -1523,7 +1687,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       blockT = scale <= SECTION_PROMINENT_SCALE ? 1 : 0;
       zoneT = scale <= ZONE_PROMINENT_SCALE ? 1 : 0;
     } else {
-      blockT = clamp((CACHE_THRESHOLD - scale) / (CACHE_THRESHOLD - SECTION_PROMINENT_SCALE), 0, 1);
+      blockT = clamp((BLOCK_MELT_TOP - scale) / (BLOCK_MELT_TOP - SECTION_PROMINENT_SCALE), 0, 1);
       zoneT = clamp((SECTION_PROMINENT_SCALE - scale) / (SECTION_PROMINENT_SCALE - ZONE_PROMINENT_SCALE), 0, 1);
     }
     // No zones ⇒ skip the zone rung: sections stay the far rung (graceful).
@@ -1541,8 +1705,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
     for (const sec of this.sections) {
       sec.blockPoly.opacity(BLOCK_FILL_ALPHA * blockT);
+      for (const line of sec.rowLines) line.opacity(blockT * (1 - zoneT));
       // Name: faint→bright with blockT, then fades out as zones take over.
-      sec.nameLabel.fill(lerpColor('#8b93a7', '#f2f4f8', blockT));
+      sec.nameLabel.fill(lerpColor('#aab3c5', '#ffffff', blockT));
       sec.nameLabel.opacity(1 - zoneT);
       sec.subLabel.opacity(blockT * (1 - zoneT));
       if (rescale) {
@@ -1551,9 +1716,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       }
     }
 
+    // Fade the big zone labels out as the view tilts into 3D — the raised tiers
+    // read clearly on their own, and the overlaid zone text just clutters them.
+    const zoneOpacity = zoneT * (1 - this.isoT);
     for (const zone of this.zones) {
-      zone.label.opacity(zoneT);
-      if (zone.sub) zone.sub.opacity(zoneT);
+      zone.label.opacity(zoneOpacity);
+      if (zone.sub) zone.sub.opacity(zoneOpacity);
       if (rescale) {
         const cy = zone.label.y();
         this.sizeLabel(zone.label, ZONE_LABEL_PX / sx, cy);
@@ -1677,7 +1845,14 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.seatLayer.on('click tap', (e: KonvaEventObject<Event>) => {
       if (this.moved > 8) return; // it was a pan/pinch, not a tap
       const id = seatIdOf(e.target);
-      if (id) this.toggleSeat(id);
+      if (!id) return;
+      // In the 3D all-floors overview, tapping a seat enters its deck in 2D
+      // rather than selecting (seat picking happens on the flat floor map).
+      if (this.stacked && this.opts.onDeckTap) {
+        const floorId = this.objectFloor.get(this.seatById.get(id)?.rowId ?? '');
+        if (floorId) { this.opts.onDeckTap(floorId); return; }
+      }
+      this.toggleSeat(id);
     });
 
     // Hover (mouse only) via delegated enter/leave on seat circles.
@@ -1718,18 +1893,51 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       if (!this.cached || this.moved > 8) return;
       const pointer = this.stage.getPointerPosition();
       if (!pointer) return;
-      // A tap inside a section zooms to fit that section, not a generic 2.5×.
+      // 3D all-floors overview: tapping a deck enters that floor in 2D. The iso
+      // projection is a layer transform, so the flat screenToWorld hit-test below
+      // won't work here — resolve the deck via the iso-aware nearest seat instead.
+      if (this.stacked && this.opts.onDeckTap) {
+        const floorId = this.deckFloorAt();
+        if (floorId) { this.opts.onDeckTap(floorId); return; }
+      }
+      // A tap inside a section (seats aren't the active rung here — the layer is
+      // cached) hands off to the host: fire onSectionTap so the picker can glide
+      // in + show the section-summary card (Slice 5). With no handler wired we
+      // keep the standalone behaviour of gliding to fit that section.
       if (this.sections.length) {
         const world = this.screenToWorld(pointer);
         const hit = this.sections.find((sn) => pointInPolygon(world, sn.outline));
         if (hit) {
-          this.zoomToBounds(polyBounds(hit.outline));
+          if (this.opts.onSectionTap) this.opts.onSectionTap(hit.id);
+          else this.focusRegion(hit.id);
           return;
         }
       }
       const target = Math.max(SEAT_LEGIBLE_SCALE * 1.2, this.stage.scaleX() * 2.5);
       this.zoomAbout(target, pointer);
     });
+  }
+
+  /**
+   * Which deck (floor) a screen tap landed on in the 3D stacked overview. The
+   * seat layer is melt-cached at that zoom so individual seat nodes aren't
+   * hit-testable; instead we invert the iso+stage transform via the layer's
+   * relative pointer and take the nearest seat's floor. Only the floor matters,
+   * so within-floor elevation offsets don't affect the result. Null if none.
+   */
+  private deckFloorAt(): string | null {
+    if (!this.objectFloor.size) return null;
+    const p = this.seatLayer.getRelativePointerPosition();
+    if (!p) return null;
+    let best: string | null = null;
+    let bestD = Infinity;
+    for (const s of this.seats) {
+      const dx = s.x - p.x;
+      const dy = s.y - p.y;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = s.rowId; }
+    }
+    return best ? this.objectFloor.get(best) ?? null : null;
   }
 
   // ---- Pan & pinch (raw pointer events — mouse, touch and pen alike) --------
@@ -1743,6 +1951,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   // pointer events away from Konva's canvas, killing its click/tap/hover
   // pipeline. We rely on bubbling instead.
   private onPointerDown = (e: PointerEvent): void => {
+    this.cancelGlide(); // grabbing the map cancels an in-flight glide
     this.pointers.set(e.pointerId, this.toLocal(e));
     if (this.pointers.size === 1) {
       this.moved = 0;
@@ -1815,7 +2024,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    * reach a readable size on any chart, however large the venue.
    */
   private zoomBounds(): { min: number; max: number } {
-    return { min: 0.5 * this.fitScale, max: Math.max(10 * this.fitScale, 4) };
+    let min = 0.5 * this.fitScale;
+    // When the chart has zones, the zone rung lives at an ABSOLUTE scale
+    // (ZONE_PROMINENT_SCALE). On a large venue `0.5·fitScale` can sit above it,
+    // making the zone overview unreachable by zooming out — allow a touch more
+    // room so the rung is actually reachable (zone-charts only).
+    if (this.zones.length) min = Math.min(min, ZONE_PROMINENT_SCALE * 0.9);
+    return { min, max: Math.max(10 * this.fitScale, 4) };
   }
 
   /** Zoom so `clientPoint` (stage-relative px) stays fixed under the cursor. */
@@ -1849,6 +2064,102 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     });
     this.afterViewChange();
     this.stage.batchDraw();
+  }
+
+  /**
+   * Smoothly glide the camera to frame a section (by id) or a world-space bounds
+   * rect — the Slice 5 "glide in". Pan+zoom tween over ~450ms easeInOutCubic; the
+   * melt/LOD rides the camera every frame. `prefers-reduced-motion` (or
+   * `opts.animate === false`) snaps via zoomToBounds. A grab (pointer-down) or a
+   * newer glide cancels an in-flight one.
+   */
+  focusRegion(
+    target: string | { x: number; y: number; width: number; height: number },
+    opts?: { animate?: boolean },
+  ): void {
+    const b =
+      typeof target === 'string'
+        ? (() => {
+            const sec = this.sections.find((s) => s.id === target);
+            return sec ? polyBounds(sec.outline) : null;
+          })()
+        : target;
+    if (!b) return;
+    this.cancelGlide();
+    if (opts?.animate === false || this.reducedMotion) {
+      this.zoomToBounds(b);
+      return;
+    }
+    const w = this.stage.width();
+    const h = this.stage.height();
+    const { min, max } = this.zoomBounds();
+    const margin = 1.12;
+    const toScale = clamp(Math.min(w / (b.width * margin), h / (b.height * margin)), min, max);
+    const toX = w / 2 - (b.x + b.width / 2) * toScale;
+    const toY = h / 2 - (b.y + b.height / 2) * toScale;
+    const fromScale = this.stage.scaleX();
+    const fromX = this.stage.x();
+    const fromY = this.stage.y();
+    if (Math.abs(toScale - fromScale) < 1e-4 && Math.abs(toX - fromX) < 0.5 && Math.abs(toY - fromY) < 0.5) {
+      this.afterViewChange();
+      return;
+    }
+    const start = performance.now();
+    const DUR = 450;
+    const step = (now: number): void => {
+      if (this.destroyed) { this.glideRaf = 0; return; }
+      const raw = Math.min(1, (now - start) / DUR);
+      const e = raw < 0.5 ? 4 * raw * raw * raw : 1 - Math.pow(-2 * raw + 2, 3) / 2;
+      const sc = fromScale + (toScale - fromScale) * e;
+      this.stage.scale({ x: sc, y: sc });
+      this.stage.position({ x: fromX + (toX - fromX) * e, y: fromY + (toY - fromY) * e });
+      this.updateLOD(); // the melt cross-fades as the camera rides in
+      this.scheduleViewChange();
+      this.stage.batchDraw();
+      if (raw < 1) {
+        this.glideRaf = requestAnimationFrame(step);
+      } else {
+        this.glideRaf = 0;
+        this.afterViewChange();
+      }
+    };
+    this.glideRaf = requestAnimationFrame(step);
+  }
+
+  /** Cancel an in-flight camera glide (a grab or a newer glide interrupts it). */
+  private cancelGlide(): void {
+    if (this.glideRaf) {
+      cancelAnimationFrame(this.glideRaf);
+      this.glideRaf = 0;
+    }
+  }
+
+  /** Current LOD rung derived from effective zoom — drives the ZONES/SECTIONS/SEATS pill. */
+  getRung(): LodRung {
+    const scale = this.effScale();
+    if (scale >= CACHE_THRESHOLD) return 'seats';
+    if (this.zones.length && scale < ZONE_PROMINENT_SCALE) return 'zones';
+    return 'sections';
+  }
+
+  /** Jump the camera to a rung's zoom band, centred on the chart (glided). */
+  setRung(rung: LodRung): void {
+    if (rung === 'zones') {
+      this.cancelGlide();
+      this.zoomToFit();
+      return;
+    }
+    const target =
+      rung === 'sections'
+        ? (SECTION_PROMINENT_SCALE + CACHE_THRESHOLD) / 2
+        : Math.max(SEAT_LEGIBLE_SCALE * 1.1, CACHE_THRESHOLD * 1.3);
+    const w = this.stage.width();
+    const h = this.stage.height();
+    const cx = this.bounds.x + this.bounds.width / 2;
+    const cy = this.bounds.y + this.bounds.height / 2;
+    const bw = w / (target * 1.12);
+    const bh = h / (target * 1.12);
+    this.focusRegion({ x: cx - bw / 2, y: cy - bh / 2, width: bw, height: bh });
   }
 
   /** Recompute LOD (cache/labels) after any pan/zoom settles. */

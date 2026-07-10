@@ -7,7 +7,7 @@
  *   - credentials are omitted (no cookie to send, avoids CORS-credential setup);
  *   - no custom headers on mutating calls (keeps the CORS preflight trivial).
  */
-import type { ChartDoc } from '@seatlayer/core';
+import type { ChartDoc, PickerSeat as SelectedSeat } from '@seatlayer/core';
 
 export interface HoldConflict {
   label: string;
@@ -46,6 +46,8 @@ export interface PubObjectsResult {
 export interface HoldResult {
   holdId: string;
   expiresAt: number;
+  /** The held seats with the buyer's chosen ticket tier per seat (present on hold). */
+  seats?: SelectedSeat[];
 }
 
 /** Best-available response — the server-picked seats plus the hold they landed in. */
@@ -53,6 +55,7 @@ export interface BestAvailableResult {
   holdId: string;
   expiresAt: number;
   labels: string[];
+  seats?: SelectedSeat[];
 }
 
 async function request<T>(
@@ -82,7 +85,7 @@ async function request<T>(
   return data as T;
 }
 
-/** Public-surface client bound to one apiBase (e.g. https://seatmap-api.paiteq.in). */
+/** Public-surface client bound to one apiBase (e.g. https://api.seatlayer.io). */
 export class PubApi {
   constructor(private readonly base: string) {}
 

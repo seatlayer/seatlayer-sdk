@@ -28,8 +28,18 @@ const appRepo = process.env.SEATMAP_REPO
 const FILES = [
   ['src/core/types.ts', 'packages/core/src/core/types.ts'],
   ['src/core/layout.ts', 'packages/core/src/core/layout.ts'],
+  ['src/core/sections.ts', 'packages/core/src/core/sections.ts'],
   ['src/engine/SeatmapRenderer.ts', 'packages/core/src/engine/SeatmapRenderer.ts'],
   ['src/picker/PickerController.ts', 'packages/core/src/picker/PickerController.ts'],
+  // i18n + money: imported by the engine (`t()`, formatMoney) and surfaced to the
+  // SDKs (loadLocale / setStringOverrides for the widget `locale`/`messages` options).
+  ['src/i18n/index.ts', 'packages/core/src/i18n/index.ts'],
+  ['src/i18n/bundles.ts', 'packages/core/src/i18n/bundles.ts'],
+  ['src/i18n/locales/en.ts', 'packages/core/src/i18n/locales/en.ts'],
+  ['src/i18n/locales/es.ts', 'packages/core/src/i18n/locales/es.ts'],
+  ['src/i18n/locales/de.ts', 'packages/core/src/i18n/locales/de.ts'],
+  ['src/i18n/locales/fr.ts', 'packages/core/src/i18n/locales/fr.ts'],
+  ['src/lib/money.ts', 'packages/core/src/lib/money.ts'],
 ];
 
 if (!existsSync(appRepo)) {

@@ -7,10 +7,10 @@
  * + booking to the controller, so the SDK inherits every fix made for the live
  * buyer page and the demo picker.
  */
-import { PickerController, type PickerSeat } from '@seatlayer/core';
+import { PickerController, loadLocale, setStringOverrides, type PickerSeat } from '@seatlayer/core';
 import { PubApi, type BestAvailableResult, type HoldResult } from './api';
 
-const DEFAULT_API_BASE = 'https://seatmap-api.paiteq.in';
+const DEFAULT_API_BASE = 'https://api.seatlayer.io';
 const DEFAULT_MAX_SELECTION = 10;
 
 /** A seat as surfaced to the host page (prices resolved from the chart's categories). */
@@ -21,15 +21,34 @@ export interface SeatingChartOptions {
   container: string | HTMLElement;
   /** Event key, e.g. `ev_xxx`. */
   event: string;
-  /** API origin. Defaults to https://seatmap-api.paiteq.in. */
+  /** API origin. Defaults to https://api.seatlayer.io. */
   apiBase?: string;
   /** Reserved for future authenticated rendering — accepted + stored, not yet sent. */
   publicKey?: string;
   /** Max seats selectable at once (default 10). */
   maxSelection?: number;
+  /**
+   * BCP 47 language for the widget UI — `'de'`, `'es-MX'`, etc. Falls back to
+   * the browser language, then English. Built-in: en, es, de, fr. The German
+   * bundle (etc.) is fetched on demand so unused languages cost nothing.
+   */
+  locale?: string;
+  /**
+   * Per-key string overrides layered over the active locale — white-label copy
+   * without shipping a whole bundle, e.g. `{ 'map.fromPrice': 'ab {price}' }`.
+   */
+  messages?: Record<string, string>;
+  /** ISO 4217 currency for on-map prices (default USD). */
+  currency?: string;
   onSelectionChange?: (seats: SelectedSeat[]) => void;
   onHold?: (result: HoldResult) => void;
   onError?: (err: unknown) => void;
+  /**
+   * Multi-floor charts only: fires when the buyer taps a deck in the stacked
+   * 3D view, after the picker switches to that floor — lets the host page sync
+   * its own floor UI (tabs, labels) with the map.
+   */
+  onDeckTap?: (floorId: string) => void;
 }
 
 function resolveContainer(container: string | HTMLElement): HTMLElement {
@@ -66,9 +85,11 @@ export class SeatingChart {
       transport: api,
       eventKey: options.event,
       maxSelection: options.maxSelection ?? DEFAULT_MAX_SELECTION,
+      currency: options.currency,
       onSelectionChange: (seats) => this.opts.onSelectionChange?.(seats),
-      onHold: (h) => this.opts.onHold?.({ holdId: h.holdId, expiresAt: h.expiresAt }),
+      onHold: (h) => this.opts.onHold?.({ holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats }),
       onError: (err) => this.opts.onError?.(err),
+      onDeckTap: (floorId) => this.opts.onDeckTap?.(floorId),
     });
   }
 
@@ -76,6 +97,12 @@ export class SeatingChart {
   async render(): Promise<this> {
     if (this.rendered) return this;
     this.rendered = true;
+
+    // Resolve + load the UI language before the first paint so on-map labels
+    // ("N LEFT", "FROM …", the map aria-label) render translated. English and
+    // already-loaded locales resolve synchronously; others fetch one small chunk.
+    await loadLocale(this.opts.locale);
+    if (this.opts.messages) setStringOverrides(this.opts.messages);
 
     // Mount an owned <div> inside the caller's container so we never fight their
     // layout and can cleanly remove it on destroy().
@@ -101,7 +128,7 @@ export class SeatingChart {
   async hold(): Promise<HoldResult | null> {
     try {
       const h = await this.controller.hold();
-      return h ? { holdId: h.holdId, expiresAt: h.expiresAt } : null;
+      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats } : null;
     } catch (err) {
       this.opts.onError?.(err);
       return null;
@@ -112,11 +139,22 @@ export class SeatingChart {
   async bestAvailable(qty: number, categoryKey?: string): Promise<BestAvailableResult | null> {
     try {
       const h = await this.controller.bestAvailable(qty, categoryKey);
-      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, labels: h.labels } : null;
+      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, labels: h.labels, seats: h.seats } : null;
     } catch (err) {
       this.opts.onError?.(err);
       return null;
     }
+  }
+
+  /**
+   * Choose a ticket tier for a selected seat (e.g. Adult → Child). The seat's
+   * available `tiers` are on each `SelectedSeat` from `getSelection()` /
+   * `onSelectionChange`. Re-emits the selection with the new tier + price, and
+   * the tier rides along in the next `hold()` / `onHold` per seat. `tierId=null`
+   * reverts to the default tier.
+   */
+  setSeatTier(seatId: string, tierId: string | null): void {
+    this.controller.setSeatTier(seatId, tierId);
   }
 
   /** Release the current hold (if any). No-op when nothing is held. */

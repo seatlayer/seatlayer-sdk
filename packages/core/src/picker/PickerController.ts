@@ -16,12 +16,16 @@
  */
 import { createRenderer } from '../engine/SeatmapRenderer';
 import { expandChart } from '../core/layout';
+import { applyHidden } from '../core/sections';
 import type {
+  CategoryTier,
   ChartDoc,
   ExpandedSeat,
   ISeatmapRenderer,
+  LodRung,
   RendererCallbacks,
   SeatStatus,
+  SectionObject,
 } from '../core/types';
 
 const DEFAULT_MAX_SELECTION = 10;
@@ -31,7 +35,12 @@ export interface PickerSeat {
   id: string;
   label: string;
   categoryKey: string;
+  /** Price for the chosen tier when the category has tiers, else the base price. */
   price: number;
+  /** Ticket tiers the seat's category offers (Adult/Child/…); absent when none. */
+  tiers?: CategoryTier[];
+  /** The chosen tier's id — defaults to the first tier; absent when no tiers. */
+  tierId?: string;
 }
 
 export interface HoldConflict {
@@ -44,6 +53,37 @@ export interface HoldInfo {
   holdId: string;
   labels: string[];
   expiresAt: number;
+  /** The held seats with their chosen ticket tier — what the host books against. */
+  seats: PickerSeat[];
+}
+
+/** One category's slice of a section (dot + price + count) for the summary card. */
+export interface SectionCategory {
+  key: string;
+  label: string;
+  color: string;
+  price: number;
+  count: number;
+}
+
+/**
+ * Big-venue section-summary — everything the tapped-section card renders: name,
+ * its zone, live seats-left, price range, and the per-category breakdown.
+ * Computed from the renderer's spatial section membership (Slice 5).
+ */
+export interface SectionSummary {
+  id: string;
+  label: string;
+  /** Zone label (from ChartDoc.zones); '' when the section has no zone. */
+  zoneLabel: string;
+  /** Mix/section colour for the card's dot (section.color → zone colour → dominant category). */
+  color: string;
+  /** Free member seats right now. */
+  seatsLeft: number;
+  priceMin: number;
+  priceMax: number;
+  /** Per-category breakdown, cheapest first. */
+  categories: SectionCategory[];
 }
 
 interface HoldResponse {
@@ -58,9 +98,9 @@ interface BestAvailableResponse extends HoldResponse {
 export interface PickerTransport {
   chart(key: string): Promise<{
     doc: ChartDoc;
-    event: { key: string; name: string; salesClosed?: boolean; venue?: string | null; startsAt?: number | null };
+    event: { key: string; name: string; salesClosed?: boolean; venue?: string | null; startsAt?: number | null; currency?: string };
   }>;
-  objects(key: string): Promise<{ seats: Record<string, string> }>;
+  objects(key: string): Promise<{ seats: Record<string, string>; hidden?: string[] }>;
   hold(key: string, labels: string[]): Promise<HoldResponse>;
   bestAvailable(key: string, qty: number, categoryKey?: string): Promise<BestAvailableResponse>;
   release(key: string, labels: string[], holdId: string): Promise<unknown>;
@@ -82,6 +122,14 @@ export interface PickerCallbacks extends RendererCallbacks {
   onStatusChange?: () => void;
   /** The server declared the event closed (a 409 event_closed). */
   onSalesClosed?: () => void;
+  /**
+   * A section block was tapped at the far/zone rung — the controller has glided
+   * the camera in and passes the computed summary (or null when cleared, e.g.
+   * overview() / zoom-to-zones) so the host can show/hide the summary card.
+   */
+  onSectionFocus?: (summary: SectionSummary | null) => void;
+  /** A deck was tapped in the 3D all-floors overview — host enters that floor in 2D. */
+  onDeckTap?: (floorId: string) => void;
   onError?: (err: unknown) => void;
 }
 
@@ -91,6 +139,8 @@ export interface PickerOptions extends PickerCallbacks {
   maxSelection?: number;
   /** Renderer confirm-card mode (host shows a confirm popover instead of instant cart add). */
   confirmSelection?: boolean;
+  /** ISO 4217 currency for on-map prices (default from money.DEFAULT_CURRENCY). */
+  currency?: string;
   /** Flash a pulse when a seat we didn't touch goes free→taken (live-activity cue). */
   flashOnLiveChange?: boolean;
 }
@@ -116,10 +166,16 @@ export class PickerController {
 
   private renderer: ISeatmapRenderer | null = null;
   private _doc: ChartDoc | null = null;
+  /** Section/zone ids hidden from buyers this event (3.3) — seats vanish, not grey. */
+  private hidden = new Set<string>();
 
   /** label ⇄ id maps — backend speaks labels, the engine speaks ids. */
   private labelToId = new Map<string, string>();
   private labelToSeat = new Map<string, ExpandedSeat>();
+  /** seatId → chosen ticket-tier id (absent ⇒ the category's first/default tier). */
+  private seatTiers = new Map<string, string>();
+  /** id → seat, for the section-summary breakdown (renderer members are ids). */
+  private seatById = new Map<string, ExpandedSeat>();
   private allIds: string[] = [];
 
   // realtime socket
@@ -142,6 +198,20 @@ export class PickerController {
   get doc(): ChartDoc | null {
     return this._doc;
   }
+
+  /** The chart with hidden sections' seats removed — what buyers actually see. */
+  private visibleDoc(): ChartDoc {
+    return this._doc ? applyHidden(this._doc, this.hidden) : ({ objects: [] } as unknown as ChartDoc);
+  }
+
+  /** Adopt a new hidden set; rebuild the visible chart only if it differs. */
+  private syncHidden(ids: string[]): boolean {
+    const next = ids.filter((x): x is string => typeof x === 'string');
+    if (next.length === this.hidden.size && next.every((id) => this.hidden.has(id))) return false;
+    this.hidden = new Set(next);
+    this.renderer?.setChart(this.visibleDoc());
+    return true;
+  }
   currentHold(): HoldInfo | null {
     return this.hold_;
   }
@@ -162,6 +232,7 @@ export class PickerController {
     eventName: string;
     venue?: string | null;
     startsAt?: number | null;
+    currency?: string;
   } | null> {
     if (this.renderer) return null; // already rendered — never mount twice on one controller
     this.closed = false;
@@ -179,16 +250,22 @@ export class PickerController {
 
     this.labelToId = new Map();
     this.labelToSeat = new Map();
+    this.seatById = new Map();
     this.allIds = [];
     for (const s of expandChart(res.doc)) {
       this.labelToId.set(s.label, s.id);
       this.labelToSeat.set(s.label, s);
+      this.seatById.set(s.id, s);
       this.allIds.push(s.id);
     }
 
+    // The organizer's currency travels with the chart payload; it wins over any
+    // option passed at construction (the SDK host may not know it up front).
+    const currency = res.event.currency ?? this.opts.currency;
     const renderer = createRenderer(host, {
       maxSelection: this.maxSelection,
       confirmSelection: this.opts.confirmSelection,
+      currency,
       onSelect: (seat) => {
         this.opts.onSelect?.(seat);
         this.emitSelectionChange();
@@ -201,6 +278,9 @@ export class PickerController {
       onFocusSeat: this.opts.onFocusSeat,
       onViewChange: this.opts.onViewChange,
       onGAClick: this.opts.onGAClick,
+      // Section tap at the far/zone rung → glide in + surface the summary card.
+      onSectionTap: (id) => this.handleSectionTap(id),
+      onDeckTap: (floorId) => this.handleDeckTap(floorId),
       onFps: this.opts.onFps,
     });
     if (this.closed) {
@@ -208,9 +288,25 @@ export class PickerController {
       return null;
     }
     this.renderer = renderer;
-    renderer.setChart(res.doc);
 
-    await this.resnapshot();
+    // Pull live state (seat statuses + hidden section/zone ids) BEFORE the first
+    // paint so hidden sections never flash in. Falls back to the raw chart if the
+    // snapshot is briefly unavailable — the WS re-snapshot then reconciles.
+    let seats: Record<string, string> | null = null;
+    try {
+      const objs = await this.api.objects(this.key);
+      this.hidden = new Set(objs.hidden ?? []);
+      seats = objs.seats;
+    } catch {
+      /* transient — connect()'s onopen re-snapshots */
+    }
+    if (this.closed) {
+      renderer.destroy();
+      this.renderer = null;
+      return null;
+    }
+    renderer.setChart(this.visibleDoc());
+    if (seats) this.applySeatsMap(seats);
     this.connect();
     return {
       doc: res.doc,
@@ -218,6 +314,7 @@ export class PickerController {
       eventName: res.event.name,
       venue: res.event.venue,
       startsAt: res.event.startsAt,
+      currency,
     };
   }
 
@@ -410,6 +507,140 @@ export class PickerController {
     this.renderer?.setAccessibilityFilter?.(types as never);
   }
 
+  // ---- multi-floor (Batch 5) ------------------------------------------------
+
+  /** Floors for the buyer's switcher (>1 ⇒ show it). Single-floor ⇒ one entry. */
+  getFloors(): { id: string; name: string }[] {
+    return this.renderer?.getFloors?.() ?? [];
+  }
+  getActiveFloorId(): string {
+    return this.renderer?.getActiveFloorId?.() ?? '';
+  }
+  /** Switch the shown floor (2D), then re-apply live seat statuses onto it. */
+  setFloor(id: string): void {
+    const r = this.renderer;
+    if (!r?.setActiveFloor || id === r.getActiveFloorId?.()) return;
+    r.setStacked?.(false); // leaving any 3D stack — back to a single floor
+    r.setActiveFloor(id);
+    void this.resnapshot(); // re-paint statuses on the newly-rendered floor
+    this.emitSelectionChange();
+  }
+
+  /** 3D all-floors stacked overview ⇄ active floor. Re-applies statuses after. */
+  setStacked(on: boolean): void {
+    const r = this.renderer;
+    if (!r?.setStacked || on === r.isStacked?.()) return;
+    r.setStacked(on);
+    void this.resnapshot(); // re-paint statuses across the rebuilt view
+  }
+  isMultiFloor(): boolean {
+    return (this._doc?.floors?.length ?? 0) > 1;
+  }
+
+  /** Tap-a-deck-to-enter: leave the 3D stack, drop to flat 2D on `floorId`, and
+   *  tell the host so it can sync its 2D/3D toggle + floor-switcher state. */
+  private handleDeckTap(floorId: string): void {
+    const r = this.renderer;
+    if (!r) return;
+    r.setViewMode?.('flat');
+    r.setStacked?.(false);
+    r.setActiveFloor?.(floorId);
+    void this.resnapshot();
+    this.emitSelectionChange();
+    this.opts.onDeckTap?.(floorId);
+  }
+
+  // ---- big-venue: sections / rungs / projection (Slice 5) -------------------
+
+  /** Switch the map projection (2D flat ⇄ 3D isometric). No-op on a flat renderer. */
+  setViewMode(mode: 'flat' | 'isometric'): void {
+    this.renderer?.setViewMode?.(mode);
+  }
+  getViewMode(): 'flat' | 'isometric' {
+    return this.renderer?.getViewMode?.() ?? 'flat';
+  }
+  /** Current LOD rung (for the ZONES/SECTIONS/SEATS pill). */
+  getRung(): LodRung {
+    return this.renderer?.getRung?.() ?? 'seats';
+  }
+  /** Jump to a rung; ZONES clears any focused summary (back to overview). */
+  setRung(rung: LodRung): void {
+    if (rung === 'zones') {
+      this.overview();
+      return;
+    }
+    this.renderer?.setRung?.(rung);
+  }
+  /** Glide in on a section and surface its summary (same path as a section tap). */
+  focusSection(id: string): void {
+    this.handleSectionTap(id);
+  }
+  /** Zoom back out to the whole chart and clear the section-summary card. */
+  overview(): void {
+    this.renderer?.zoomToFit();
+    this.opts.onSectionFocus?.(null);
+  }
+
+  /** Glide the camera into a tapped section and emit its computed summary. */
+  private handleSectionTap(id: string): void {
+    const r = this.renderer;
+    if (!r) return;
+    r.focusRegion?.(id);
+    this.opts.onSectionFocus?.(this.sectionSummary(id));
+  }
+
+  /**
+   * Build a section summary from the renderer's spatial membership: section +
+   * zone labels, live seats-left, price range, and the per-category breakdown.
+   */
+  private sectionSummary(id: string): SectionSummary | null {
+    const r = this.renderer;
+    const doc = this._doc;
+    if (!r || !doc) return null;
+    const sec = doc.objects.find(
+      (o): o is SectionObject => o.type === 'section' && o.id === id,
+    );
+    if (!sec) return null;
+
+    const memberIds = r.sectionMembers?.(id) ?? [];
+    const byCat = new Map<string, number>();
+    let seatsLeft = 0;
+    for (const sid of memberIds) {
+      const seat = this.seatById.get(sid);
+      if (!seat) continue;
+      byCat.set(seat.categoryKey, (byCat.get(seat.categoryKey) ?? 0) + 1);
+      if (r.getStatus(sid) === 'free') seatsLeft++;
+    }
+
+    const categories: SectionCategory[] = [...byCat.entries()]
+      .map(([key, count]) => {
+        const cat = doc.categories.find((c) => c.key === key);
+        return {
+          key,
+          count,
+          label: cat?.label ?? key,
+          color: cat?.color ?? '#6e7bff',
+          price: cat?.price ?? 0,
+        };
+      })
+      .sort((a, b) => a.price - b.price);
+
+    const prices = categories.map((c) => c.price);
+    const zone = sec.zone ? doc.zones?.find((z) => z.id === sec.zone) : undefined;
+    const color = sec.color ?? zone?.color ?? categories[0]?.color ?? '#6e7bff';
+
+    return {
+      id,
+      label: sec.label,
+      zoneLabel: zone?.label ?? '',
+      color,
+      seatsLeft,
+      priceMin: prices.length ? prices[0] : 0,
+      priceMax: prices.length ? prices[prices.length - 1] : 0,
+      categories,
+    };
+  }
+
   destroy(): void {
     this.closed = true;
     if (this.reconnectTimer) {
@@ -435,10 +666,54 @@ export class PickerController {
   // ---- internals ------------------------------------------------------------
 
   private toSeat(s: ExpandedSeat): PickerSeat {
-    return { id: s.id, label: s.label, categoryKey: s.categoryKey, price: this.priceFor(s.categoryKey) };
+    const tiers = this.tiersFor(s.categoryKey);
+    if (!tiers) {
+      return { id: s.id, label: s.label, categoryKey: s.categoryKey, price: this.priceFor(s.categoryKey) };
+    }
+    const chosen = tiers.find((t) => t.id === this.seatTiers.get(s.id)) ?? tiers[0];
+    return {
+      id: s.id,
+      label: s.label,
+      categoryKey: s.categoryKey,
+      price: chosen.price,
+      tiers,
+      tierId: chosen.id,
+    };
   }
   private priceFor(categoryKey: string): number {
     return this._doc?.categories.find((c) => c.key === categoryKey)?.price ?? 0;
+  }
+  private tiersFor(categoryKey: string): CategoryTier[] | undefined {
+    const t = this._doc?.categories.find((c) => c.key === categoryKey)?.tiers;
+    return t && t.length ? t : undefined;
+  }
+
+  /**
+   * Choose a ticket tier for a selected seat (e.g. Adult → Child). Re-emits the
+   * selection so the host's cart + the eventual hold carry the new tier + price.
+   * `tierId = null` reverts to the category's first (default) tier. No-op if the
+   * seat's category has no tiers or the id isn't one of them.
+   */
+  setSeatTier(seatId: string, tierId: string | null): void {
+    const seat = this.seatById.get(seatId);
+    if (!seat) return;
+    const tiers = this.tiersFor(seat.categoryKey);
+    if (!tiers) return;
+    if (tierId == null) this.seatTiers.delete(seatId);
+    else if (tiers.some((t) => t.id === tierId)) this.seatTiers.set(seatId, tierId);
+    else return;
+    this.emitSelectionChange();
+    if (this.hold_) this.hold_ = { ...this.hold_, seats: this.seatsForLabels(this.hold_.labels) };
+  }
+
+  /** PickerSeats (with chosen tier) for a set of held labels. */
+  private seatsForLabels(labels: string[]): PickerSeat[] {
+    const out: PickerSeat[] = [];
+    for (const l of labels) {
+      const s = this.labelToSeat.get(l);
+      if (s) out.push(this.toSeat(s));
+    }
+    return out;
   }
   private emitSelectionChange(): void {
     this.opts.onSelectionChange?.(this.getSelection());
@@ -467,12 +742,15 @@ export class PickerController {
   }
 
   /** Set the open hold + (re)arm the server-authoritative expiry timer. */
-  private setHold(hold: HoldInfo): void {
-    this.hold_ = hold;
+  private setHold(hold: Omit<HoldInfo, 'seats'> & { seats?: PickerSeat[] }): void {
+    // Always resolve seats (with chosen tier) from the held labels so the host's
+    // onHold — and any later book — carries the tier the buyer picked per seat.
+    const full: HoldInfo = { ...hold, seats: this.seatsForLabels(hold.labels) };
+    this.hold_ = full;
     if (this.expiryTimer) clearTimeout(this.expiryTimer);
-    const ms = Math.max(0, hold.expiresAt - Date.now());
+    const ms = Math.max(0, full.expiresAt - Date.now());
     this.expiryTimer = setTimeout(() => this.onHoldExpired(), ms);
-    this.opts.onHold?.(hold);
+    this.opts.onHold?.(full);
   }
   private clearHold(): void {
     this.hold_ = null;
@@ -541,7 +819,14 @@ export class PickerController {
       }
       const r = this.renderer;
       if (!r || !msg || typeof msg !== 'object') return;
-      const m = msg as { seats?: Record<string, string>; changes?: { label: string; status: string }[] };
+      const m = msg as { type?: string; hidden?: string[]; seats?: Record<string, string>; changes?: { label: string; status: string }[] };
+      // Reconcile hidden sections whenever they arrive (dedicated 'hidden' message
+      // OR a snapshot that carries them). Only rebuilds the chart when it changed.
+      if (Array.isArray(m.hidden) && this.syncHidden(m.hidden)) {
+        void this.resnapshot(); // repaint statuses onto the rebuilt chart
+        this.opts.onStatusChange?.();
+      }
+      if (m.type === 'hidden') return; // dedicated hidden message carries no seats
       if (m.seats && typeof m.seats === 'object') {
         this.applySeatsMap(m.seats);
       } else if (Array.isArray(m.changes)) {
