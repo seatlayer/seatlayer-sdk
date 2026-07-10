@@ -89,6 +89,9 @@ const ZONE_SUB_PX = 12;
 const HELD_FILL = '#6b7280';
 const TAKEN_FILL = '#374151';
 const NFS_STROKE = '#4b5563';
+/** Okabe-Ito colorblind-safe hues (black dropped — unreadable on dark charts).
+ *  Categories map to these by their doc order when colorblind mode is on. */
+const CB_PALETTE = ['#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7'];
 
 /** Outer-ring colour per accommodation (a seat's first-listed type wins). */
 const ACCESS_RING: Record<AccessibilityType, string> = {
@@ -270,6 +273,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private statusById = new Map<string, SeatStatus>();
   private catColor = new Map<string, string>();
   private theme: ChartTheme = {};
+  /** Colorblind-safe mode (Okabe-Ito hues + hollow booked seats). */
+  private colorblind = false;
+  /** Category order from the doc — the stable index into the CB palette. */
+  private catOrder: string[] = [];
 
   private selection = new Set<string>();
   private selectionRings = new Map<string, Circle>();
@@ -478,6 +485,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
     this.catColor.clear();
     this.catPrice.clear();
+    this.catOrder = doc.categories.map((c) => c.key);
     for (const c of doc.categories) {
       this.catColor.set(c.key, c.color);
       if (typeof c.price === 'number') this.catPrice.set(c.key, c.price);
@@ -1087,12 +1095,19 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     target.add(t);
   }
 
+  /** The category's display color — Okabe-Ito hue when colorblind-safe is on. */
+  private seatBaseColor(categoryKey: string): string {
+    if (!this.colorblind) return this.catColor.get(categoryKey) ?? '#6e7bff';
+    const idx = this.catOrder.indexOf(categoryKey);
+    return CB_PALETTE[(idx >= 0 ? idx : 0) % CB_PALETTE.length];
+  }
+
   /** Apply fill/stroke/opacity for a seat's current status + selection. */
   private paintSeat(c: Shape, id: string): void {
     const seat = this.seatById.get(id)!;
     const status = this.statusById.get(id) ?? 'free';
     const selected = this.selection.has(id);
-    const base = this.catColor.get(seat.categoryKey) ?? '#6e7bff';
+    const base = this.seatBaseColor(seat.categoryKey);
 
     c.dash([]);
     c.strokeWidth(0);
@@ -1107,8 +1122,16 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         c.fill(HELD_FILL);
         break;
       case 'booked':
-        c.fill(TAKEN_FILL);
-        c.opacity(0.45);
+        if (this.colorblind) {
+          // Non-color cue: booked reads as a hollow ring, never hue alone.
+          c.fill('rgba(0,0,0,0)');
+          c.stroke(TAKEN_FILL);
+          c.strokeWidth(1.5);
+          c.opacity(0.9);
+        } else {
+          c.fill(TAKEN_FILL);
+          c.opacity(0.45);
+        }
         break;
       case 'not_for_sale':
         c.fill(TAKEN_FILL);
@@ -1133,6 +1156,25 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       if (sec && (this.dimmedSections.has(sec.id) || (sec.zone != null && this.dimmedSections.has(sec.zone)))) {
         c.opacity(0.18);
       }
+    }
+  }
+
+  /**
+   * Colorblind-safe mode: swap category hues for the Okabe-Ito palette and
+   * render booked seats hollow. Off restores the exact default rendering.
+   */
+  setColorblindSafe(on: boolean): void {
+    if (on === this.colorblind) return;
+    this.colorblind = on;
+    for (const seat of this.seats) {
+      const c = this.circleById.get(seat.id);
+      if (c) this.paintSeat(c, seat.id);
+    }
+    if (this.cached) {
+      this.seatLayer.clearCache();
+      this.cacheSeatLayer();
+    } else {
+      this.seatLayer.batchDraw();
     }
   }
 

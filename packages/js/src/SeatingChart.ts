@@ -40,6 +40,12 @@ export interface SeatingChartOptions {
   messages?: Record<string, string>;
   /** ISO 4217 currency for on-map prices (default USD). */
   currency?: string;
+  /**
+   * Colorblind-safe rendering: category hues switch to an Okabe-Ito palette
+   * and booked seats render hollow, so state never relies on hue alone.
+   * Toggleable later with setColorblindSafe().
+   */
+  colorblindSafe?: boolean;
   onSelectionChange?: (seats: SelectedSeat[]) => void;
   onHold?: (result: HoldResult) => void;
   onError?: (err: unknown) => void;
@@ -49,6 +55,12 @@ export interface SeatingChartOptions {
    * its own floor UI (tabs, labels) with the map.
    */
   onDeckTap?: (floorId: string) => void;
+  /**
+   * Non-blocking, localized selection advice — currently the orphan-seat hint
+   * (the selection would strand a single free seat between taken neighbors).
+   * `null` clears it. Purely informational; nothing is ever prevented.
+   */
+  onHint?: (message: string | null) => void;
 }
 
 function resolveContainer(container: string | HTMLElement): HTMLElement {
@@ -90,6 +102,8 @@ export class SeatingChart {
       onHold: (h) => this.opts.onHold?.({ holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats }),
       onError: (err) => this.opts.onError?.(err),
       onDeckTap: (floorId) => this.opts.onDeckTap?.(floorId),
+      onHint: (message) => this.opts.onHint?.(message),
+      colorblindSafe: options.colorblindSafe,
     });
   }
 
@@ -155,6 +169,29 @@ export class SeatingChart {
    */
   setSeatTier(seatId: string, tierId: string | null): void {
     this.controller.setSeatTier(seatId, tierId);
+  }
+
+  /**
+   * Floors of a multi-floor chart — `[{ id, name }]` (single-floor charts
+   * return one entry; empty before render()). Pair with setFloor() to build a
+   * host-side floor switcher.
+   */
+  getFloors(): { id: string; name: string }[] {
+    return this.controller.getFloors();
+  }
+
+  /** Switch the shown floor (2D). Warns + no-ops on single-floor charts. */
+  setFloor(floorId: string): void {
+    if (this.controller.getFloors().length <= 1) {
+      console.warn('seatmap: setFloor() ignored — this chart has a single floor');
+      return;
+    }
+    this.controller.setFloor(floorId);
+  }
+
+  /** Toggle colorblind-safe rendering at runtime (see options.colorblindSafe). */
+  setColorblindSafe(on: boolean): void {
+    this.controller.setColorblindSafe(on);
   }
 
   /** Release the current hold (if any). No-op when nothing is held. */

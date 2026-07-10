@@ -30,6 +30,15 @@ export interface SeatingChartHandle {
    * `tiers` are on each `SelectedSeat`; `tierId=null` reverts to the default.
    */
   setSeatTier(seatId: string, tierId: string | null): void;
+  /**
+   * Floors of a multi-floor chart — `[{ id, name }]` (single-floor charts
+   * return one entry; empty before render()). Pair with setFloor().
+   */
+  getFloors(): { id: string; name: string }[];
+  /** Switch the shown floor (2D). Warns + no-ops on single-floor charts. */
+  setFloor(floorId: string): void;
+  /** Toggle colorblind-safe rendering at runtime (see the `colorblindSafe` prop). */
+  setColorblindSafe(on: boolean): void;
 }
 
 export interface SeatingChartProps extends Omit<SeatingChartOptions, 'container'> {
@@ -41,14 +50,15 @@ export interface SeatingChartProps extends Omit<SeatingChartOptions, 'container'
  * React wrapper around the framework-agnostic `@seatlayer/js` SDK.
  *
  * The underlying canvas is created once and torn down on unmount. Callback props
- * (`onSelectionChange`, `onHold`, `onError`, `onDeckTap`) may change freely
- * between renders without re-mounting the canvas — only `event`, `apiBase`,
- * `maxSelection`, `publicKey`, `locale`, and `currency` trigger a rebuild.
- * (`messages` is read once per mount; changing it alone does not re-apply.)
+ * (`onSelectionChange`, `onHold`, `onError`, `onDeckTap`, `onHint`) may change
+ * freely between renders without re-mounting the canvas — only `event`,
+ * `apiBase`, `maxSelection`, `publicKey`, `locale`, `currency`, and
+ * `colorblindSafe` trigger a rebuild. (`messages` is read once per mount;
+ * changing it alone does not re-apply.)
  */
 export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
   function SeatingChart(props, ref) {
-    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency } = props;
+    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const chartRef = useRef<CoreSeatingChart | null>(null);
@@ -69,11 +79,13 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
         publicKey,
         locale,
         currency,
+        colorblindSafe,
         messages: callbacks.current.messages,
         onSelectionChange: (seats) => callbacks.current.onSelectionChange?.(seats),
         onHold: (result) => callbacks.current.onHold?.(result),
         onError: (err) => callbacks.current.onError?.(err),
         onDeckTap: (floorId) => callbacks.current.onDeckTap?.(floorId),
+        onHint: (message) => callbacks.current.onHint?.(message),
       });
       chartRef.current = chart;
       void chart.render();
@@ -84,7 +96,7 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
       };
       // Rebuild only when the identity of the chart changes.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [event, apiBase, maxSelection, publicKey, locale, currency]);
+    }, [event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe]);
 
     useImperativeHandle(
       ref,
@@ -95,6 +107,9 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
         release: () => chartRef.current?.release() ?? Promise.resolve(),
         getSelection: () => chartRef.current?.getSelection() ?? [],
         setSeatTier: (seatId, tierId) => chartRef.current?.setSeatTier(seatId, tierId),
+        getFloors: () => chartRef.current?.getFloors() ?? [],
+        setFloor: (floorId) => chartRef.current?.setFloor(floorId),
+        setColorblindSafe: (on) => chartRef.current?.setColorblindSafe(on),
       }),
       [],
     );

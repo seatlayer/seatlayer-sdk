@@ -496,6 +496,12 @@ export interface ISeatmapRenderer {
   /** Dim the seats of these section/zone ids (organizer manager: held-back inventory). */
   setDimmedSections?(ids: string[] | null): void;
   /**
+   * Colorblind-safe mode: category hues switch to an Okabe-Ito palette and
+   * booked seats render hollow (a non-color cue), so seat state never relies
+   * on hue alone. Off (the default) renders exactly as before.
+   */
+  setColorblindSafe?(on: boolean): void;
+  /**
    * Switch the projection. `'flat'` = normal top-down; `'isometric'` = the "3D"
    * view (affine skew/rotate + elevation lift), hit-testing preserved in screen
    * space. Purely visual — the chart is authored flat. Animated unless reduced-motion.

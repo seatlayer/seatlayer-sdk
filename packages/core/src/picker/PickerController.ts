@@ -17,6 +17,8 @@
 import { createRenderer } from '../engine/SeatmapRenderer';
 import { expandChart } from '../core/layout';
 import { applyHidden } from '../core/sections';
+import { strandedSingles } from '../core/orphans';
+import { t } from '../i18n';
 import type {
   CategoryTier,
   ChartDoc,
@@ -130,6 +132,12 @@ export interface PickerCallbacks extends RendererCallbacks {
   onSectionFocus?: (summary: SectionSummary | null) => void;
   /** A deck was tapped in the 3D all-floors overview — host enters that floor in 2D. */
   onDeckTap?: (floorId: string) => void;
+  /**
+   * Non-blocking selection advice (localized): currently the orphan-seat hint —
+   * the selection would strand a single free seat between unavailable
+   * neighbors. `null` clears a previously shown hint. Never prevents anything.
+   */
+  onHint?: (message: string | null) => void;
   onError?: (err: unknown) => void;
 }
 
@@ -143,6 +151,8 @@ export interface PickerOptions extends PickerCallbacks {
   currency?: string;
   /** Flash a pulse when a seat we didn't touch goes free→taken (live-activity cue). */
   flashOnLiveChange?: boolean;
+  /** Start in colorblind-safe rendering (Okabe-Ito hues + hollow booked seats). */
+  colorblindSafe?: boolean;
 }
 
 /** Read `status`/`conflicts`/`reason` off any thrown error without importing a specific ApiError. */
@@ -306,6 +316,7 @@ export class PickerController {
       return null;
     }
     renderer.setChart(this.visibleDoc());
+    if (this.opts.colorblindSafe) renderer.setColorblindSafe?.(true);
     if (seats) this.applySeatsMap(seats);
     this.connect();
     return {
@@ -717,6 +728,38 @@ export class PickerController {
   }
   private emitSelectionChange(): void {
     this.opts.onSelectionChange?.(this.getSelection());
+    this.emitOrphanHint();
+  }
+
+  /** Whether the last emitted hint was non-null (avoids clearing repeatedly). */
+  private hintShown = false;
+
+  /**
+   * Orphan-seat advice on manual selection: when the buyer's current picks
+   * strand one (or more) single free seats between unavailable same-row
+   * neighbors, surface a localized, non-blocking hint. Cleared (null) as soon
+   * as the selection stops stranding anyone.
+   */
+  private emitOrphanHint(): void {
+    if (!this.opts.onHint) return;
+    const r = this.renderer;
+    if (!r) return;
+    const selected = new Set(r.getSelection().map((s) => s.id));
+    const stranded = selected.size
+      ? strandedSingles(this.seatById.values(), (id) => r.getStatus(id), selected)
+      : [];
+    if (stranded.length > 0) {
+      this.hintShown = true;
+      this.opts.onHint(t('picker.orphanHint'));
+    } else if (this.hintShown) {
+      this.hintShown = false;
+      this.opts.onHint(null);
+    }
+  }
+
+  /** Toggle colorblind-safe rendering at runtime (see PickerOptions.colorblindSafe). */
+  setColorblindSafe(on: boolean): void {
+    this.renderer?.setColorblindSafe?.(on);
   }
   private emitError(err: unknown): void {
     if (this.opts.onError) this.opts.onError(err);

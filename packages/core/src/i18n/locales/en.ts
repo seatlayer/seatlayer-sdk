@@ -24,7 +24,9 @@ export const en: Dict = {
   'picker.seatsHeld': 'Seats held — {time}',
   'picker.holdExpired': 'Your hold expired — the seats were released. Pick again.',
   'picker.seatTaken': 'Seat {label} was just taken by another buyer.',
-  'picker.poweredBy': 'Powered by SeatMap',
+  'picker.poweredBy': 'Powered by SeatLayer',
+  'picker.colorblind': 'Colorblind-friendly colors',
+  'picker.orphanHint': 'This leaves a single seat stranded — consider shifting one seat over.',
   'picker.seats.one': '{count} seat',
   'picker.seats.other': '{count} seats',
 

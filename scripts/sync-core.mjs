@@ -29,6 +29,9 @@ const FILES = [
   ['src/core/types.ts', 'packages/core/src/core/types.ts'],
   ['src/core/layout.ts', 'packages/core/src/core/layout.ts'],
   ['src/core/sections.ts', 'packages/core/src/core/sections.ts'],
+  // Orphan-seat (stranded single) detection — imported by PickerController for
+  // the non-blocking `onHint` selection advice.
+  ['src/core/orphans.ts', 'packages/core/src/core/orphans.ts'],
   ['src/engine/SeatmapRenderer.ts', 'packages/core/src/engine/SeatmapRenderer.ts'],
   ['src/picker/PickerController.ts', 'packages/core/src/picker/PickerController.ts'],
   // i18n + money: imported by the engine (`t()`, formatMoney) and surfaced to the
