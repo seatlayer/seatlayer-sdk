@@ -89,6 +89,18 @@ const ZONE_SUB_PX = 12;
 const HELD_FILL = '#6b7280';
 const TAKEN_FILL = '#374151';
 const NFS_STROKE = '#4b5563';
+/** Phase 2 event-level `closed` section: a flat desaturated slate block (label
+ *  kept), distinct from the per-seat availability-grey. Seats inside read grey
+ *  at 40% and are not pickable (per chart-design-standards §3). */
+const CLOSED_SECTION_FILL = '#586070';
+const CLOSED_SEAT_FILL = '#4b5563';
+const CLOSED_SEAT_OPACITY = 0.4;
+/** AXS section-focus: non-focused sections dim to this opacity + desaturate. */
+const FOCUS_DIM_OPACITY = 0.16;
+const FOCUS_DESATURATE = 0.72; // lerp non-focused fills toward neutral grey
+const FOCUS_NEUTRAL = '#6b7280';
+/** Light/neutral backdrop panel drawn behind the focused section's seats. */
+const FOCUS_BACKDROP_FILL = 'rgba(244,246,248,0.06)';
 /** Okabe-Ito colorblind-safe hues (black dropped — unreadable on dark charts).
  *  Categories map to these by their doc order when colorblind mode is on. */
 const CB_PALETTE = ['#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7'];
@@ -329,6 +341,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private accessFilter: AccessibilityType[] | null = null;
   /** Category highlight (legend hover): dims free seats NOT of this category. */
   private categoryHighlight: string | null = null;
+  /** Price-band filter (F4): dim free seats whose category is NOT in this set. */
+  private categoryFilter: Set<string> | null = null;
 
   // Section/zone overlays (bgLayer) — the 3-rung LOD: seats → section blocks →
   // zone blocks. Kept for the melt restyle and for hit-testing a zoomed-out tap.
@@ -340,6 +354,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private currency: string | undefined;
   /** Section/zone ids to render dimmed (organizer manager: held-back inventory). */
   private dimmedSections = new Set<string>();
+  /** Phase 2: section/zone ids in the event-level `closed` state — flat grey
+   *  block, seats greyed + not pickable, but the section stays rendered. */
+  private closedSections = new Set<string>();
+  /** AXS section-focus: the currently-focused section id (others dim), or null. */
+  private focusedSectionId: string | null = null;
+  /** Light backdrop panel drawn behind the focused section (removed on clear). */
+  private focusBackdrop: Line | null = null;
   /** Object id → floor id (multi-floor only) — resolves a deck tap in the 3D stack. */
   private objectFloor = new Map<string, string>();
   /** Zone id → colour (drives extruded side faces in iso view). */
@@ -832,6 +853,30 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     return cur.length === next.length && cur.every((t, i) => t === next[i]);
   }
 
+  /**
+   * Price-band filter (F4): dim free, unselected seats whose category key is NOT
+   * in `keys`. `null` clears the filter (all categories fully visible). The
+   * widget resolves which categories fall inside the buyer's chosen band.
+   */
+  setCategoryFilter(keys: string[] | null): void {
+    const next = keys === null ? null : new Set(keys);
+    const same = (next === null && this.categoryFilter === null) ||
+      (next !== null && this.categoryFilter !== null &&
+        next.size === this.categoryFilter.size && [...next].every((k) => this.categoryFilter!.has(k)));
+    if (same) return;
+    this.categoryFilter = next;
+    for (const seat of this.seats) {
+      const c = this.circleById.get(seat.id);
+      if (c) this.paintSeat(c, seat.id);
+    }
+    if (this.cached) {
+      this.seatLayer.clearCache();
+      this.cacheSeatLayer();
+    } else {
+      this.seatLayer.batchDraw();
+    }
+  }
+
   // ---- isometric ("3D") view mode -------------------------------------------
 
   /**
@@ -1193,6 +1238,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (this.categoryHighlight && status === 'free' && !selected && seat.categoryKey !== this.categoryHighlight) {
       c.opacity(0.25);
     }
+    // Price-band filter (F4): dim free, unselected seats outside the chosen band.
+    if (this.categoryFilter && status === 'free' && !selected && !this.categoryFilter.has(seat.categoryKey)) {
+      c.opacity(0.22);
+    }
     // Held-back inventory (organizer manager): seats in a dimmed section/zone
     // read as inactive so the map matches the Sections list at a glance.
     if (this.dimmedSections.size) {
@@ -1201,6 +1250,29 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         c.opacity(0.18);
       }
     }
+    // Phase 2 `closed` section: flat grey, 40% opacity, never a category hue —
+    // overrides the status paint above. Seats stay visible but read off-sale.
+    if (this.closedSections.size && this.seatInClosedSection(id)) {
+      c.fill(CLOSED_SEAT_FILL);
+      c.stroke('');
+      c.strokeWidth(0);
+      c.dash([]);
+      c.opacity(CLOSED_SEAT_OPACITY);
+    }
+    // AXS section-focus: seats outside the focused section desaturate + dim so
+    // the focused block reads against a calm ground (§4 focus spec).
+    if (this.focusedSectionId) {
+      const sec = this.seatSection.get(id);
+      const inFocus = !!sec && (sec.id === this.focusedSectionId || sec.zone === this.focusedSectionId);
+      if (!inFocus) c.opacity(FOCUS_DIM_OPACITY);
+    }
+  }
+
+  /** True when a seat sits in a section/zone currently marked `closed`. */
+  private seatInClosedSection(id: string): boolean {
+    if (!this.closedSections.size) return false;
+    const sec = this.seatSection.get(id);
+    return !!sec && (this.closedSections.has(sec.id) || (sec.zone != null && this.closedSections.has(sec.zone)));
   }
 
   /**
@@ -1243,6 +1315,117 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     }
   }
 
+  /**
+   * Phase 2 event-level section states: mark these section/zone ids `closed` —
+   * flat grey block, seats greyed + not pickable, but the section stays rendered
+   * (unlike the buyer's applyHidden which strips it). `null`/empty clears.
+   */
+  setClosedSections(ids: string[] | null): void {
+    const next = new Set(ids ?? []);
+    if (next.size === this.closedSections.size && [...next].every((i) => this.closedSections.has(i))) return;
+    this.closedSections = next;
+    this.repaintSectionsAndSeats();
+  }
+
+  /**
+   * AXS section-focus: dim + desaturate every other section, draw a calm backdrop
+   * panel behind this section's seats, and glide the camera in to frame it (the
+   * seat-pick gate below only lets buyers pick once seats are ≥ LABEL_SCALE big).
+   */
+  focusSection(id: string): void {
+    if (!this.sections.some((s) => s.id === id)) return;
+    this.focusedSectionId = id;
+    this.drawFocusBackdrop(id);
+    this.repaintSectionsAndSeats();
+    this.updateLOD();
+    this.focusRegion(id);
+  }
+
+  /** Clear an AXS section focus — restore full-bowl brightness + drop the backdrop. */
+  clearSectionFocus(): void {
+    if (!this.focusedSectionId) return;
+    this.focusedSectionId = null;
+    if (this.focusBackdrop) {
+      this.focusBackdrop.destroy();
+      this.focusBackdrop = null;
+    }
+    this.repaintSectionsAndSeats();
+    this.updateLOD();
+  }
+
+  /** The currently AXS-focused section id, or null. */
+  getFocusedSection(): string | null {
+    return this.focusedSectionId;
+  }
+
+  /** Draw (or replace) the light backdrop panel behind the focused section. */
+  private drawFocusBackdrop(id: string): void {
+    if (this.focusBackdrop) {
+      this.focusBackdrop.destroy();
+      this.focusBackdrop = null;
+    }
+    const sec = this.sections.find((s) => s.id === id);
+    if (!sec) return;
+    const panel = new Line({
+      points: sec.outline.flatMap((p) => [p.x, p.y]),
+      closed: true,
+      fill: FOCUS_BACKDROP_FILL,
+      stroke: rgba('#ffffff', 0.1),
+      strokeWidth: 1,
+      listening: false,
+      perfectDrawEnabled: false,
+    });
+    this.bgLayer.add(panel);
+    panel.moveToTop(); // above the dimmed sibling blocks, still under the seat layer
+    this.focusBackdrop = panel;
+  }
+
+  /** Repaint every seat + section block to reflect closed/focus state, then redraw. */
+  private repaintSectionsAndSeats(): void {
+    for (const seat of this.seats) {
+      const c = this.circleById.get(seat.id);
+      if (c) this.paintSeat(c, seat.id);
+    }
+    for (const sec of this.sections) sec.blockPoly.fill(this.sectionBlockFill(sec));
+    if (this.cached) {
+      this.seatLayer.clearCache();
+      this.cacheSeatLayer();
+    } else {
+      this.seatLayer.batchDraw();
+    }
+    this.bgLayer.batchDraw();
+  }
+
+  /** The world-space rectangle currently visible in the viewport (minimap F3). */
+  getVisibleWorldRect(): { x: number; y: number; width: number; height: number } {
+    const tl = this.screenToWorld({ x: 0, y: 0 });
+    const br = this.screenToWorld({ x: this.stage.width(), y: this.stage.height() });
+    return {
+      x: Math.min(tl.x, br.x),
+      y: Math.min(tl.y, br.y),
+      width: Math.abs(br.x - tl.x),
+      height: Math.abs(br.y - tl.y),
+    };
+  }
+
+  /** Axis-aligned world bounds of all seats + section outlines (minimap F3 frame). */
+  getWorldBounds(): { x: number; y: number; width: number; height: number } {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const grow = (x: number, y: number): void => {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    };
+    for (const s of this.seats) grow(s.x, s.y);
+    for (const sec of this.sections) for (const p of sec.outline) grow(p.x, p.y);
+    if (!Number.isFinite(minX)) return { x: 0, y: 0, width: 1, height: 1 };
+    return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+  }
+
   /** Legend hover: highlight one category (dim the rest), or null to clear. */
   setCategoryHighlight(key: string | null): void {
     if (this.categoryHighlight === key) return;
@@ -1261,7 +1444,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   private renderBackground(doc: ChartDoc): void {
     if (doc.backgroundImage) this.renderBackgroundImage(doc.backgroundImage);
+    // Decor graphics (ice rink, court art) draw first so they sit UNDER the
+    // section outlines and — being on bgLayer, below seatLayer entirely — under
+    // every seat. listening(false) keeps them out of the hit graph.
+    for (const obj of doc.objects) if (obj.type === 'decorImage') this.renderDecorImage(obj);
     // Sections sit under all other décor so their outlines never occlude seats.
+    // NOTE(phase-2): event-level section open/closed/hidden state will gate this
+    // draw + the seat membership below — hide/dim a section by id/zone here.
     for (const obj of doc.objects) if (obj.type === 'section') this.renderSection(obj);
     // Zone labels sit above section blocks (drawn after) — the farthest rung.
     this.renderZones(doc);
@@ -1312,6 +1501,39 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       this.bgLayer.batchDraw();
     };
     img.src = bg.url;
+  }
+
+  /**
+   * A decor graphic (rink / court / stage art). The KImage node is added to the
+   * bgLayer synchronously so it keeps its z-slot beneath the sections drawn right
+   * after; the bitmap is decoded async and pasted in on load. A single node = a
+   * single drawImage per frame, and it rides the same layer cache — effectively
+   * zero per-frame cost. Never listens, so it can't intercept a seat click.
+   */
+  private renderDecorImage(obj: Extract<ChartDoc['objects'][number], { type: 'decorImage' }>): void {
+    // Pass the (not-yet-loaded) Image element as the node's image: Konva draws
+    // nothing until it decodes, then onload triggers a repaint. Keeps the node's
+    // z-slot fixed beneath the sections drawn immediately after.
+    const img = new window.Image();
+    const node = new KImage({
+      image: img,
+      x: obj.x + obj.width / 2,
+      y: obj.y + obj.height / 2,
+      offsetX: obj.width / 2,
+      offsetY: obj.height / 2,
+      width: obj.width,
+      height: obj.height,
+      rotation: obj.rotation ?? 0,
+      opacity: clamp(obj.opacity ?? 1, 0, 1),
+      listening: false,
+      perfectDrawEnabled: false,
+    });
+    this.bgLayer.add(node);
+    img.onload = () => {
+      if (!node.getLayer()) return; // chart swapped out before the image loaded
+      this.bgLayer.batchDraw();
+    };
+    img.src = obj.href;
   }
 
   private renderTable(obj: Extract<ChartDoc['objects'][number], { type: 'table' }>): void {
@@ -1675,10 +1897,33 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   /** Recompute a section's availability-tinted fill + "N LEFT" (cheap; on status change). */
   private refreshSectionFill(sec: SectionRender): void {
-    const sold = sec.total > 0 ? (sec.total - sec.free) / sec.total : 0;
-    sec.blockPoly.fill(darken(sec.baseFill, sold * SOLD_DARKEN));
+    sec.blockPoly.fill(this.sectionBlockFill(sec));
     sec.subLabel.text(t('map.seatsLeft', { count: sec.free }));
     sec.subLabel.offsetX(sec.subLabel.width() / 2);
+  }
+
+  /** True when a section/zone is currently in the `closed` event-state. */
+  private isSectionClosed(sec: SectionRender): boolean {
+    return this.closedSections.has(sec.id) || (sec.zone != null && this.closedSections.has(sec.zone));
+  }
+
+  /**
+   * The block-fill colour for a section: flat desaturated grey when `closed`,
+   * else the availability-darkened category mix; then desaturated toward neutral
+   * when another section holds focus (AXS dim treatment).
+   */
+  private sectionBlockFill(sec: SectionRender): string {
+    let fill: string;
+    if (this.isSectionClosed(sec)) {
+      fill = CLOSED_SECTION_FILL;
+    } else {
+      const sold = sec.total > 0 ? (sec.total - sec.free) / sec.total : 0;
+      fill = darken(sec.baseFill, sold * SOLD_DARKEN);
+    }
+    if (this.focusedSectionId && sec.id !== this.focusedSectionId && sec.zone !== this.focusedSectionId) {
+      fill = lerpColor(fill, FOCUS_NEUTRAL, FOCUS_DESATURATE);
+    }
+    return fill;
   }
 
   /**
@@ -1789,13 +2034,16 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const rescale = this.lodScale === 0 || Math.abs(scale - this.lodScale) / (this.lodScale || 1) > 0.02;
     if (rescale) this.lodScale = scale;
 
+    const focus = this.focusedSectionId;
     for (const sec of this.sections) {
-      sec.blockPoly.opacity(BLOCK_FILL_ALPHA * blockT);
-      for (const line of sec.rowLines) line.opacity(blockT * (1 - zoneT));
+      // AXS focus: non-focused sections dim to ~16%; the focused block stays full.
+      const dim = focus && sec.id !== focus && sec.zone !== focus ? FOCUS_DIM_OPACITY : 1;
+      sec.blockPoly.opacity(BLOCK_FILL_ALPHA * blockT * dim);
+      for (const line of sec.rowLines) line.opacity(blockT * (1 - zoneT) * dim);
       // Name: faint→bright with blockT, then fades out as zones take over.
       sec.nameLabel.fill(lerpColor('#aab3c5', '#ffffff', blockT));
-      sec.nameLabel.opacity(1 - zoneT);
-      sec.subLabel.opacity(blockT * (1 - zoneT));
+      sec.nameLabel.opacity((1 - zoneT) * dim);
+      sec.subLabel.opacity(blockT * (1 - zoneT) * dim);
       if (rescale) {
         this.sizeLabel(sec.nameLabel, SECTION_LABEL_PX / sx, sec.centroid.y - SECTION_SUB_PX / sx);
         this.sizeLabel(sec.subLabel, SECTION_SUB_PX / sx, sec.centroid.y + SECTION_LABEL_PX / sx);
@@ -1814,7 +2062,60 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         if (zone.sub) this.sizeLabel(zone.sub, ZONE_SUB_PX / sx, cy + ZONE_LABEL_PX / sx);
       }
     }
+    // Greedy de-collision of the visible label tiers (small canvases stack
+    // "UPPER BOWL"/"LOWER BOWL"/FROM-$ on top of each other otherwise).
+    this.decollideRungLabels(sx);
     this.bgLayer.batchDraw();
+  }
+
+  /**
+   * Greedy label de-collision for the zone/section rungs (same approach as the
+   * designer's cullRowLabels): price/"N LEFT" sublabels are lowest priority and
+   * drop first; name labels keep top-to-bottom, left-to-right; anything whose
+   * on-screen box (+4px gap) overlaps an already-kept box hides. Recomputed on
+   * every LOD pass so hidden labels reappear as zoom spreads them apart.
+   * Culling multiplies the opacity applySectionLod just assigned (never raises).
+   */
+  private decollideRungLabels(sx: number): void {
+    const GAP = 4;
+    interface Cand { node: Text; tier: number; owner?: Text; box: { x: number; y: number; w: number; h: number } }
+    const cands: Cand[] = [];
+    const boxOf = (t: Text): { x: number; y: number; w: number; h: number } => {
+      // Labels are centred (offset = w/2,h/2); world size × stage scale = screen px.
+      const p = this.worldToScreen({ x: t.x(), y: t.y() });
+      const w = t.width() * sx;
+      const h = t.height() * sx;
+      return { x: p.x - w / 2, y: p.y - h / 2, w, h };
+    };
+    // Tier order = drop priority (higher tier drops first): zone names (0) win
+    // over section names (1); price/"N LEFT" sublabels (2/3) drop before names.
+    // A sublabel records its `owner` name: if the name lost, the sub hides too
+    // (never a floating price tag without the zone/section it belongs to).
+    for (const zone of this.zones) {
+      if (zone.label.opacity() > 0.05) cands.push({ node: zone.label, tier: 0, box: boxOf(zone.label) });
+      if (zone.sub && zone.sub.opacity() > 0.05) cands.push({ node: zone.sub, tier: 2, owner: zone.label, box: boxOf(zone.sub) });
+    }
+    for (const sec of this.sections) {
+      if (sec.nameLabel.opacity() > 0.05) cands.push({ node: sec.nameLabel, tier: 1, box: boxOf(sec.nameLabel) });
+      if (sec.subLabel.opacity() > 0.05) cands.push({ node: sec.subLabel, tier: 3, owner: sec.nameLabel, box: boxOf(sec.subLabel) });
+    }
+    if (cands.length < 2) return;
+    cands.sort((a, b) => a.tier - b.tier || a.box.y - b.box.y || a.box.x - b.box.x);
+    const kept: Cand['box'][] = [];
+    const culled = new Set<Text>();
+    const collides = (b: Cand['box']): boolean =>
+      kept.some((k) =>
+        b.x < k.x + k.w + GAP && k.x < b.x + b.w + GAP &&
+        b.y < k.y + k.h + GAP && k.y < b.y + b.h + GAP,
+      );
+    for (const c of cands) {
+      if ((c.owner && culled.has(c.owner)) || collides(c.box)) {
+        c.node.opacity(0);
+        culled.add(c.node);
+      } else {
+        kept.push(c.box);
+      }
+    }
   }
 
   /** Set a centred label's world fontSize (for a target screen px) and re-anchor it. */
@@ -1877,6 +2178,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   // ---- selection ------------------------------------------------------------
 
   private isSelectable(id: string): boolean {
+    // A closed section's seats are never pickable, whatever their raw status.
+    if (this.seatInClosedSection(id)) return false;
     const statuses = this.opts.selectableStatuses ?? ['free'];
     return statuses.includes(this.statusById.get(id) ?? 'free');
   }
@@ -1963,6 +2266,17 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       if (this.stacked && this.opts.onDeckTap) {
         const floorId = this.objectFloor.get(this.seatById.get(id)?.rowId ?? '');
         if (floorId) { this.opts.onDeckTap(floorId); return; }
+      }
+      // AXS seat-pick gate (§4): seats are only pickable once they're big enough
+      // on screen (≥ LABEL_SCALE ≈ ⌀18px / ~22px pitch). Below that a tap focuses
+      // the seat's section and zooms in rather than risking a mis-pick.
+      if (this.effScale() < LABEL_SCALE && this.sections.length) {
+        const sec = this.seatSection.get(id);
+        if (sec) {
+          if (this.opts.onSectionTap) this.opts.onSectionTap(sec.id);
+          else this.focusSection(sec.id);
+          return;
+        }
       }
       this.toggleSeat(id);
     });

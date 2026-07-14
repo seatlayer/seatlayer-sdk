@@ -129,7 +129,7 @@ export interface PickerTransport {
     doc: ChartDoc;
     event: { key: string; name: string; salesClosed?: boolean; venue?: string | null; startsAt?: number | null; currency?: string; mode?: string };
   }>;
-  objects(key: string): Promise<{ seats: Record<string, string>; hidden?: string[] }>;
+  objects(key: string): Promise<{ seats: Record<string, string>; hidden?: string[]; closed?: string[] }>;
   hold(key: string, selections: HoldSelectionRequest[], ttlMs?: number, replaceHoldId?: string): Promise<HoldResponse>;
   bestAvailable(key: string, qty: number, categoryKey?: string): Promise<BestAvailableResponse>;
   release(key: string, labels: string[], holdId: string): Promise<unknown>;
@@ -213,6 +213,9 @@ export class PickerController {
   private _doc: ChartDoc | null = null;
   /** Section/zone ids hidden from buyers this event (3.3) — seats vanish, not grey. */
   private hidden = new Set<string>();
+  /** Section/zone ids in the `closed` event-state (Phase 2) — seats stay, greyed
+   *  + not pickable. Kept separate from `hidden` (which strips them). */
+  private closedSections = new Set<string>();
 
   /** label ⇄ id maps — backend speaks labels, the engine speaks ids. */
   private labelToId = new Map<string, string>();
@@ -258,6 +261,21 @@ export class PickerController {
     this.hidden = new Set(next);
     this.renderer?.setChart(this.visibleDoc());
     return true;
+  }
+
+  /** Adopt a new closed-section set; restyle (grey + non-pickable) if it differs.
+   *  Cheap restyle — no chart rebuild — so mid-sale open/close repaints live. */
+  private syncClosed(ids: string[] | undefined): boolean {
+    const next = (ids ?? []).filter((x): x is string => typeof x === 'string');
+    if (next.length === this.closedSections.size && next.every((id) => this.closedSections.has(id))) return false;
+    this.closedSections = new Set(next);
+    this.renderer?.setClosedSections?.(next);
+    return true;
+  }
+
+  /** Whether a section is currently in the `closed` state (card must not open). */
+  isSectionClosed(id: string): boolean {
+    return this.closedSections.has(id);
   }
   currentHold(): HoldInfo | null {
     return this.hold_;
@@ -346,9 +364,11 @@ export class PickerController {
     // paint so hidden sections never flash in. Falls back to the raw chart if the
     // snapshot is briefly unavailable — the WS re-snapshot then reconciles.
     let seats: Record<string, string> | null = null;
+    let closedIds: string[] = [];
     try {
       const objs = await this.api.objects(this.key);
       this.hidden = new Set(objs.hidden ?? []);
+      closedIds = (objs.closed ?? []).filter((x): x is string => typeof x === 'string');
       seats = objs.seats;
     } catch {
       /* transient — connect()'s onopen re-snapshots */
@@ -360,6 +380,10 @@ export class PickerController {
     }
     renderer.setChart(this.visibleDoc());
     if (this.opts.colorblindSafe) renderer.setColorblindSafe?.(true);
+    // Closed sections are applied AFTER setChart (which resets state) so their
+    // grey + non-pickable treatment lands on the first paint, no flash.
+    this.closedSections = new Set(closedIds);
+    if (closedIds.length) renderer.setClosedSections?.(closedIds);
     if (seats) this.applySeatsMap(seats);
     this.connect();
     return {
@@ -453,11 +477,22 @@ export class PickerController {
    */
   categoryAvailability(): Record<string, number> {
     const out: Record<string, number> = {};
+    const closedMembers = this.closedMemberIds();
     for (const [id, s] of this.seatById) {
+      if (closedMembers.has(id)) continue; // closed sections aren't on sale
       if ((this.getStatus(id) ?? 'free') === 'free') {
         out[s.categoryKey] = (out[s.categoryKey] ?? 0) + 1;
       }
     }
+    return out;
+  }
+
+  /** Seat ids belonging to a currently-closed section (excluded from counts). */
+  private closedMemberIds(): Set<string> {
+    const out = new Set<string>();
+    const r = this.renderer;
+    if (!r || !this.closedSections.size) return out;
+    for (const id of this.closedSections) for (const sid of (r.sectionMembers?.(id) ?? [])) out.add(sid);
     return out;
   }
 
@@ -731,21 +766,42 @@ export class PickerController {
     }
     this.renderer?.setRung?.(rung);
   }
+
+  /** Price-band filter (F4): dim free seats whose category is outside `keys`
+   *  (null clears). The widget resolves which categories fall in the band. */
+  setCategoryFilter(keys: string[] | null): void {
+    this.renderer?.setCategoryFilter?.(keys);
+  }
+
+  /** World-space rect currently visible + full chart bounds (F3 minimap frame). */
+  getViewport(): { visible: { x: number; y: number; width: number; height: number }; bounds: { x: number; y: number; width: number; height: number } } | null {
+    const r = this.renderer;
+    if (!r?.getVisibleWorldRect || !r.getWorldBounds) return null;
+    return { visible: r.getVisibleWorldRect(), bounds: r.getWorldBounds() };
+  }
   /** Glide in on a section and surface its summary (same path as a section tap). */
   focusSection(id: string): void {
     this.handleSectionTap(id);
   }
-  /** Zoom back out to the whole chart and clear the section-summary card. */
+  /** Zoom back out to the whole chart and clear the section-summary card + focus. */
   overview(): void {
+    this.renderer?.clearSectionFocus?.();
     this.renderer?.zoomToFit();
     this.opts.onSectionFocus?.(null);
   }
 
-  /** Glide the camera into a tapped section and emit its computed summary. */
+  /** Glide the camera into a tapped section and emit its computed summary. Uses
+   *  the AXS focus treatment (dim + backdrop) when the engine supports it; a
+   *  closed section is framed but never opens a buyer card. */
   private handleSectionTap(id: string): void {
     const r = this.renderer;
     if (!r) return;
-    r.focusRegion?.(id);
+    if (r.focusSection) r.focusSection(id);
+    else r.focusRegion?.(id);
+    if (this.isSectionClosed(id)) {
+      this.opts.onSectionFocus?.(null); // closed: no purchase card
+      return;
+    }
     this.opts.onSectionFocus?.(this.sectionSummary(id));
   }
 
@@ -1049,11 +1105,16 @@ export class PickerController {
       }
       const r = this.renderer;
       if (!r || !msg || typeof msg !== 'object') return;
-      const m = msg as { type?: string; hidden?: string[]; seats?: Record<string, string>; changes?: { label: string; status: string }[] };
+      const m = msg as { type?: string; hidden?: string[]; closed?: string[]; seats?: Record<string, string>; changes?: { label: string; status: string }[] };
       // Reconcile hidden sections whenever they arrive (dedicated 'hidden' message
       // OR a snapshot that carries them). Only rebuilds the chart when it changed.
       if (Array.isArray(m.hidden) && this.syncHidden(m.hidden)) {
         void this.resnapshot(); // repaint statuses onto the rebuilt chart
+        this.opts.onStatusChange?.();
+      }
+      // Reconcile closed sections (Phase 2). Cheap grey restyle, no chart rebuild —
+      // so flipping a section open/closed mid-sale repaints for connected buyers.
+      if (Array.isArray(m.closed) && this.syncClosed(m.closed)) {
         this.opts.onStatusChange?.();
       }
       if (m.type === 'hidden') return; // dedicated hidden message carries no seats

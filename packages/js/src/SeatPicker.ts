@@ -42,6 +42,34 @@ const DEFAULT_MAX_SELECTION = 10;
 /** Show the "Need more time?" prompt when the hold has this long (ms) left. */
 const EXTEND_PROMPT_MS = 60_000;
 
+/** Minimal shape of a section object read off the ChartDoc for the minimap. */
+interface SectionLike {
+  type: string;
+  id: string;
+  outline?: { x: number; y: number }[];
+  color?: string;
+  zone?: string;
+}
+
+/** Even-odd point-in-polygon test in world units (minimap click → section). */
+function pointInPolygon(x: number, y: number, poly: { x: number; y: number }[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** One price band in the F4 filter — a set of category keys within a price range. */
+interface PriceBand {
+  id: string;
+  label: string;
+  keys: string[];
+  min: number;
+  max: number;
+}
+
 /**
  * Stable checkout-handoff contract (P4). Passed as the THIRD argument to
  * `onCheckout(hold, seats, handoff)` — additive, so the legacy `(hold, seats)`
@@ -206,12 +234,44 @@ const CSS = `
 .sl-map-host{position:absolute;inset:0}
 .sl-side{width:300px;flex:none;border-left:1px solid var(--sl-line);display:flex;flex-direction:column;min-height:0;overflow-y:auto}
 
-/* narrow (container < 640px): side panel becomes a bottom sheet */
+/* narrow (container < 640px): map-first — the map claims ~80-85% of the
+   container and the side panel becomes a PEEKING bottom sheet (AXS/Ticketmaster
+   mobile pattern). data-sheet on the root: "peek" (default: grab handle + one
+   summary line) / "open" (≤50%, swipe up or auto-expand on first selection).
+   Swipe handling lives on the sheet head ONLY — never the map host, so the
+   map's raw-pointer gesture pipeline is untouched. */
 .sl-picker[data-layout="narrow"] .sl-body{flex-direction:column}
 .sl-picker[data-layout="narrow"] .sl-map{min-height:0;flex:1}
-.sl-picker[data-layout="narrow"] .sl-side{width:100%;max-height:46%;border-left:0;border-top:1px solid var(--sl-line)}
+.sl-picker[data-layout="narrow"] .sl-side{width:100%;border-left:0;border-top:1px solid var(--sl-line);
+  flex:none;height:50%;transition:height .22s ease}
+.sl-picker[data-layout="narrow"][data-sheet="peek"] .sl-side{height:86px;overflow:hidden}
+.sl-picker[data-layout="narrow"][data-sheet="peek"] .sl-side > :not(.sl-sheet-head){display:none}
 .sl-picker[data-layout="narrow"] .sl-tray{flex:none}
 .sl-picker[data-layout="narrow"] .sl-foot{position:sticky;bottom:0;background:var(--sl-bg)}
+/* touch chrome: pinch-zoom exists — hide +/− on the sheet layout (keep fit) */
+.sl-picker[data-layout="narrow"] .sl-zoom [data-ref="zin"],
+.sl-picker[data-layout="narrow"] .sl-zoom [data-ref="zout"]{display:none}
+
+/* bottom-sheet head: grab handle + one-line summary (narrow only) */
+.sl-sheet-head{display:none;flex-direction:column;padding:6px 16px 8px;cursor:grab;touch-action:none;
+  user-select:none;-webkit-user-select:none;flex:none}
+.sl-picker[data-layout="narrow"] .sl-sheet-head{display:flex}
+.sl-sheet-grab{width:36px;height:4px;border-radius:999px;background:var(--sl-muted);opacity:.55;margin:2px auto 7px}
+.sl-sheet-peek{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:700;color:var(--sl-text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:20px}
+.sl-sheet-peek .sub{color:var(--sl-muted);font-weight:600}
+.sl-sheet-peek .go{margin-left:auto;color:var(--sl-accent);font-weight:800;flex:none}
+
+/* consolidated Filters row inside the sheet (a11y chips + colorblind toggle
+   dock here on narrow; they live on the map / zoom column on wide) */
+.sl-filtersec{display:none}
+.sl-filters{display:none;gap:6px;flex-wrap:wrap;align-items:center;padding:2px 16px 10px}
+.sl-picker[data-layout="narrow"] .sl-filtersec.has{display:block}
+.sl-picker[data-layout="narrow"] .sl-filters.has{display:flex}
+.sl-cbbtn{width:32px;height:32px;border-radius:999px;background:var(--sl-surface);border:1px solid var(--sl-line);
+  color:var(--sl-text);display:flex;align-items:center;justify-content:center;transition:border-color .15s}
+.sl-cbbtn:hover{border-color:var(--sl-muted)}
+.sl-cbbtn svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
 
 /* price panel */
 .sl-sec{padding:14px 16px 4px;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--sl-muted);font-weight:700}
@@ -254,19 +314,44 @@ const CSS = `
 .sl-cta:hover{filter:brightness(1.08)}
 .sl-cta:disabled{opacity:.45;cursor:not-allowed}
 
-/* zoom column */
-.sl-zoom{position:absolute;right:12px;bottom:12px;display:flex;flex-direction:column;gap:6px;z-index:5}
+/* Chrome anchor regions (Feature 6) — every persistent map overlay is APPENDED
+   INTO one of these positioned flex containers and flows/stacks within it, so no
+   two pieces of chrome free-float on top of each other. Regions never overlap:
+   the top strip splits into left/center/right; rails + corners own their edge. */
+.sl-anchor{position:absolute;z-index:5;display:flex;gap:8px;pointer-events:none}
+.sl-anchor > *{pointer-events:auto}
+.sl-anchor[data-region="top-left"]{top:12px;left:12px;flex-wrap:wrap;max-width:38%}
+.sl-anchor[data-region="top-center"]{top:12px;left:50%;transform:translateX(-50%);flex-direction:column;
+  align-items:center;max-width:44%}
+.sl-anchor[data-region="top-right"]{top:12px;right:12px;justify-content:flex-end;flex-wrap:wrap;max-width:38%}
+.sl-anchor[data-region="left-rail"]{top:50%;left:12px;transform:translateY(-50%);flex-direction:column;max-width:42%;gap:6px}
+.sl-anchor[data-region="bottom-left"]{left:12px;bottom:12px;flex-direction:column;align-items:flex-start}
+.sl-anchor[data-region="bottom-center"]{left:50%;bottom:14px;transform:translateX(-50%);z-index:9;
+  flex-direction:column;align-items:center;gap:8px;max-width:92%}
+.sl-anchor[data-region="bottom-right"]{right:12px;bottom:12px;flex-direction:column;align-items:flex-end;gap:6px}
+/* narrow: tighten the top strip so left/center can't crowd each other */
+.sl-picker[data-layout="narrow"] .sl-anchor[data-region="top-left"]{max-width:30%}
+.sl-picker[data-layout="narrow"] .sl-anchor[data-region="top-center"]{max-width:44%}
+
+/* TEST MODE badge — a small pill in the top-right region (shrinks on narrow) */
+.sl-testbadge{padding:5px 11px;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.1em;
+  text-transform:uppercase;white-space:nowrap;background:var(--sl-accent);color:var(--sl-accent-ink);
+  box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.sl-picker[data-layout="narrow"] .sl-testbadge{padding:3px 8px;font-size:8.5px;letter-spacing:.06em}
+
+/* zoom column (flows within the bottom-right region) */
+.sl-zoom{display:flex;flex-direction:column;gap:6px}
 .sl-zoom button{width:36px;height:36px;border-radius:999px;background:var(--sl-surface);border:1px solid var(--sl-line);
   color:var(--sl-text);font-size:17px;font-weight:700;display:flex;align-items:center;justify-content:center;transition:border-color .15s}
 .sl-zoom button:hover{border-color:var(--sl-muted)}
 .sl-zoom svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
 
-/* toast + boot states */
-.sl-toast{position:absolute;left:50%;bottom:16px;transform:translateX(-50%) translateY(6px);z-index:8;max-width:88%;
+/* toast + boot states (toast flows in the bottom-center region) */
+.sl-toast{transform:translateY(6px);max-width:100%;
   background:var(--sl-surface);border:1px solid var(--sl-line);color:var(--sl-text);border-radius:999px;padding:9px 16px;
   font-size:12.5px;font-weight:600;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-.sl-toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.sl-toast.on{opacity:1;transform:translateY(0)}
 .sl-boot{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:10px;background:var(--sl-bg);font-size:13px;font-weight:600;color:var(--sl-muted)}
 .sl-boot-spin{width:24px;height:24px;border-radius:50%;border:3px solid var(--sl-line);border-top-color:var(--sl-accent);
@@ -276,12 +361,12 @@ const CSS = `
 .sl-boot-retry{margin-top:4px;padding:9px 20px;border-radius:var(--sl-r-sm);background:var(--sl-accent);
   color:var(--sl-accent-ink);font-weight:700;font-size:13px}
 
-/* "Need more time?" extend prompt (bottom-center over the map, above the toast) */
-.sl-extend{position:absolute;left:50%;bottom:16px;transform:translateX(-50%) translateY(6px);z-index:9;
-  display:none;align-items:center;gap:12px;max-width:92%;background:var(--sl-surface);border:1px solid var(--sl-line);
+/* "Need more time?" extend prompt (flows in the bottom-center region, above the toast) */
+.sl-extend{transform:translateY(6px);
+  display:none;align-items:center;gap:12px;max-width:100%;background:var(--sl-surface);border:1px solid var(--sl-line);
   color:var(--sl-text);border-radius:14px;padding:10px 12px 10px 16px;box-shadow:0 18px 50px -18px rgba(0,0,0,.6);
   opacity:0;transition:opacity .2s,transform .2s}
-.sl-extend.on{display:flex;opacity:1;transform:translateX(-50%) translateY(0)}
+.sl-extend.on{display:flex;opacity:1;transform:translateY(0)}
 .sl-extend-txt{font-size:12.5px;font-weight:600;line-height:1.35}
 .sl-extend-txt b{font-variant-numeric:tabular-nums}
 .sl-extend-btn{flex:none;padding:8px 14px;border-radius:999px;font-weight:800;font-size:12.5px;
@@ -300,8 +385,8 @@ const CSS = `
 .sl-booked-sub{font-size:13px;color:var(--sl-muted);line-height:1.5;max-width:320px}
 .sl-booked-seats{font-weight:700;color:var(--sl-text)}
 
-/* a11y filter chips (over the map, top-left) */
-.sl-chips{position:absolute;top:12px;left:12px;z-index:5;display:flex;gap:6px;flex-wrap:wrap;max-width:70%}
+/* a11y filter chips (flow within the top-left region) */
+.sl-chips{display:flex;gap:6px;flex-wrap:wrap}
 .sl-chip-f{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:700;
   background:var(--sl-surface);border:1px solid var(--sl-line);color:var(--sl-muted);transition:color .15s,border-color .15s}
 .sl-chip-f:hover{color:var(--sl-text)}
@@ -341,18 +426,18 @@ const CSS = `
 .sl-chip .view:hover{color:var(--sl-text)}
 .sl-chip .view svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
 
-/* arena: LOD rung pills (top-center over the map) */
-.sl-rungs{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:5;display:none;
-  background:var(--sl-surface);border:1px solid var(--sl-line);border-radius:999px;padding:3px}
+/* arena: LOD rung pills (flow within the top-center region) */
+.sl-rungs{display:none;background:var(--sl-surface);border:1px solid var(--sl-line);border-radius:999px;padding:3px}
 .sl-rungs.on{display:inline-flex;gap:2px}
 .sl-rungs button{padding:6px 13px;border-radius:999px;font-size:10.5px;font-weight:800;letter-spacing:.07em;
   color:var(--sl-muted);white-space:nowrap;transition:color .15s}
 .sl-rungs button:hover{color:var(--sl-text)}
 .sl-rungs button.on{background:var(--sl-accent);color:var(--sl-accent-ink)}
+/* narrow: shrink the rung pills so the centered row can't reach the corner regions */
+.sl-picker[data-layout="narrow"] .sl-rungs button{padding:5px 9px;font-size:9px;letter-spacing:.03em}
 
-/* multi-floor switcher (center-left rail over the map) */
-.sl-floors{position:absolute;top:50%;left:12px;transform:translateY(-50%);z-index:5;display:none;
-  flex-direction:column;gap:6px;max-width:42%}
+/* multi-floor switcher (flows within the left-rail region) */
+.sl-floors{display:none;flex-direction:column;gap:6px;max-width:100%}
 .sl-floors.on{display:flex}
 .sl-floors button{padding:7px 13px;border-radius:999px;font-size:12px;font-weight:700;background:var(--sl-surface);
   border:1px solid var(--sl-line);color:var(--sl-muted);white-space:nowrap;max-width:100%;overflow:hidden;
@@ -360,11 +445,25 @@ const CSS = `
 .sl-floors button:hover{color:var(--sl-text)}
 .sl-floors button.on{background:var(--sl-accent);color:var(--sl-accent-ink);border-color:transparent}
 
-/* tapped-section summary card (top-center, under the rung pills) */
-.sl-seccard{position:absolute;top:54px;left:50%;transform:translateX(-50%);z-index:6;width:250px;
-  max-width:calc(100% - 24px);background:var(--sl-surface);border:1px solid var(--sl-line);border-radius:12px;
+/* tapped-section summary card — docks INSIDE the top-center anchor region on
+   wide (flows below the rung pills, never over them, never floating over the
+   seats at the tap point). Auto-collapses to a slim pill once seat-picking
+   begins (first seat select, or a pan/zoom after the focus glide); tapping the
+   pill re-expands; ✕ closes in both states. On narrow it renders as a compact
+   strip inside the bottom sheet's peek head — never over the canvas. */
+.sl-seccard{width:250px;max-width:100%;background:var(--sl-surface);border:1px solid var(--sl-line);border-radius:12px;
   padding:12px 14px;box-shadow:0 18px 50px -18px rgba(0,0,0,.6);display:none}
 .sl-seccard.on{display:block}
+/* collapsed pill (wide) */
+.sl-seccard.mini{width:auto;padding:5px 7px 5px 12px;border-radius:999px;cursor:pointer}
+.sl-seccard.mini.on{display:inline-flex;align-items:center;gap:7px}
+.sl-seccard.mini .sl-seccard-name{font-size:12px;flex:none;max-width:120px}
+.sl-seccard.mini .sl-seccard-left{font-size:11px}
+/* narrow: compact strip inside the sheet head (peek area) */
+.sl-seccard.strip{width:100%;padding:7px 0 0;border:0;border-radius:0;box-shadow:none;background:none;cursor:default}
+.sl-seccard.strip.on{display:flex;align-items:center;gap:7px;font-size:12.5px}
+.sl-seccard.strip .sl-seccard-name{font-size:12.5px}
+.sl-seccard.strip .sl-seccard-price{margin-left:auto}
 .sl-seccard-head{display:flex;align-items:center;gap:8px}
 .sl-seccard-dot{width:10px;height:10px;border-radius:50%;flex:none}
 .sl-seccard-name{font-weight:800;font-size:14px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -405,6 +504,20 @@ const CSS = `
 .sl-view-hint{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);padding:6px 14px;border-radius:999px;
   font-size:11.5px;font-weight:600;background:var(--sl-surface);border:1px solid var(--sl-line);color:var(--sl-muted);
   white-space:nowrap;pointer-events:none;max-width:90%;overflow:hidden;text-overflow:ellipsis}
+
+/* F3 minimap — venue overview + live viewport rect (flows in the bottom-left region) */
+.sl-minimap{border:1px solid var(--sl-line);border-radius:9px;
+  overflow:hidden;background:var(--sl-surface);box-shadow:0 12px 34px -14px rgba(0,0,0,.55);line-height:0;cursor:pointer}
+.sl-minimap canvas{display:block}
+.sl-picker[data-layout="narrow"] .sl-minimap{display:none}
+
+/* F4 price-band filter — chip row in the side panel, above the price legend it
+ *  dims (keeps clear of the map's top-center rungs / top-left a11y chips). */
+.sl-pricef{display:flex;gap:6px;flex-wrap:wrap;padding:2px 16px 10px}
+.sl-pricef .sl-chip-f{padding:6px 11px;font-size:11.5px}
+/* F4 legend reflection: rows + counts for out-of-band categories read muted */
+.sl-price-row.sl-dim{opacity:.4}
+.sl-seccard-mix-item.sl-dim{opacity:.4}
 
 /* modal host */
 .sl-modal-scrim{position:fixed;inset:0;z-index:2147483000;background:rgba(5,7,12,.66);display:flex;align-items:center;justify-content:center;padding:18px}
@@ -448,6 +561,8 @@ export class SeatPicker {
 
   // chrome refs
   private els: Record<string, HTMLElement> = {};
+  /** Feature 6 anchor regions — positioned flex containers over the map. */
+  private regions: Record<string, HTMLElement> = {};
   private ro: ResizeObserver | null = null;
   private holdTimer: ReturnType<typeof setInterval> | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -480,6 +595,27 @@ export class SeatPicker {
   private viewEl: HTMLDivElement | null = null;
   private viewCleanup: (() => void) | null = null;
   private allSeatsCache: ExpandedSeat[] | null = null;
+
+  // F3 minimap
+  private miniEl: HTMLDivElement | null = null;
+  private miniCanvas: HTMLCanvasElement | null = null;
+  private miniBase: HTMLCanvasElement | null = null;
+  private miniTf: { scale: number; offX: number; offY: number; dpr: number } | null = null;
+
+  // F4 price-band filter — active band's category keys (null = all prices)
+  private priceBandKeys: Set<string> | null = null;
+  private priceFilterEl: HTMLDivElement | null = null;
+  /** Last surfaced section summary (re-rendered when the price band changes). */
+  private lastSection: SectionSummary | null = null;
+  /** Section card collapsed to its slim pill (seat-picking has begun). */
+  private secCardCollapsed = false;
+  /** When the card was (re)shown — the focus glide's own view change must not collapse it. */
+  private secCardShownAt = 0;
+  /** Previous tray ticket count — first 0→n transition auto-expands the mobile sheet. */
+  private lastTrayCount = 0;
+  // narrow-layout chrome that docks into the sheet's Filters row on mobile
+  private a11yChipsEl: HTMLDivElement | null = null;
+  private cbEl: HTMLButtonElement | null = null;
 
   // modal plumbing (set by open())
   private modalScrim: HTMLElement | null = null;
@@ -546,11 +682,17 @@ export class SeatPicker {
       currency: options.currency,
       flashOnLiveChange: true,
       colorblindSafe: options.colorblindSafe,
-      onSelectionChange: () => this.syncTray(),
+      onSelectionChange: () => {
+        this.syncTray();
+        // Seat-picking has begun — collapse the section card out of the way.
+        if (this.controller.getSelection().length) this.collapseSectionCard();
+      },
       onStatusChange: () => {
         this.syncPrices();
         this.evictTakenSelections();
         this.detectBooked();
+        // Live open/close of a section repaints the minimap's static overview.
+        this.refreshMinimap();
       },
       onHoldExpired: () => {
         this.hold = null;
@@ -569,6 +711,8 @@ export class SeatPicker {
       onViewChange: () => {
         this.reanchorConfirm();
         this.syncRung();
+        this.drawMinimapRect();
+        this.sectionCardOnView();
       },
       // Tapped-section glide-in → surface (or clear) the section-summary card.
       onSectionFocus: (summary) => this.showSectionCard(summary),
@@ -611,7 +755,7 @@ export class SeatPicker {
       <div class="sl-body">
         <div class="sl-map">
           <div class="sl-map-host" data-ref="map"></div>
-          <div class="sl-zoom">
+          <div class="sl-zoom" data-ref="zoom">
             <button type="button" aria-label="Zoom in" data-ref="zin">+</button>
             <button type="button" aria-label="Zoom out" data-ref="zout">−</button>
             <button type="button" aria-label="Fit to screen" data-ref="zfit">
@@ -621,7 +765,13 @@ export class SeatPicker {
           <div class="sl-boot" data-ref="boot"><span class="sl-boot-spin"></span>Loading seat map…</div>
           <div class="sl-toast" data-ref="toast" role="status" aria-live="polite"></div>
         </div>
-        <div class="sl-side">
+        <div class="sl-side" data-ref="side">
+          <div class="sl-sheet-head" data-ref="sheetHead">
+            <div class="sl-sheet-grab"></div>
+            <div class="sl-sheet-peek" data-ref="peek"></div>
+          </div>
+          <div class="sl-sec sl-filtersec" data-ref="filtersSec">Filters</div>
+          <div class="sl-filters" data-ref="filters"></div>
           <div class="sl-sec" data-ref="pricesSec">Prices</div>
           <div class="sl-prices" data-ref="prices"></div>
           <div class="sl-sec">Your seats</div>
@@ -637,17 +787,68 @@ export class SeatPicker {
     });
     this.mapHost = this.els.map as HTMLDivElement;
 
-    // container-adaptive layout
-    this.ro = new ResizeObserver(() => {
+    // container-adaptive layout (breakpoint keys off the CONTAINER, not the viewport)
+    const applyLayout = (): void => {
       const w = root.clientWidth;
-      root.dataset.layout = w < 640 ? 'narrow' : 'wide';
-    });
+      if (w <= 0) return;
+      const next = w < 640 ? 'narrow' : 'wide';
+      if (root.dataset.layout === next) return;
+      root.dataset.layout = next;
+      // Entering the mobile sheet layout: start in the peek state (map-first).
+      if (next === 'narrow' && !root.dataset.sheet) root.dataset.sheet = 'peek';
+      this.dockLayoutChrome();
+    };
+    this.ro = new ResizeObserver(applyLayout);
     this.ro.observe(root);
+    // Some environments defer the ResizeObserver's initial callback (backgrounded
+    // tabs throttle delivery). Seed the layout synchronously + next frame so a
+    // container that mounts already-wide gets data-layout="wide" immediately,
+    // instead of waiting on a resize that may never arrive.
+    applyLayout();
+    requestAnimationFrame(applyLayout);
 
     // zoom + tooltip wiring
     this.els.zin.addEventListener('click', () => this.controller.zoomIn());
     this.els.zout.addEventListener('click', () => this.controller.zoomOut());
     this.els.zfit.addEventListener('click', () => this.controller.zoomToFit());
+
+    // Mobile bottom sheet: swipe/tap on the sheet HEAD only (never the map host,
+    // so the map's raw-pointer gesture pipeline is untouched). Swipe up → open
+    // (≤50%); swipe down → peek; a plain tap toggles. The section-card strip's
+    // ✕ lives inside the head — taps on the card must not toggle the sheet.
+    const head = this.els.sheetHead;
+    if (head) {
+      const setSheet = (open: boolean): void => {
+        root.dataset.sheet = open ? 'open' : 'peek';
+      };
+      let startY = 0;
+      let swiped = false;
+      let tracking = false;
+      head.addEventListener('pointerdown', (e: PointerEvent) => {
+        tracking = true;
+        swiped = false;
+        startY = e.clientY;
+        head.setPointerCapture?.(e.pointerId);
+      });
+      head.addEventListener('pointermove', (e: PointerEvent) => {
+        if (!tracking || swiped) return;
+        const dy = e.clientY - startY;
+        if (dy < -18) {
+          setSheet(true);
+          swiped = true;
+        } else if (dy > 18) {
+          setSheet(false);
+          swiped = true;
+        }
+      });
+      head.addEventListener('pointerup', (e: PointerEvent) => {
+        if (tracking && !swiped && Math.abs(e.clientY - startY) < 6) {
+          if (!(e.target as HTMLElement).closest('.sl-seccard')) setSheet(root.dataset.sheet !== 'open');
+        }
+        tracking = false;
+        head.releasePointerCapture?.(e.pointerId);
+      });
+    }
     this.tipEl = document.createElement('div');
     this.tipEl.setAttribute('role', 'tooltip');
     this.tipEl.style.cssText =
@@ -683,17 +884,20 @@ export class SeatPicker {
     }
     this.els.boot.remove();
 
+    // Feature 6: anchor regions for all persistent map chrome, then move the
+    // pre-built zoom column + toast into their regions (both were in the skeleton).
+    this.buildRegions();
+    this.regions['bottom-right'].appendChild(this.els.zoom);
+    this.regions['bottom-center'].appendChild(this.els.toast);
+
     if (info.mode === 'test') {
-      const ribbon = document.createElement('div');
-      ribbon.textContent = t('picker.testMode');
-      ribbon.setAttribute('aria-label', t('picker.testMode'));
-      ribbon.style.cssText =
-        'position:absolute;top:18px;right:-34px;z-index:6;transform:rotate(45deg);' +
-        'width:140px;text-align:center;padding:4px 0;background:#f4b740;color:#1a1200;' +
-        'font:800 10.5px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;' +
-        'box-shadow:0 2px 8px rgba(0,0,0,.25);pointer-events:none;';
-      this.els.map.style.overflow = 'hidden';
-      this.els.map.appendChild(ribbon);
+      // TEST MODE reads as a small badge in the top-right region (was a corner
+      // ribbon that collided with the top-right control cluster on narrow widths).
+      const badge = document.createElement('div');
+      badge.className = 'sl-testbadge';
+      badge.textContent = t('picker.testMode');
+      badge.setAttribute('aria-label', t('picker.testMode'));
+      this.regions['top-right'].appendChild(badge);
     }
 
     // theme: defaults ← org chart theme ← host overrides
@@ -730,7 +934,8 @@ export class SeatPicker {
         [...present]
           .map((type) => mk(type, `${GLYPH[type] ? GLYPH[type] + ' ' : ''}${type[0].toUpperCase()}${type.slice(1).replace(/-/g, ' ')}`))
           .join('');
-      this.els.map.appendChild(chips);
+      this.regions['top-left'].appendChild(chips);
+      this.a11yChipsEl = chips;
       chips.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
         btn.addEventListener('click', () => {
           const f = btn.dataset.f as AccessibilityType | 'all';
@@ -741,9 +946,12 @@ export class SeatPicker {
       });
     }
 
-    // Colorblind-safe toggle rides in the zoom column.
+    // Colorblind-safe toggle rides in the zoom column (wide) or the sheet's
+    // Filters row (narrow) — dockLayoutChrome moves it between the two.
     const cb = document.createElement('button');
     cb.type = 'button';
+    cb.className = 'sl-cbbtn';
+    this.cbEl = cb;
     cb.setAttribute('aria-label', 'Toggle colorblind-friendly colors');
     cb.setAttribute('aria-pressed', String(!!this.opts.colorblindSafe));
     cb.innerHTML = '<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
@@ -765,14 +973,47 @@ export class SeatPicker {
     // Appended AFTER controller.render() — render() wipes the map host's children.
     this.buildArenaChrome();
 
+    // F3 minimap (venue overview + viewport rect) and F4 price-band filter.
+    // Same post-render append (the map host was wiped by controller.render()).
+    this.buildMinimap();
+    this.buildPriceFilter();
+
     // "Need more time?" prompt (over the map) + booked-confirmation overlay (over
     // the whole widget). Both appended post-render for the same wipe reason.
     this.buildExtendPrompt();
     this.buildBookedOverlay();
 
+    // Dock layout-dependent chrome (a11y chips + colorblind toggle) for the
+    // CURRENT layout — the initial applyLayout ran before these were built.
+    this.dockLayoutChrome();
+
     this.syncPrices();
     this.syncTray();
     return this;
+  }
+
+  /**
+   * Move layout-dependent chrome between its wide dock (map regions / zoom
+   * column) and its narrow dock (the sheet's consolidated Filters row), and
+   * re-render the section card in the form the layout wants (docked card/pill
+   * on wide, sheet strip on narrow). Runs on every layout flip + once post-render.
+   */
+  private dockLayoutChrome(): void {
+    const narrow = this.root?.dataset.layout === 'narrow';
+    const filters = this.els.filters;
+    if (filters) {
+      if (narrow) {
+        if (this.a11yChipsEl) filters.appendChild(this.a11yChipsEl);
+        if (this.cbEl) filters.appendChild(this.cbEl);
+      } else {
+        if (this.a11yChipsEl) this.regions['top-left']?.appendChild(this.a11yChipsEl);
+        if (this.cbEl) this.els.zoom?.appendChild(this.cbEl);
+      }
+      const has = narrow && filters.children.length > 0;
+      filters.classList.toggle('has', has);
+      this.els.filtersSec?.classList.toggle('has', has);
+    }
+    if (this.lastSection) this.renderSectionCard(this.lastSection);
   }
 
   /** The "Need more time?" prompt shown in the hold's final EXTEND_PROMPT_MS. */
@@ -783,7 +1024,7 @@ export class SeatPicker {
     el.innerHTML =
       `<span class="sl-extend-txt" data-ref="extendTxt"></span>` +
       `<button type="button" class="sl-extend-btn" data-ref="extendBtn"></button>`;
-    this.els.map.appendChild(el);
+    (this.regions['bottom-center'] ?? this.els.map).appendChild(el);
     this.extendEl = el;
     this.els.extendTxt = el.querySelector('[data-ref="extendTxt"]') as HTMLElement;
     this.els.extendBtn = el.querySelector('[data-ref="extendBtn"]') as HTMLElement;
@@ -804,6 +1045,288 @@ export class SeatPicker {
     this.root!.appendChild(el);
     this.bookedEl = el;
     this.els.bookedSub = el.querySelector('[data-ref="bookedSub"]') as HTMLElement;
+  }
+
+  // ---- Feature 6: chrome anchor regions -------------------------------------
+
+  /**
+   * Create the positioned flex containers that own every persistent map overlay.
+   * Appended once after controller.render(); each chrome piece is then appended
+   * INTO its region and flows within it, so nothing free-floats over anything
+   * else. Regions carve the map into non-overlapping zones (top strip split into
+   * left/center/right, left rail, and the three used corners).
+   */
+  private buildRegions(): void {
+    if (!this.els.map) return;
+    const REGIONS = ['top-left', 'top-center', 'top-right', 'left-rail', 'bottom-left', 'bottom-center', 'bottom-right'];
+    for (const region of REGIONS) {
+      const el = document.createElement('div');
+      el.className = 'sl-anchor';
+      el.dataset.region = region;
+      this.els.map.appendChild(el);
+      this.regions[region] = el;
+    }
+  }
+
+  // ---- F3 minimap -----------------------------------------------------------
+
+  /** Read a resolved --sl-* token value (canvas needs a real color, not var()). */
+  private cssVar(name: string): string {
+    return this.root ? getComputedStyle(this.root).getPropertyValue(name).trim() : '';
+  }
+
+  /** Section-bearing objects on the active floor (single-floor → doc.objects). */
+  private activeFloorObjects(): SectionLike[] {
+    const doc = this.controller.doc;
+    if (!doc) return [];
+    const floors = doc.floors;
+    if (floors?.length) {
+      const id = this.controller.getActiveFloorId();
+      return ((floors.find((f) => f.id === id) ?? floors[0]).objects as unknown as SectionLike[]) ?? [];
+    }
+    return (doc.objects as unknown as SectionLike[]) ?? [];
+  }
+
+  /**
+   * Build the overview minimap: a static venue thumbnail (section outlines, or
+   * seat dots when the chart has no sections) with the live viewport rectangle
+   * drawn on top. The rect tracks pan/zoom via the constructor's onViewChange.
+   */
+  private buildMinimap(): void {
+    const vp = this.controller.getViewport();
+    if (!vp || !this.els.map) return;
+    const b = vp.bounds;
+    if (!(b.width > 0 && b.height > 0)) return;
+
+    const MAXW = 158;
+    const MAXH = 118;
+    const PAD = 6;
+    const aspect = b.width / Math.max(1, b.height);
+    let w = MAXW;
+    let h = Math.round(MAXW / aspect);
+    if (h > MAXH) {
+      h = MAXH;
+      w = Math.round(MAXH * aspect);
+    }
+    w = Math.max(64, w);
+    h = Math.max(48, h);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'sl-minimap';
+    wrap.setAttribute('aria-hidden', 'true'); // decorative; the map itself is the keyboard surface
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    wrap.appendChild(canvas);
+    (this.regions['bottom-left'] ?? this.els.map).appendChild(wrap);
+    this.miniEl = wrap;
+    this.miniCanvas = canvas;
+
+    // world → minimap (device px), contain + centre — matches thumb.ts.
+    const scale = Math.min((w - PAD * 2) / Math.max(1, b.width), (h - PAD * 2) / Math.max(1, b.height)) * dpr;
+    const offX = (w * dpr - b.width * scale) / 2 - b.x * scale;
+    const offY = (h * dpr - b.height * scale) / 2 - b.y * scale;
+    this.miniTf = { scale, offX, offY, dpr };
+
+    const base = document.createElement('canvas');
+    base.width = canvas.width;
+    base.height = canvas.height;
+    this.miniBase = base;
+
+    // Click a section on the minimap → glide the camera into it (existing API).
+    wrap.addEventListener('click', (e) => this.minimapJump(e));
+
+    this.drawMinimapStatic();
+    this.drawMinimapRect();
+  }
+
+  /** Repaint the static overview + rect (floor switch, live open/close). */
+  private refreshMinimap(): void {
+    if (!this.miniBase) return;
+    this.drawMinimapStatic();
+    this.drawMinimapRect();
+  }
+
+  /** Paint the venue overview into the offscreen base canvas. */
+  private drawMinimapStatic(): void {
+    const base = this.miniBase;
+    const tf = this.miniTf;
+    const doc = this.controller.doc;
+    if (!base || !tf || !doc) return;
+    const ctx = base.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, base.width, base.height);
+    const fx = (x: number): number => x * tf.scale + tf.offX;
+    const fy = (y: number): number => y * tf.scale + tf.offY;
+    const line = this.cssVar('--sl-line') || 'rgba(139,147,167,.5)';
+    const muted = this.cssVar('--sl-muted') || '#8b93a7';
+    const accent = this.cssVar('--sl-accent') || '#6e7bff';
+    const zoneColor = new Map((doc.zones ?? []).map((z) => [z.id, z.color] as const));
+
+    let drewSection = false;
+    for (const o of this.activeFloorObjects()) {
+      if (o.type !== 'section' || !o.outline || o.outline.length < 3) continue;
+      drewSection = true;
+      const closed = this.controller.isSectionClosed(o.id);
+      const fill = closed ? muted : o.color ?? (o.zone && zoneColor.get(o.zone)) ?? accent;
+      ctx.beginPath();
+      o.outline.forEach((p, i) => (i === 0 ? ctx.moveTo(fx(p.x), fy(p.y)) : ctx.lineTo(fx(p.x), fy(p.y))));
+      ctx.closePath();
+      ctx.globalAlpha = closed ? 0.26 : 0.42;
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = Math.max(1, tf.dpr);
+      ctx.strokeStyle = line;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Section-less charts: fall back to faint category-colored seat dots.
+    if (!drewSection) {
+      const r = Math.max(1, tf.dpr);
+      for (const seat of expandChart(doc)) {
+        const cat = doc.categories.find((c) => c.key === seat.categoryKey);
+        ctx.fillStyle = cat?.color ?? accent;
+        ctx.beginPath();
+        ctx.arc(fx(seat.x), fy(seat.y), r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  /** Blit the base overview, then stroke the current viewport rectangle on top. */
+  private drawMinimapRect(): void {
+    const canvas = this.miniCanvas;
+    const base = this.miniBase;
+    const tf = this.miniTf;
+    if (!canvas || !base || !tf) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(base, 0, 0);
+    const vp = this.controller.getViewport();
+    if (!vp) return;
+    const v = vp.visible;
+    const x = v.x * tf.scale + tf.offX;
+    const y = v.y * tf.scale + tf.offY;
+    const w = v.width * tf.scale;
+    const h = v.height * tf.scale;
+    const accent = this.cssVar('--sl-accent') || '#f4b740';
+    ctx.save();
+    ctx.globalAlpha = 0.14;
+    ctx.fillStyle = accent;
+    ctx.fillRect(x, y, w, h);
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = Math.max(1.5, tf.dpr * 1.5);
+    ctx.strokeStyle = accent;
+    ctx.strokeRect(x, y, w, h);
+    ctx.restore();
+  }
+
+  /** Minimap click → focus the section under the point (or overview on a miss). */
+  private minimapJump(e: MouseEvent): void {
+    const canvas = this.miniCanvas;
+    const tf = this.miniTf;
+    if (!canvas || !tf) return;
+    const r = canvas.getBoundingClientRect();
+    const px = (e.clientX - r.left) * (canvas.width / r.width);
+    const py = (e.clientY - r.top) * (canvas.height / r.height);
+    const wx = (px - tf.offX) / tf.scale;
+    const wy = (py - tf.offY) / tf.scale;
+    for (const o of this.activeFloorObjects()) {
+      if (o.type !== 'section' || !o.outline || o.outline.length < 3) continue;
+      if (this.controller.isSectionClosed(o.id)) continue;
+      if (pointInPolygon(wx, wy, o.outline)) {
+        this.controller.focusSection(o.id);
+        return;
+      }
+    }
+    this.controller.overview();
+  }
+
+  // ---- F4 price-band filter -------------------------------------------------
+
+  /** Effective price of a category (first tier when tiered, else base price). */
+  private catPrice(c: { price?: number; tiers?: { price: number }[] }): number | undefined {
+    return c.tiers?.length ? c.tiers[0].price : c.price;
+  }
+
+  /** Derive price bands: one chip per distinct price (≤5), else quantile ranges. */
+  private priceBands(): PriceBand[] {
+    const doc = this.controller.doc;
+    if (!doc) return [];
+    const priced = doc.categories
+      .map((c) => ({ key: c.key, price: this.catPrice(c) }))
+      .filter((x): x is { key: string; price: number } => x.price != null);
+    if (!priced.length) return [];
+    const distinct = [...new Set(priced.map((p) => p.price))].sort((a, b) => a - b);
+    if (distinct.length <= 5) {
+      return distinct.map((price) => ({
+        id: `p${price}`,
+        label: this.money(price),
+        keys: priced.filter((p) => p.price === price).map((p) => p.key),
+        min: price,
+        max: price,
+      }));
+    }
+    // Many distinct prices → ~4 contiguous quantile bands (ranges).
+    const chunk = Math.ceil(distinct.length / 4);
+    const bands: PriceBand[] = [];
+    for (let i = 0; i < distinct.length; i += chunk) {
+      const slice = distinct.slice(i, i + chunk);
+      const lo = slice[0];
+      const hi = slice[slice.length - 1];
+      bands.push({
+        id: `b${i}`,
+        label: lo === hi ? this.money(lo) : `${this.money(lo)}–${this.money(hi)}`,
+        keys: priced.filter((p) => p.price >= lo && p.price <= hi).map((p) => p.key),
+        min: lo,
+        max: hi,
+      });
+    }
+    return bands;
+  }
+
+  /**
+   * Build the price-band chip row in the side panel, directly under the "Prices"
+   * header and above the legend it dims. Living in the panel (not a map overlay)
+   * keeps it clear of the top-center rung pills and top-left a11y chips, and it
+   * rides the bottom sheet on narrow layouts. Skipped when there's <2 bands.
+   */
+  private buildPriceFilter(): void {
+    if (!this.els.prices || !this.els.pricesSec) return;
+    const bands = this.priceBands();
+    if (bands.length < 2) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'sl-pricef';
+    wrap.setAttribute('role', 'group');
+    wrap.setAttribute('aria-label', 'Filter seats by price');
+    const mk = (band: string, label: string, on: boolean): string =>
+      `<button type="button" class="sl-chip-f${on ? ' on' : ''}" data-band="${band}">${label}</button>`;
+    wrap.innerHTML = mk('all', 'All prices', true) + bands.map((bd) => mk(bd.id, bd.label, false)).join('');
+    this.els.pricesSec.after(wrap);
+    this.priceFilterEl = wrap;
+    wrap.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        wrap.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === btn));
+        const id = btn.dataset.band!;
+        if (id === 'all') {
+          this.priceBandKeys = null;
+          this.controller.setCategoryFilter(null);
+        } else {
+          const bd = bands.find((x) => x.id === id);
+          this.priceBandKeys = bd ? new Set(bd.keys) : null;
+          this.controller.setCategoryFilter(bd ? bd.keys : null);
+        }
+        // Reflect the band in the legend rows + any open section card.
+        this.syncPrices();
+        if (this.lastSection) this.showSectionCard(this.lastSection);
+      });
+    });
   }
 
   // ---- arena / multi-floor chrome -------------------------------------------
@@ -838,7 +1361,7 @@ export class SeatPicker {
       pills.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
         btn.addEventListener('click', () => this.controller.setRung(btn.dataset.rung as LodRung));
       });
-      this.els.map.appendChild(pills);
+      this.regions['top-center'].appendChild(pills);
       this.rungsEl = pills;
       this.syncRung();
     }
@@ -859,9 +1382,10 @@ export class SeatPicker {
           this.showSectionCard(null);
           this.syncFloors();
           this.syncRung();
+          this.refreshMinimap();
         });
       });
-      this.els.map.appendChild(rail);
+      this.regions['left-rail'].appendChild(rail);
       this.floorsEl = rail;
       this.syncFloors();
     }
@@ -889,43 +1413,138 @@ export class SeatPicker {
 
   /** Show (or clear, on null) the tapped-section summary card. */
   private showSectionCard(summary: SectionSummary | null): void {
-    if (!summary) {
-      this.secCardEl?.remove();
-      this.secCardEl = null;
-      return;
-    }
+    this.lastSection = summary;
+    this.secCardEl?.remove();
+    this.secCardEl = null;
+    if (!summary) return;
+    this.secCardCollapsed = false;
+    this.secCardShownAt = Date.now();
+    this.renderSectionCard(summary);
+  }
+
+  /**
+   * Render the section card in the form the layout + state want: expanded card
+   * or slim pill in the top-center anchor region (wide), or a compact strip in
+   * the sheet head (narrow). Never floats over the seats at the tap point.
+   */
+  private renderSectionCard(summary: SectionSummary): void {
     if (!this.els.map) return;
     this.secCardEl?.remove();
     const priceLabel =
       summary.priceMin === summary.priceMax
         ? this.money(summary.priceMin)
         : `${this.money(summary.priceMin)}–${this.money(summary.priceMax)}`;
+    const leftLabel = tCount('picker.seatsLeftInSection', summary.seatsLeft);
+    const xBtn = `<button type="button" class="sl-seccard-x" aria-label="${t('picker.closeSectionSummary')}">✕</button>`;
     const card = document.createElement('div');
-    card.className = 'sl-seccard on';
-    card.setAttribute('role', 'dialog');
-    card.setAttribute('aria-label', t('picker.sectionSummaryAria', { label: summary.label }));
-    const mix = summary.categories
-      .map(
-        (c) =>
-          `<span class="sl-seccard-mix-item"><span class="sl-seccard-mix-dot" style="background:${c.color}"></span>` +
-          `${c.label} <span class="sl-seccard-mix-price">${this.money(c.price)}</span></span>`,
-      )
-      .join('');
-    card.innerHTML =
-      `<div class="sl-seccard-head"><span class="sl-seccard-dot" style="background:${summary.color}"></span>` +
-      `<span class="sl-seccard-name">${summary.label}</span>` +
-      (summary.categories.length ? `<span class="sl-seccard-price">${priceLabel}</span>` : '') +
-      `<button type="button" class="sl-seccard-x" aria-label="${t('picker.closeSectionSummary')}">✕</button></div>` +
-      `<div class="sl-seccard-zone">${summary.zoneLabel ? `${summary.zoneLabel} · ` : ''}` +
-      `<span class="sl-seccard-left">${tCount('picker.seatsLeftInSection', summary.seatsLeft)}</span></div>` +
-      (mix ? `<div class="sl-seccard-mix">${mix}</div>` : '') +
-      `<div class="sl-seccard-foot">` +
-      `<button type="button" class="sl-seccard-overview">← ${t('picker.overview')}</button>` +
-      `<span class="sl-seccard-hint">${t('picker.tapSeatHint')}</span></div>`;
-    card.querySelector('.sl-seccard-x')!.addEventListener('click', () => this.controller.overview());
-    card.querySelector('.sl-seccard-overview')!.addEventListener('click', () => this.controller.overview());
-    this.els.map.appendChild(card);
+    const narrow = this.root?.dataset.layout === 'narrow';
+
+    if (narrow) {
+      // Compact strip inside the bottom sheet's peek head — never over the map.
+      card.className = 'sl-seccard strip on';
+      card.setAttribute('role', 'status');
+      card.innerHTML =
+        `<span class="sl-seccard-dot" style="background:${summary.color}"></span>` +
+        `<span class="sl-seccard-name">${summary.label}</span>` +
+        `<span class="sl-seccard-left">${leftLabel}</span>` +
+        (summary.categories.length ? `<span class="sl-seccard-price">${priceLabel}</span>` : '') +
+        xBtn;
+      card.querySelector('.sl-seccard-x')!.addEventListener('click', () => this.controller.overview());
+      (this.els.sheetHead ?? this.els.side ?? this.els.map).appendChild(card);
+    } else if (this.secCardCollapsed) {
+      // Slim pill — seat-picking has begun. Tap to re-expand; ✕ still closes.
+      card.className = 'sl-seccard mini on';
+      card.setAttribute('role', 'button');
+      card.setAttribute('aria-label', t('picker.sectionSummaryAria', { label: summary.label }));
+      card.innerHTML =
+        `<span class="sl-seccard-dot" style="background:${summary.color}"></span>` +
+        `<span class="sl-seccard-name">${summary.label}</span>` +
+        `<span class="sl-seccard-left">${leftLabel}</span>` +
+        xBtn;
+      card.addEventListener('click', (e) => {
+        if ((e.target as HTMLElement).closest('.sl-seccard-x')) return;
+        this.secCardCollapsed = false;
+        this.secCardShownAt = Date.now();
+        this.renderSectionCard(summary);
+      });
+      card.querySelector('.sl-seccard-x')!.addEventListener('click', () => this.controller.overview());
+      (this.regions['top-center'] ?? this.els.map).appendChild(card);
+    } else {
+      card.className = 'sl-seccard on';
+      card.setAttribute('role', 'dialog');
+      card.setAttribute('aria-label', t('picker.sectionSummaryAria', { label: summary.label }));
+      const mix = summary.categories
+        .map((c) => {
+          const dim = this.priceBandKeys != null && !this.priceBandKeys.has(c.key);
+          return (
+            `<span class="sl-seccard-mix-item${dim ? ' sl-dim' : ''}"><span class="sl-seccard-mix-dot" style="background:${c.color}"></span>` +
+            `${c.label} <span class="sl-seccard-mix-price">${this.money(c.price)}</span></span>`
+          );
+        })
+        .join('');
+      card.innerHTML =
+        `<div class="sl-seccard-head"><span class="sl-seccard-dot" style="background:${summary.color}"></span>` +
+        `<span class="sl-seccard-name">${summary.label}</span>` +
+        (summary.categories.length ? `<span class="sl-seccard-price">${priceLabel}</span>` : '') +
+        xBtn + `</div>` +
+        `<div class="sl-seccard-zone">${summary.zoneLabel ? `${summary.zoneLabel} · ` : ''}` +
+        `<span class="sl-seccard-left">${leftLabel}</span></div>` +
+        (mix ? `<div class="sl-seccard-mix">${mix}</div>` : '') +
+        `<div class="sl-seccard-foot">` +
+        `<button type="button" class="sl-seccard-overview">← ${t('picker.overview')}</button>` +
+        `<span class="sl-seccard-hint">${t('picker.tapSeatHint')}</span></div>`;
+      card.querySelector('.sl-seccard-x')!.addEventListener('click', () => this.controller.overview());
+      card.querySelector('.sl-seccard-overview')!.addEventListener('click', () => this.controller.overview());
+      (this.regions['top-center'] ?? this.els.map).appendChild(card);
+    }
     this.secCardEl = card;
+  }
+
+  /** Collapse the expanded card to its slim pill (seat-picking started). */
+  private collapseSectionCard(): void {
+    if (!this.secCardEl || this.secCardCollapsed || !this.lastSection) return;
+    if (this.root?.dataset.layout === 'narrow') return; // strip is already compact
+    this.secCardCollapsed = true;
+    this.renderSectionCard(this.lastSection);
+  }
+
+  /**
+   * onViewChange hook for the card. The focus glide's own settle (within the
+   * grace window) enforces the ~25% coverage rule with the FINAL viewport; any
+   * later pan/zoom means seat-picking has begun → collapse to the pill.
+   */
+  private sectionCardOnView(): void {
+    if (!this.secCardEl || this.secCardCollapsed || !this.lastSection) return;
+    if (this.root?.dataset.layout === 'narrow') return;
+    if (Date.now() - this.secCardShownAt < 1400) {
+      if (this.sectionCardCoverage() > 0.25) this.collapseSectionCard();
+      return;
+    }
+    this.collapseSectionCard();
+  }
+
+  /** Fraction of the focused section's on-screen bbox covered by the card. */
+  private sectionCardCoverage(): number {
+    const card = this.secCardEl;
+    const sec = this.lastSection;
+    if (!card || !sec || !this.els.map) return 0;
+    const outline = this.activeFloorObjects().find((o) => o.type === 'section' && o.id === sec.id)?.outline;
+    if (!outline || outline.length < 3) return 0;
+    const pts = outline.map((p) => this.controller.worldToScreen(p));
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    const bx = Math.min(...xs);
+    const by = Math.min(...ys);
+    const bw = Math.max(...xs) - bx;
+    const bh = Math.max(...ys) - by;
+    if (bw <= 0 || bh <= 0) return 0;
+    const mapR = this.els.map.getBoundingClientRect();
+    const cr = card.getBoundingClientRect();
+    const cx = cr.left - mapR.left;
+    const cy = cr.top - mapR.top;
+    const ox = Math.max(0, Math.min(cx + cr.width, bx + bw) - Math.max(cx, bx));
+    const oy = Math.max(0, Math.min(cy + cr.height, by + bh) - Math.max(cy, by));
+    return (ox * oy) / (bw * bh);
   }
 
   /** aria-live readout when keyboard focus lands on a seat. */
@@ -1146,8 +1765,9 @@ export class SeatPicker {
     this.els.prices.innerHTML = doc.categories
       .map((c) => {
         const price = c.tiers?.length ? c.tiers[0].price : c.price;
+        const dim = this.priceBandKeys != null && !this.priceBandKeys.has(c.key);
         return (
-          `<div class="sl-price-row" data-cat="${c.key}"><span class="sl-dot" style="background:${c.color}"></span>` +
+          `<div class="sl-price-row${dim ? ' sl-dim' : ''}" data-cat="${c.key}"><span class="sl-dot" style="background:${c.color}"></span>` +
           `<span class="sl-price-label">${c.label}</span>` +
           `<span class="sl-price-left">${left[c.key] ?? 0} left</span>` +
           (price != null ? `<span class="sl-price-amt">${this.money(price)}</span>` : '') +
@@ -1319,6 +1939,30 @@ export class SeatPicker {
     const cta = this.els.cta as HTMLButtonElement;
     cta.disabled = count === 0;
     cta.textContent = this.hold ? 'Continue to checkout' : count ? 'Hold seats & checkout' : 'Select seats';
+
+    // Mobile sheet: one-line peek summary. Selected → "N tickets · $X · Continue";
+    // empty → "From $min · Best available". Tap (sheet head) expands the sheet.
+    if (this.els.peek) {
+      if (count) {
+        this.els.peek.innerHTML =
+          `<span>${count} ${count === 1 ? 'ticket' : 'tickets'} · ${this.money(total)}</span>` +
+          `<span class="go">${this.hold ? 'Continue →' : 'Review →'}</span>`;
+      } else {
+        const prices = (this.controller.doc?.categories ?? [])
+          .map((c) => this.catPrice(c))
+          .filter((p): p is number => p != null);
+        this.els.peek.innerHTML =
+          (prices.length ? `<span>From ${this.money(Math.min(...prices))}</span>` : '<span>Pick your seats</span>') +
+          `<span class="sub">· Best available</span><span class="go">↑</span>`;
+      }
+    }
+    // Auto-expand the sheet on the FIRST selection so tray + CTA surface;
+    // the buyer can swipe back down and the peek line keeps count + total.
+    if (this.root?.dataset.layout === 'narrow' && count > 0 && this.lastTrayCount === 0) {
+      this.root.dataset.sheet = 'open';
+    }
+    this.lastTrayCount = count;
+
     this.opts.onSelectionChange?.(seats);
   }
 

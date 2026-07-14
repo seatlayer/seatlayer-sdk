@@ -318,6 +318,8 @@ export function objectCenter(o: ChartObject): Point {
         return { x: o.x + o.width / 2, y: o.y + o.height / 2 };
       }
       return { x: o.x ?? 0, y: o.y ?? 0 };
+    case 'decorImage':
+      return { x: o.x + o.width / 2, y: o.y + o.height / 2 };
   }
 }
 
@@ -365,6 +367,8 @@ function translateObject(o: ChartObject, dx: number, dy: number): ChartObject {
         ...(o.x != null ? { x: o.x + dx } : {}),
         ...(o.y != null ? { y: o.y + dy } : {}),
       };
+    case 'decorImage':
+      return { ...o, x: o.x + dx, y: o.y + dy };
   }
 }
 
@@ -418,6 +422,9 @@ export function chartBounds(doc: ChartDoc): { x: number; y: number; width: numbe
       for (const p of obj.points) acc(p.x, p.y);
     } else if (obj.type === 'section') {
       for (const p of obj.outline) acc(p.x, p.y);
+    } else if (obj.type === 'decorImage') {
+      acc(obj.x, obj.y);
+      acc(obj.x + obj.width, obj.y + obj.height);
     } else if (obj.type === 'shape') {
       if (obj.points && obj.points.length) {
         for (const p of obj.points) acc(p.x, p.y);

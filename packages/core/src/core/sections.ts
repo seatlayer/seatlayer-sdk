@@ -26,11 +26,13 @@ export const UNGROUPED_ID = '__ungrouped__';
  *   'hidden'    — manual: hidden until the organizer reveals it (3.3).
  *   'timed'     — hidden until `revealAt` (epoch ms), then auto-reveals.
  *   'threshold' — auto-reveals once the on-sale inventory is `thresholdPct`% sold.
+ *   'closed'    — visible to buyers but not purchasable (rendered flat grey);
+ *                 unlike 'hidden', the seats stay on the map, just off sale.
  * `labels` are the seat labels the id governs, so a threshold's denominator can
  * exclude still-hidden seats.
  */
 export interface AvailabilityRule {
-  mode: 'hidden' | 'timed' | 'threshold';
+  mode: 'hidden' | 'timed' | 'threshold' | 'closed';
   revealAt?: number;
   thresholdPct?: number;
   labels?: string[];

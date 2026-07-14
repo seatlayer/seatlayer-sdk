@@ -49,6 +49,10 @@ export interface PubChartResult {
 export interface PubObjectsResult {
   /** Every non-free seat's status, keyed by seat label. */
   seats: Record<string, string>;
+  /** Section/zone ids hidden from buyers this event (seats stripped from the map). */
+  hidden?: string[];
+  /** Section/zone ids in the `closed` state (Phase 2): rendered grey + not purchasable. */
+  closed?: string[];
   updatedAt: number;
 }
 

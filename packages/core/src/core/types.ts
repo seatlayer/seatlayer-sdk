@@ -302,9 +302,10 @@ export function layerOf(obj: ChartObject): SelectionLayer {
     case 'booth':
     case 'section':
       return 'interactive';
-    // stage / décor live on 'shape'; free text is background furniture.
+    // stage / décor live on 'shape'; free text + decor images are background furniture.
     case 'shape':
     case 'text':
+    case 'decorImage':
       return 'background';
     default:
       return 'interactive';
@@ -322,6 +323,32 @@ export interface TextObject {
   color?: string;
 }
 
+/**
+ * A raster/vector decor graphic drawn IN the chart, beneath the seats and
+ * sections (ice rink, basketball court, stage art, pitch markings). Purely
+ * visual venue context — never bookable, never hit-tested, so it never steals a
+ * seat click. `href` is a self-contained data URL (image or SVG) produced by the
+ * same client-side downscale used for row photos, so it travels with the doc and
+ * caches as a single bitmap blit (zero per-frame cost). Placed by top-left
+ * (x,y) + size, rotated about its centre — the same handles a shape rect uses.
+ */
+export interface DecorImageObject {
+  type: 'decorImage';
+  id: string;
+  /** Image or SVG data URL. */
+  href: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Degrees clockwise about the image centre (default 0). */
+  rotation?: number;
+  /** 0–1 (default 1). Multiplied by any chart-theme dimming at render time. */
+  opacity?: number;
+  /** Optional caption for the designer inspector / accessibility (not drawn). */
+  label?: string;
+}
+
 export type ChartObject =
   | RowObject
   | GAAreaObject
@@ -329,7 +356,8 @@ export type ChartObject =
   | TableObject
   | BoothObject
   | TextObject
-  | SectionObject;
+  | SectionObject
+  | DecorImageObject;
 
 /**
  * One floor / level of a multi-floor venue (Batch 5). Each floor owns its own
@@ -493,8 +521,31 @@ export interface ISeatmapRenderer {
   setAccessibilityFilter(types: AccessibilityType[] | null): void;
   /** Legend hover-highlight: dim free seats of other categories (null clears). */
   setCategoryHighlight?(key: string | null): void;
+  /** Price-band filter (F4): dim free seats whose category is NOT in `keys`
+   *  (null clears). The widget resolves which categories fall in the band. */
+  setCategoryFilter?(keys: string[] | null): void;
   /** Dim the seats of these section/zone ids (organizer manager: held-back inventory). */
   setDimmedSections?(ids: string[] | null): void;
+  /**
+   * Phase 2 event-level section states: mark these section/zone ids `closed` —
+   * flat grey block, seats greyed + not pickable, section stays rendered.
+   * `null`/empty clears. (Distinct from the buyer's applyHidden seat-strip.)
+   */
+  setClosedSections?(ids: string[] | null): void;
+  /**
+   * AXS section-focus: dim + desaturate every other section, draw a calm backdrop
+   * behind this section, and glide the camera to frame it. Seat-picking is gated
+   * until seats are large enough on screen (≥ LABEL_SCALE). Slice 5 / Phase 2 §4.
+   */
+  focusSection?(id: string): void;
+  /** Clear an AXS section focus (restore full-bowl brightness + drop backdrop). */
+  clearSectionFocus?(): void;
+  /** The currently AXS-focused section id, or null. */
+  getFocusedSection?(): string | null;
+  /** World-space rect currently visible in the viewport (minimap viewport frame). */
+  getVisibleWorldRect?(): { x: number; y: number; width: number; height: number };
+  /** Axis-aligned world bounds of all seats + section outlines (minimap frame). */
+  getWorldBounds?(): { x: number; y: number; width: number; height: number };
   /**
    * Colorblind-safe mode: category hues switch to an Okabe-Ito palette and
    * booked seats render hollow (a non-color cue), so seat state never relies
