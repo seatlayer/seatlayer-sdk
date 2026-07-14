@@ -806,8 +806,10 @@ export class SeatPicker {
   private async handleCta(): Promise<void> {
     const cta = this.els.cta as HTMLButtonElement;
     // Best-available (or a prior CTA press) already holds the seats — hand off.
+    // Held seats are NOT in the client selection (the server holds them), so
+    // pass the hold's own seat list to the host.
     if (this.hold && !this.controller.getSelection().some((s) => !(this.hold!.items ?? []).some((i) => i.label === s.label))) {
-      this.opts.onCheckout?.(this.hold, this.controller.getSelection());
+      this.opts.onCheckout?.(this.hold, this.hold.seats ?? this.controller.getSelection());
       return;
     }
     cta.disabled = true;
@@ -833,7 +835,7 @@ export class SeatPicker {
       }
       this.hold = hold;
       this.startHoldTimer(hold.expiresAt);
-      this.opts.onCheckout?.(hold, chosenSeats);
+      this.opts.onCheckout?.(hold, chosenSeats.length ? chosenSeats : hold.seats ?? []);
     } catch (err) {
       this.opts.onError?.(err);
       this.toast('One or more seats were just taken. Please pick again.');
