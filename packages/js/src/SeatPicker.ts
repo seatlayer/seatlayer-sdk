@@ -21,14 +21,18 @@
 import {
   PickerController,
   expandChart,
+  generateSeatPanorama,
   loadLocale,
   setStringOverrides,
   t,
+  tCount,
   type AccessibilityType,
   type ChartTheme,
   type ExpandedSeat,
+  type LodRung,
   type PickerSeat,
   type SeatHoverDetails,
+  type SectionSummary,
 } from '@seatlayer/core';
 import { PubApi, type HoldResult } from './api';
 import type { GAAreaAvailability } from './SeatingChart';
@@ -90,6 +94,12 @@ export interface SeatPickerOptions {
    * price · Add/Cancel) instead of adding straight to the tray. Default false.
    */
   confirmSelection?: boolean;
+  /**
+   * Offer a "View from seat" 360° preview (confirm popover + tray chips). The
+   * panorama is generated from the chart geometry, or the organizer's uploaded
+   * photo when a seat carries one. Default true; set false to hide the affordance.
+   */
+  seatView?: boolean;
   /**
    * Buyer pressed the CTA and the hold succeeded — hand off to YOUR checkout.
    * The hold carries holdId, expiresAt, seat labels and priced line items.
@@ -252,6 +262,79 @@ const CSS = `
 /* screen-reader live region */
 .sl-sr{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 
+/* per-seat ticket-tier select + view-from-seat button in tray chips */
+.sl-chip .tier{background:var(--sl-bg);color:var(--sl-text);border:1px solid var(--sl-line);border-radius:7px;
+  font:inherit;font-size:11px;padding:3px 5px;max-width:130px;cursor:pointer}
+.sl-chip .view{width:24px;height:24px;border-radius:999px;flex:none;display:flex;align-items:center;justify-content:center;
+  color:var(--sl-muted);transition:color .15s}
+.sl-chip .view:hover{color:var(--sl-text)}
+.sl-chip .view svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+
+/* arena: LOD rung pills (top-center over the map) */
+.sl-rungs{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:5;display:none;
+  background:var(--sl-surface);border:1px solid var(--sl-line);border-radius:999px;padding:3px}
+.sl-rungs.on{display:inline-flex;gap:2px}
+.sl-rungs button{padding:6px 13px;border-radius:999px;font-size:10.5px;font-weight:800;letter-spacing:.07em;
+  color:var(--sl-muted);white-space:nowrap;transition:color .15s}
+.sl-rungs button:hover{color:var(--sl-text)}
+.sl-rungs button.on{background:var(--sl-accent);color:var(--sl-accent-ink)}
+
+/* multi-floor switcher (center-left rail over the map) */
+.sl-floors{position:absolute;top:50%;left:12px;transform:translateY(-50%);z-index:5;display:none;
+  flex-direction:column;gap:6px;max-width:42%}
+.sl-floors.on{display:flex}
+.sl-floors button{padding:7px 13px;border-radius:999px;font-size:12px;font-weight:700;background:var(--sl-surface);
+  border:1px solid var(--sl-line);color:var(--sl-muted);white-space:nowrap;max-width:100%;overflow:hidden;
+  text-overflow:ellipsis;transition:color .15s,border-color .15s}
+.sl-floors button:hover{color:var(--sl-text)}
+.sl-floors button.on{background:var(--sl-accent);color:var(--sl-accent-ink);border-color:transparent}
+
+/* tapped-section summary card (top-center, under the rung pills) */
+.sl-seccard{position:absolute;top:54px;left:50%;transform:translateX(-50%);z-index:6;width:250px;
+  max-width:calc(100% - 24px);background:var(--sl-surface);border:1px solid var(--sl-line);border-radius:12px;
+  padding:12px 14px;box-shadow:0 18px 50px -18px rgba(0,0,0,.6);display:none}
+.sl-seccard.on{display:block}
+.sl-seccard-head{display:flex;align-items:center;gap:8px}
+.sl-seccard-dot{width:10px;height:10px;border-radius:50%;flex:none}
+.sl-seccard-name{font-weight:800;font-size:14px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sl-seccard-price{font-weight:800;font-size:12.5px;font-variant-numeric:tabular-nums}
+.sl-seccard-x{width:22px;height:22px;border-radius:999px;flex:none;display:flex;align-items:center;justify-content:center;
+  color:var(--sl-muted);font-size:12px}
+.sl-seccard-x:hover{color:var(--sl-text)}
+.sl-seccard-zone{font-size:11.5px;color:var(--sl-muted);margin-top:6px}
+.sl-seccard-left{color:var(--sl-text);font-weight:700}
+.sl-seccard-mix{display:flex;flex-wrap:wrap;gap:6px 10px;margin-top:8px}
+.sl-seccard-mix-item{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--sl-muted)}
+.sl-seccard-mix-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.sl-seccard-mix-price{font-weight:700;color:var(--sl-text)}
+.sl-seccard-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px}
+.sl-seccard-overview{font-size:12px;font-weight:800;color:var(--sl-accent)}
+.sl-seccard-hint{font-size:10.5px;color:var(--sl-muted)}
+
+/* view-from-seat button on the confirm popover */
+.sl-confirm-view{width:100%;margin-top:9px;padding:8px;border-radius:8px;border:1px solid var(--sl-line);
+  color:var(--sl-text);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;gap:7px}
+.sl-confirm-view:hover{border-color:var(--sl-muted)}
+.sl-confirm-view svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+
+/* 360° seat-view modal (fills the widget; drag-to-look-around equirectangular) */
+.sl-view{position:absolute;inset:0;z-index:12;display:flex;flex-direction:column;background:var(--sl-bg)}
+.sl-view-head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--sl-line);flex:none}
+.sl-view-title{font-weight:800;font-size:15px}
+.sl-view-cap{font-size:11px;color:var(--sl-muted)}
+.sl-view-x{margin-left:auto;width:32px;height:32px;border-radius:999px;border:1px solid var(--sl-line);color:var(--sl-muted);
+  flex:none;display:flex;align-items:center;justify-content:center;transition:color .15s,border-color .15s}
+.sl-view-x:hover{color:var(--sl-text);border-color:var(--sl-muted)}
+.sl-view-x svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round}
+.sl-view-pano{position:relative;flex:1;min-height:0;overflow:hidden;cursor:grab;background-color:#05070c;
+  background-repeat:repeat-x;touch-action:none;user-select:none}
+.sl-view-pano.drag{cursor:grabbing}
+.sl-view-badge{position:absolute;top:12px;left:12px;padding:5px 11px;border-radius:999px;font-size:10px;font-weight:800;
+  letter-spacing:.08em;background:var(--sl-surface);border:1px solid var(--sl-line);color:var(--sl-muted)}
+.sl-view-hint{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);padding:6px 14px;border-radius:999px;
+  font-size:11.5px;font-weight:600;background:var(--sl-surface);border:1px solid var(--sl-line);color:var(--sl-muted);
+  white-space:nowrap;pointer-events:none;max-width:90%;overflow:hidden;text-overflow:ellipsis}
+
 /* modal host */
 .sl-modal-scrim{position:fixed;inset:0;z-index:2147483000;background:rgba(5,7,12,.66);display:flex;align-items:center;justify-content:center;padding:18px}
 .sl-modal-frame{width:min(1200px,100%);height:min(820px,100%);border-radius:16px;overflow:hidden;box-shadow:0 40px 120px -30px rgba(0,0,0,.8)}
@@ -310,6 +393,14 @@ export class SeatPicker {
   private a11yFilter: AccessibilityType | 'all' = 'all';
   private baQty = 2;
   private baCat = '';
+
+  // arena / multi-floor / seat-view chrome
+  private rungsEl: HTMLDivElement | null = null;
+  private floorsEl: HTMLDivElement | null = null;
+  private secCardEl: HTMLDivElement | null = null;
+  private viewEl: HTMLDivElement | null = null;
+  private viewCleanup: (() => void) | null = null;
+  private allSeatsCache: ExpandedSeat[] | null = null;
 
   // modal plumbing (set by open())
   private modalScrim: HTMLElement | null = null;
@@ -393,7 +484,12 @@ export class SeatPicker {
       onSelect: (seat) => {
         if (this.opts.confirmSelection) this.showConfirm(seat);
       },
-      onViewChange: () => this.reanchorConfirm(),
+      onViewChange: () => {
+        this.reanchorConfirm();
+        this.syncRung();
+      },
+      // Tapped-section glide-in → surface (or clear) the section-summary card.
+      onSectionFocus: (summary) => this.showSectionCard(summary),
       onFocusSeat: (seat) => this.announceSeat(seat),
       onSeatHover: (d) => this.updateTooltip(d),
       onHint: (m) => {
@@ -583,9 +679,135 @@ export class SeatPicker {
     this.srEl.setAttribute('aria-live', 'polite');
     root.appendChild(this.srEl);
 
+    // Big-venue chrome: LOD rung pills, multi-floor switcher, section card.
+    // Appended AFTER controller.render() — render() wipes the map host's children.
+    this.buildArenaChrome();
+
     this.syncPrices();
     this.syncTray();
     return this;
+  }
+
+  // ---- arena / multi-floor chrome -------------------------------------------
+
+  /** Build the rung pills (charts with sections) and floor switcher (>1 floor). */
+  private buildArenaChrome(): void {
+    const doc = this.controller.doc;
+    if (!doc || !this.els.map) return;
+    const hasSections = doc.objects.some((o) => o.type === 'section')
+      || (doc.floors ?? []).some((f) => f.objects.some((o) => o.type === 'section'));
+
+    // LOD rung pills — jump straight between zones / sections / seats.
+    if (hasSections) {
+      const RUNGS: LodRung[] = ['zones', 'sections', 'seats'];
+      const pills = document.createElement('div');
+      pills.className = 'sl-rungs on';
+      pills.setAttribute('role', 'group');
+      pills.setAttribute('aria-label', t('picker.zoomLevel'));
+      const LABEL: Record<LodRung, string> = {
+        zones: t('picker.rungLabel.zones'),
+        sections: t('picker.rungLabel.sections'),
+        seats: t('picker.rungLabel.seats'),
+      };
+      const TIP: Record<LodRung, string> = {
+        zones: t('picker.rungTip.zones'),
+        sections: t('picker.rungTip.sections'),
+        seats: t('picker.rungTip.seats'),
+      };
+      pills.innerHTML = RUNGS.map(
+        (r) => `<button type="button" data-rung="${r}" title="${TIP[r]}" aria-pressed="false">${LABEL[r]}</button>`,
+      ).join('');
+      pills.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
+        btn.addEventListener('click', () => this.controller.setRung(btn.dataset.rung as LodRung));
+      });
+      this.els.map.appendChild(pills);
+      this.rungsEl = pills;
+      this.syncRung();
+    }
+
+    // Multi-floor switcher — only when the chart truly has >1 floor.
+    if (this.controller.isMultiFloor()) {
+      const floors = this.controller.getFloors();
+      const rail = document.createElement('div');
+      rail.className = 'sl-floors on';
+      rail.setAttribute('role', 'group');
+      rail.setAttribute('aria-label', t('picker.floor'));
+      rail.innerHTML = floors
+        .map((f) => `<button type="button" data-floor="${f.id}">${f.name}</button>`)
+        .join('');
+      rail.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          this.controller.setFloor(btn.dataset.floor!);
+          this.showSectionCard(null);
+          this.syncFloors();
+          this.syncRung();
+        });
+      });
+      this.els.map.appendChild(rail);
+      this.floorsEl = rail;
+      this.syncFloors();
+    }
+  }
+
+  /** Reflect the engine's current LOD rung onto the pill group. */
+  private syncRung(): void {
+    if (!this.rungsEl) return;
+    const active = this.controller.getRung();
+    this.rungsEl.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
+      const on = btn.dataset.rung === active;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', String(on));
+    });
+  }
+
+  /** Reflect the active floor onto the switcher rail. */
+  private syncFloors(): void {
+    if (!this.floorsEl) return;
+    const active = this.controller.getActiveFloorId();
+    this.floorsEl.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
+      btn.classList.toggle('on', btn.dataset.floor === active);
+    });
+  }
+
+  /** Show (or clear, on null) the tapped-section summary card. */
+  private showSectionCard(summary: SectionSummary | null): void {
+    if (!summary) {
+      this.secCardEl?.remove();
+      this.secCardEl = null;
+      return;
+    }
+    if (!this.els.map) return;
+    this.secCardEl?.remove();
+    const priceLabel =
+      summary.priceMin === summary.priceMax
+        ? this.money(summary.priceMin)
+        : `${this.money(summary.priceMin)}–${this.money(summary.priceMax)}`;
+    const card = document.createElement('div');
+    card.className = 'sl-seccard on';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-label', t('picker.sectionSummaryAria', { label: summary.label }));
+    const mix = summary.categories
+      .map(
+        (c) =>
+          `<span class="sl-seccard-mix-item"><span class="sl-seccard-mix-dot" style="background:${c.color}"></span>` +
+          `${c.label} <span class="sl-seccard-mix-price">${this.money(c.price)}</span></span>`,
+      )
+      .join('');
+    card.innerHTML =
+      `<div class="sl-seccard-head"><span class="sl-seccard-dot" style="background:${summary.color}"></span>` +
+      `<span class="sl-seccard-name">${summary.label}</span>` +
+      (summary.categories.length ? `<span class="sl-seccard-price">${priceLabel}</span>` : '') +
+      `<button type="button" class="sl-seccard-x" aria-label="${t('picker.closeSectionSummary')}">✕</button></div>` +
+      `<div class="sl-seccard-zone">${summary.zoneLabel ? `${summary.zoneLabel} · ` : ''}` +
+      `<span class="sl-seccard-left">${tCount('picker.seatsLeftInSection', summary.seatsLeft)}</span></div>` +
+      (mix ? `<div class="sl-seccard-mix">${mix}</div>` : '') +
+      `<div class="sl-seccard-foot">` +
+      `<button type="button" class="sl-seccard-overview">← ${t('picker.overview')}</button>` +
+      `<span class="sl-seccard-hint">${t('picker.tapSeatHint')}</span></div>`;
+    card.querySelector('.sl-seccard-x')!.addEventListener('click', () => this.controller.overview());
+    card.querySelector('.sl-seccard-overview')!.addEventListener('click', () => this.controller.overview());
+    this.els.map.appendChild(card);
+    this.secCardEl = card;
   }
 
   /** aria-live readout when keyboard focus lands on a seat. */
@@ -617,6 +839,11 @@ export class SeatPicker {
       `<div class="sl-confirm-label">${seat.label}</div>` +
       `<div class="sl-confirm-meta"><span class="sl-dot" style="background:${cat?.color ?? '#6e7bff'}"></span>` +
       `${cat?.label ?? seat.categoryKey}${price != null ? `<b>${this.money(price)}</b>` : ''}</div>` +
+      (this.seatViewEnabled()
+        ? `<button type="button" class="sl-confirm-view">` +
+          `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>` +
+          `${t('picker.open360')}</button>`
+        : '') +
       `<div class="sl-confirm-row">` +
       `<button type="button" class="sl-confirm-cancel">Cancel</button>` +
       `<button type="button" class="sl-confirm-add">Add seat</button></div>`;
@@ -624,6 +851,7 @@ export class SeatPicker {
     this.confirmEl = el;
     this.confirmSeat = seat;
     this.reanchorConfirm();
+    el.querySelector('.sl-confirm-view')?.addEventListener('click', () => this.openSeatView(seat));
     el.querySelector('.sl-confirm-add')!.addEventListener('click', () => this.closeConfirm());
     el.querySelector('.sl-confirm-cancel')!.addEventListener('click', () => {
       this.controller.deselect([seat.id]);
@@ -642,6 +870,145 @@ export class SeatPicker {
     this.confirmEl?.remove();
     this.confirmEl = null;
     this.confirmSeat = null;
+  }
+
+  // ---- 360° view-from-seat modal --------------------------------------------
+
+  private seatViewEnabled(): boolean {
+    return this.opts.seatView !== false;
+  }
+
+  /** Every bookable seat (cached) — neighbor heads for the generated panorama. */
+  private allSeats(): ExpandedSeat[] {
+    if (!this.allSeatsCache) {
+      const doc = this.controller.doc;
+      this.allSeatsCache = doc ? expandChart(doc) : [];
+    }
+    return this.allSeatsCache;
+  }
+
+  /**
+   * Open the drag-to-look-around 360° preview for a seat. Uses the organizer's
+   * uploaded photo (seat.viewUrl) when present, else a panorama generated from
+   * the chart geometry — the stage placed at this seat's true bearing + size.
+   * Zero extra dependencies: an equirectangular image panned with `repeat-x`.
+   */
+  private openSeatView(seat: ExpandedSeat): void {
+    if (!this.root || !this.seatViewEnabled()) return;
+    this.closeSeatView();
+    this.closeConfirm();
+
+    const doc = this.controller.doc;
+    const activeId = this.controller.getActiveFloorId();
+    const focal = doc?.floors?.find((f) => f.id === activeId)?.focalPoint ?? doc?.focalPoint ?? { x: 0, y: 0 };
+    let panoUrl: string;
+    let caption: string;
+    let real = false;
+    if (seat.viewUrl) {
+      panoUrl = seat.viewUrl;
+      caption = t('picker.panorama360');
+      real = true;
+    } else {
+      const pano = generateSeatPanorama(seat, focal, this.allSeats());
+      panoUrl = pano.url;
+      caption = t('picker.illustrationCaption', { m: pano.distanceM });
+    }
+
+    const el = document.createElement('div');
+    el.className = 'sl-view';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', t('picker.viewFromSeat', { label: seat.label }));
+    el.innerHTML =
+      `<div class="sl-view-head">` +
+      `<span class="sl-view-title">${t('picker.viewFromSeat', { label: seat.label })}</span>` +
+      `<span class="sl-view-cap">${caption}</span>` +
+      `<button type="button" class="sl-view-x" aria-label="Close">` +
+      `<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>` +
+      `<div class="sl-view-pano">` +
+      `<span class="sl-view-badge">${real ? t('picker.real360') : t('picker.preview')}</span>` +
+      `<span class="sl-view-hint">Drag to look around · scroll to zoom</span>` +
+      `</div>`;
+    this.root.appendChild(el);
+    this.viewEl = el;
+
+    const pano = el.querySelector<HTMLDivElement>('.sl-view-pano')!;
+    pano.style.backgroundImage = `url("${panoUrl}")`;
+
+    // Equirectangular pan: repeat-x gives seamless 360° horizontal wrap; the
+    // image is sized taller than the viewport so there's headroom to tilt.
+    let zoom = 1.2;
+    let posX = 0;
+    let posY = 0;
+    const apply = (): void => {
+      const h = pano.clientHeight || 1;
+      const bgH = h * zoom;
+      const overV = Math.max(0, bgH - h);
+      posY = Math.min(overV / 2, Math.max(-overV / 2, posY));
+      pano.style.backgroundSize = `auto ${bgH}px`;
+      pano.style.backgroundPosition = `${posX}px ${posY + overV / 2}px`;
+    };
+    apply();
+
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    const onDown = (e: PointerEvent): void => {
+      dragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      pano.classList.add('drag');
+      pano.setPointerCapture?.(e.pointerId);
+    };
+    const onMove = (e: PointerEvent): void => {
+      if (!dragging) return;
+      posX += e.clientX - lastX;
+      posY += e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      apply();
+    };
+    const onUp = (e: PointerEvent): void => {
+      dragging = false;
+      pano.classList.remove('drag');
+      pano.releasePointerCapture?.(e.pointerId);
+    };
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault();
+      zoom = Math.min(2.4, Math.max(1, zoom + (e.deltaY < 0 ? 0.12 : -0.12)));
+      apply();
+    };
+    pano.addEventListener('pointerdown', onDown);
+    pano.addEventListener('pointermove', onMove);
+    pano.addEventListener('pointerup', onUp);
+    pano.addEventListener('pointercancel', onUp);
+    pano.addEventListener('wheel', onWheel, { passive: false });
+
+    const closeBtn = el.querySelector<HTMLButtonElement>('.sl-view-x')!;
+    closeBtn.addEventListener('click', () => this.closeSeatView());
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        this.closeSeatView();
+      }
+    };
+    el.addEventListener('keydown', onKey);
+    closeBtn.focus();
+
+    this.viewCleanup = () => {
+      pano.removeEventListener('pointerdown', onDown);
+      pano.removeEventListener('pointermove', onMove);
+      pano.removeEventListener('pointerup', onUp);
+      pano.removeEventListener('pointercancel', onUp);
+      pano.removeEventListener('wheel', onWheel);
+      el.removeEventListener('keydown', onKey);
+    };
+  }
+
+  private closeSeatView(): void {
+    this.viewCleanup?.();
+    this.viewCleanup = null;
+    this.viewEl?.remove();
+    this.viewEl = null;
   }
 
   // ---- chrome sync ----------------------------------------------------------
@@ -703,22 +1070,45 @@ export class SeatPicker {
     }
 
     // Held line items (best-available or a completed hold) — locked in, no remove.
+    // Tier is server-committed on a hold, so it shows read-only (no re-pick).
     for (const item of heldItems) {
       const cat = this.controller.doc?.categories.find((c) => c.key === item.categoryKey);
+      const tierName = item.tierId ? cat?.tiers?.find((ti) => ti.id === item.tierId)?.name : undefined;
+      const canView = this.seatViewEnabled() && item.objectType !== 'ga' && !!this.controller.seatByLabel(item.label);
       parts.push(
         `<div class="sl-chip"><b>${item.label}</b>` +
-          `<span class="cat">${cat?.label ?? item.categoryKey}</span>` +
-          `<span class="amt">${this.money(item.unitPrice * (item.quantity ?? 1))}</span></div>`,
+          `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>` +
+          `<span class="amt">${this.money(item.unitPrice * (item.quantity ?? 1))}</span>` +
+          (canView
+            ? `<button type="button" class="view" data-view-label="${item.label}" aria-label="${t('picker.viewFromSeat', { label: item.label })}">` +
+              `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`
+            : '') +
+          `</div>`,
       );
     }
 
     const heldLabels = new Set(heldItems.map((item) => item.label));
+    const canView = this.seatViewEnabled();
     for (const s of seats.filter((seat) => !heldLabels.has(seat.label))) {
       const cat = this.controller.doc?.categories.find((c) => c.key === s.categoryKey);
+      const tierSelect =
+        s.tiers && s.tiers.length
+          ? `<select class="tier" data-tier="${s.id}" aria-label="${t('picker.ticketTierFor', { label: s.label })}">` +
+            s.tiers
+              .map((ti) => `<option value="${ti.id}"${ti.id === s.tierId ? ' selected' : ''}>${ti.name} · ${this.money(ti.price)}</option>`)
+              .join('') +
+            `</select>`
+          : '';
+      const viewBtn = canView
+        ? `<button type="button" class="view" data-view-label="${s.label}" aria-label="${t('picker.viewFromSeat', { label: s.label })}">` +
+          `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`
+        : '';
       parts.push(
         `<div class="sl-chip" data-seat="${s.id}"><b>${s.label}</b>` +
           `<span class="cat">${cat?.label ?? s.categoryKey}</span>` +
+          tierSelect +
           `<span class="amt">${this.money(s.price)}</span>` +
+          viewBtn +
           `<button type="button" class="rm" aria-label="Remove ${s.label}">` +
           `<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` +
           `</button></div>`,
@@ -772,6 +1162,17 @@ export class SeatPicker {
       btn.addEventListener('click', () => {
         const id = (btn.closest('.sl-chip') as HTMLElement).dataset.seat!;
         this.controller.deselect([id]);
+      });
+    });
+    // Per-seat ticket-tier pick (Adult/Child/…) — updates price via onSelectionChange.
+    this.els.tray.querySelectorAll<HTMLSelectElement>('.sl-chip .tier').forEach((sel) => {
+      sel.addEventListener('change', () => this.controller.setSeatTier(sel.dataset.tier!, sel.value || null));
+    });
+    // View-from-seat button (data-view-label = seat label) on fresh + held chips.
+    this.els.tray.querySelectorAll<HTMLElement>('.sl-chip .view[data-view-label]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const seat = this.controller.seatByLabel(btn.dataset.viewLabel!);
+        if (seat) this.openSeatView(seat);
       });
     });
     this.els.tray.querySelectorAll<HTMLElement>('.sl-ga button').forEach((btn) => {
@@ -943,6 +1344,7 @@ export class SeatPicker {
   destroy(): void {
     this.destroyed = true;
     this.closeConfirm();
+    this.closeSeatView();
     this.stopHoldTimer();
     if (this.toastTimer) clearTimeout(this.toastTimer);
     this.ro?.disconnect();

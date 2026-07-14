@@ -12,6 +12,7 @@ export * from './core/ga';
 export * from './core/sections';
 export * from './engine/SeatmapRenderer';
 export * from './picker/PickerController';
+export * from './view/generatePanorama';
 export * from './i18n';
 export * from './i18n/bundles';
 export * from './lib/money';

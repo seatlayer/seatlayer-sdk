@@ -35,6 +35,9 @@ const FILES = [
   ['src/core/orphans.ts', 'packages/core/src/core/orphans.ts'],
   ['src/engine/SeatmapRenderer.ts', 'packages/core/src/engine/SeatmapRenderer.ts'],
   ['src/picker/PickerController.ts', 'packages/core/src/picker/PickerController.ts'],
+  // View-from-seat panorama generator — pure canvas geometry (no deps), used by
+  // the SDK SeatPicker's 360° seat-view modal. Byte-mirrored from the app.
+  ['src/view/generatePanorama.ts', 'packages/core/src/view/generatePanorama.ts'],
   // i18n + money: imported by the engine (`t()`, formatMoney) and surfaced to the
   // SDKs (loadLocale / setStringOverrides for the widget `locale`/`messages` options).
   ['src/i18n/index.ts', 'packages/core/src/i18n/index.ts'],
