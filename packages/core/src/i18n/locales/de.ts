@@ -33,6 +33,8 @@ export const de: Dict = {
   // renderer (drawn on the Konva map — shared by the embed SDK)
   'map.aria': 'Sitzplan. Mit Pfeiltasten zwischen Plätzen navigieren, Eingabe zum Auswählen.',
   'map.seatsLeft': '{count} FREI',
+  'map.statusHeld': 'Reserviert',
+  'map.statusTaken': 'Vergeben',
   'map.fromPrice': 'AB {price}',
 
   // buyer picker page (src/pages/PickerPage.tsx)

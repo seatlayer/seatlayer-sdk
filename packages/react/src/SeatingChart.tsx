@@ -16,6 +16,7 @@ import {
 } from '@seatlayer/js';
 
 export type { SelectedSeat, HoldResult, BestAvailableResult, GAAreaAvailability, HoldLineItem } from '@seatlayer/js';
+export type { SeatHoverDetails } from '@seatlayer/js';
 
 /** Imperative handle exposed via `ref` — call these to drive the picker from your app. */
 export interface SeatingChartHandle {
@@ -94,6 +95,8 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
         onError: (err) => callbacks.current.onError?.(err),
         onDeckTap: (floorId) => callbacks.current.onDeckTap?.(floorId),
         onHint: (message) => callbacks.current.onHint?.(message),
+        seatTooltip: props.seatTooltip,
+        onSeatHover: (details) => callbacks.current.onSeatHover?.(details),
       });
       chartRef.current = chart;
       void chart.render();

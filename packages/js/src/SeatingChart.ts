@@ -7,7 +7,7 @@
  * + booking to the controller, so the SDK inherits every fix made for the live
  * buyer page and the demo picker.
  */
-import { PickerController, loadLocale, setStringOverrides, t, type PickerSeat } from '@seatlayer/core';
+import { PickerController, loadLocale, setStringOverrides, t, type PickerSeat, type SeatHoverDetails } from '@seatlayer/core';
 import { PubApi, type BestAvailableResult, type HoldResult } from './api';
 
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
@@ -50,6 +50,18 @@ export interface SeatingChartOptions {
    * Toggleable later with setColorblindSafe().
    */
   colorblindSafe?: boolean;
+  /**
+   * Built-in seat tooltip on mouse hover (seat · category · price · status).
+   * Rendered inside the widget so every host gets it; default true. Turn off
+   * to draw your own popover from onSeatHover.
+   */
+  seatTooltip?: boolean;
+  /**
+   * Seat hover with everything a popover needs (category label/color, resolved
+   * tier-aware price, live status, currency); null on hover-out. Fires whether
+   * or not the built-in tooltip is enabled.
+   */
+  onSeatHover?: (details: SeatHoverDetails | null) => void;
   onSelectionChange?: (seats: SelectedSeat[]) => void;
   onHold?: (result: HoldResult) => void;
   onHoldExpired?: () => void;
@@ -90,6 +102,9 @@ export class SeatingChart {
   private mount: HTMLElement | null = null;
   private hostEl: HTMLDivElement | null = null;
   private rendered = false;
+  private tipEl: HTMLDivElement | null = null;
+  private tipPos = { x: 0, y: 0 };
+  private onTipMove: ((e: MouseEvent) => void) | null = null;
 
   constructor(options: SeatingChartOptions) {
     if (!options || typeof options !== 'object') throw new Error('seatmap: options object is required');
@@ -114,6 +129,13 @@ export class SeatingChart {
       onError: (err) => this.opts.onError?.(err),
       onDeckTap: (floorId) => this.opts.onDeckTap?.(floorId),
       onHint: (message) => this.opts.onHint?.(message),
+      // Live-activity cue: pulse seats that other buyers take while the map is
+      // open — the WS feed already streams the status change, this makes it felt.
+      flashOnLiveChange: true,
+      onSeatHover: (details) => {
+        this.opts.onSeatHover?.(details);
+        if (this.opts.seatTooltip !== false) this.updateTooltip(details);
+      },
       colorblindSafe: options.colorblindSafe,
     });
   }
@@ -144,6 +166,28 @@ export class SeatingChart {
       this.rendered = false;
       return this;
     }
+
+    // Tooltip element + cursor tracking (mouse only — touch selects directly and
+    // reviews seats in the host tray). Positioned at the cursor, flipped at edges.
+    // Appended AFTER controller.render — mounting the canvas replaces the host's
+    // prior children, so anything added earlier would be wiped.
+    if (this.opts.seatTooltip !== false) {
+      const tip = document.createElement('div');
+      tip.setAttribute('role', 'tooltip');
+      tip.style.cssText =
+        'position:absolute;z-index:7;pointer-events:none;display:none;max-width:240px;' +
+        'background:#10162a;color:#fff;border-radius:10px;padding:9px 12px;' +
+        'font:500 12px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;' +
+        'box-shadow:0 10px 30px -10px rgba(0,0,0,.5);';
+      host.appendChild(tip);
+      this.tipEl = tip;
+      this.onTipMove = (e: MouseEvent) => {
+        const r = host.getBoundingClientRect();
+        this.tipPos = { x: e.clientX - r.left, y: e.clientY - r.top };
+        if (this.tipEl && this.tipEl.style.display !== 'none') this.placeTooltip();
+      };
+      host.addEventListener('mousemove', this.onTipMove);
+    }
     if (info.mode === 'test') {
       host.style.overflow = 'hidden';
       const ribbon = document.createElement('div');
@@ -157,6 +201,49 @@ export class SeatingChart {
       host.appendChild(ribbon);
     }
     return this;
+  }
+
+  private placeTooltip(): void {
+    if (!this.tipEl || !this.hostEl) return;
+    const hw = this.hostEl.clientWidth;
+    const tw = this.tipEl.offsetWidth;
+    const th = this.tipEl.offsetHeight;
+    let x = this.tipPos.x + 14;
+    let y = this.tipPos.y - th - 12;
+    if (x + tw > hw - 8) x = this.tipPos.x - tw - 14;
+    if (y < 8) y = this.tipPos.y + 18;
+    this.tipEl.style.left = `${Math.max(8, x)}px`;
+    this.tipEl.style.top = `${Math.max(8, y)}px`;
+  }
+
+  private updateTooltip(details: SeatHoverDetails | null): void {
+    if (!this.tipEl) return;
+    if (!details) {
+      this.tipEl.style.display = 'none';
+      return;
+    }
+    const money = (() => {
+      try {
+        return new Intl.NumberFormat(undefined, { style: 'currency', currency: details.currency }).format(details.price);
+      } catch {
+        return `${details.price} ${details.currency}`;
+      }
+    })();
+    const statusLine =
+      details.status === 'free'
+        ? ''
+        : `<div style="margin-top:5px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#fca5a5;font-weight:700">${
+            details.status === 'held' ? t('map.statusHeld') : t('map.statusTaken')
+          }</div>`;
+    this.tipEl.innerHTML =
+      `<div style="font-weight:700;font-size:13px">${details.label}</div>` +
+      `<div style="display:flex;align-items:center;gap:6px;margin-top:4px;color:#c7cddc">` +
+      `<span style="width:9px;height:9px;border-radius:50%;flex:none;background:${details.categoryColor}"></span>` +
+      `<span>${details.categoryLabel}</span>` +
+      `<span style="margin-left:auto;font-weight:700;color:#fff">${money}</span></div>` +
+      statusLine;
+    this.tipEl.style.display = 'block';
+    this.placeTooltip();
   }
 
   /** Current selection with prices resolved from the chart categories. */
@@ -245,6 +332,9 @@ export class SeatingChart {
 
   /** Tear everything down: close the socket, stop timers, drop the canvas. */
   destroy(): void {
+    if (this.hostEl && this.onTipMove) this.hostEl.removeEventListener('mousemove', this.onTipMove);
+    this.tipEl = null;
+    this.onTipMove = null;
     this.controller.destroy();
     if (this.hostEl && this.hostEl.parentNode) this.hostEl.parentNode.removeChild(this.hostEl);
     this.hostEl = null;
