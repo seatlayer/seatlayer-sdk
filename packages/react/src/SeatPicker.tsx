@@ -39,7 +39,7 @@ export interface SeatPickerProps extends Omit<SeatPickerOptions, 'container'> {
  */
 export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
   function SeatPicker(props, ref) {
-    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, holdTtlMs } = props;
+    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, holdTtlMs, confirmSelection } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const pickerRef = useRef<CoreSeatPicker | null>(null);
@@ -62,6 +62,7 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         currency,
         colorblindSafe,
         holdTtlMs,
+        confirmSelection,
         theme: callbacks.current.theme,
         messages: callbacks.current.messages,
         onCheckout: (hold, seats) => callbacks.current.onCheckout?.(hold, seats),
@@ -78,7 +79,7 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
       };
       // Rebuild only when the identity of the event/config changes.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, holdTtlMs]);
+    }, [event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, holdTtlMs, confirmSelection]);
 
     useImperativeHandle(
       ref,

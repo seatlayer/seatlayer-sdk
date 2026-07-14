@@ -20,10 +20,13 @@
  */
 import {
   PickerController,
+  expandChart,
   loadLocale,
   setStringOverrides,
   t,
+  type AccessibilityType,
   type ChartTheme,
+  type ExpandedSeat,
   type PickerSeat,
   type SeatHoverDetails,
 } from '@seatlayer/core';
@@ -82,6 +85,11 @@ export interface SeatPickerOptions {
   theme?: SeatPickerTheme;
   /** Hold TTL in ms passed to hold(); server clamps to its own limits. */
   holdTtlMs?: number;
+  /**
+   * Confirm mode: tapping a seat shows an anchored popover (seat · category ·
+   * price · Add/Cancel) instead of adding straight to the tray. Default false.
+   */
+  confirmSelection?: boolean;
   /**
    * Buyer pressed the CTA and the hold succeeded — hand off to YOUR checkout.
    * The hold carries holdId, expiresAt, seat labels and priced line items.
@@ -145,6 +153,8 @@ const CSS = `
 .sl-picker[data-layout="narrow"] .sl-body{flex-direction:column}
 .sl-picker[data-layout="narrow"] .sl-map{min-height:0;flex:1}
 .sl-picker[data-layout="narrow"] .sl-side{width:100%;max-height:46%;border-left:0;border-top:1px solid var(--sl-line)}
+.sl-picker[data-layout="narrow"] .sl-tray{flex:none}
+.sl-picker[data-layout="narrow"] .sl-foot{position:sticky;bottom:0;background:var(--sl-bg)}
 
 /* price panel */
 .sl-sec{padding:14px 16px 4px;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--sl-muted);font-weight:700}
@@ -209,6 +219,39 @@ const CSS = `
 .sl-boot-retry{margin-top:4px;padding:9px 20px;border-radius:var(--sl-r-sm);background:var(--sl-accent);
   color:var(--sl-accent-ink);font-weight:700;font-size:13px}
 
+/* a11y filter chips (over the map, top-left) */
+.sl-chips{position:absolute;top:12px;left:12px;z-index:5;display:flex;gap:6px;flex-wrap:wrap;max-width:70%}
+.sl-chip-f{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:700;
+  background:var(--sl-surface);border:1px solid var(--sl-line);color:var(--sl-muted);transition:color .15s,border-color .15s}
+.sl-chip-f:hover{color:var(--sl-text)}
+.sl-chip-f.on{background:var(--sl-accent);color:var(--sl-accent-ink);border-color:transparent}
+
+/* confirm popover */
+.sl-confirm{position:absolute;z-index:9;min-width:190px;background:var(--sl-surface);border:1px solid var(--sl-line);
+  border-radius:12px;padding:12px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);transform:translate(-50%,calc(-100% - 14px))}
+.sl-confirm-label{font-weight:800;font-size:14px}
+.sl-confirm-meta{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--sl-muted);margin-top:4px}
+.sl-confirm-meta b{color:var(--sl-text);margin-left:auto}
+.sl-confirm-row{display:flex;gap:8px;margin-top:10px}
+.sl-confirm-row button{flex:1;padding:8px;border-radius:8px;font-weight:700;font-size:12.5px}
+.sl-confirm-add{background:var(--sl-accent);color:var(--sl-accent-ink)}
+.sl-confirm-cancel{border:1px solid var(--sl-line);color:var(--sl-muted)}
+.sl-confirm-cancel:hover{color:var(--sl-text)}
+
+/* best-available row */
+.sl-ba{display:flex;align-items:center;gap:8px;padding:9px 11px;border:1px solid var(--sl-line);border-radius:var(--sl-r-sm)}
+.sl-ba select{background:var(--sl-surface);color:var(--sl-text);border:1px solid var(--sl-line);border-radius:7px;
+  font:inherit;font-size:12px;padding:5px 6px;max-width:110px}
+.sl-ba-qty{display:flex;align-items:center;gap:7px}
+.sl-ba-qty button{width:24px;height:24px;border-radius:999px;background:var(--sl-surface);border:1px solid var(--sl-line);
+  font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.sl-ba-qty span{min-width:14px;text-align:center;font-weight:800}
+.sl-ba-go{margin-left:auto;padding:7px 12px;border-radius:999px;border:1px solid var(--sl-line);font-weight:700;font-size:12px;transition:border-color .15s}
+.sl-ba-go:hover{border-color:var(--sl-muted)}
+
+/* screen-reader live region */
+.sl-sr{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
 /* modal host */
 .sl-modal-scrim{position:fixed;inset:0;z-index:2147483000;background:rgba(5,7,12,.66);display:flex;align-items:center;justify-content:center;padding:18px}
 .sl-modal-frame{width:min(1200px,100%);height:min(820px,100%);border-radius:16px;overflow:hidden;box-shadow:0 40px 120px -30px rgba(0,0,0,.8)}
@@ -261,6 +304,12 @@ export class SeatPicker {
   private gaQty = new Map<string, number>();
   private tipEl: HTMLDivElement | null = null;
   private tipPos = { x: 0, y: 0 };
+  private confirmEl: HTMLDivElement | null = null;
+  private confirmSeat: ExpandedSeat | null = null;
+  private srEl: HTMLDivElement | null = null;
+  private a11yFilter: AccessibilityType | 'all' = 'all';
+  private baQty = 2;
+  private baCat = '';
 
   // modal plumbing (set by open())
   private modalScrim: HTMLElement | null = null;
@@ -326,6 +375,12 @@ export class SeatPicker {
         this.syncTray();
         this.opts.onHoldExpired?.();
       },
+      confirmSelection: options.confirmSelection,
+      onSelect: (seat) => {
+        if (this.opts.confirmSelection) this.showConfirm(seat);
+      },
+      onViewChange: () => this.reanchorConfirm(),
+      onFocusSeat: (seat) => this.announceSeat(seat),
       onSeatHover: (d) => this.updateTooltip(d),
       onHint: (m) => {
         if (m) this.toast(m);
@@ -451,9 +506,115 @@ export class SeatPicker {
       : '';
     this.els.meta.textContent = [info.venue, when].filter(Boolean).join(' · ');
 
+    // Accessibility filter chips — only for types actually present in the chart.
+    const present = new Set<AccessibilityType>();
+    if (this.controller.doc) {
+      for (const seat of expandChart(this.controller.doc)) {
+        for (const type of seat.accessibility ?? []) present.add(type);
+        if (seat.accessible && !seat.accessibility?.length) present.add('wheelchair');
+      }
+    }
+    if (present.size) {
+      const chips = document.createElement('div');
+      chips.className = 'sl-chips';
+      const GLYPH: Partial<Record<AccessibilityType, string>> = { wheelchair: '♿', companion: '🧑‍🤝‍🧑' };
+      const mk = (key: AccessibilityType | 'all', label: string): string =>
+        `<button type="button" class="sl-chip-f${key === 'all' ? ' on' : ''}" data-f="${key}">${label}</button>`;
+      chips.innerHTML =
+        mk('all', 'All seats') +
+        [...present]
+          .map((type) => mk(type, `${GLYPH[type] ? GLYPH[type] + ' ' : ''}${type[0].toUpperCase()}${type.slice(1).replace(/-/g, ' ')}`))
+          .join('');
+      this.els.map.appendChild(chips);
+      chips.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const f = btn.dataset.f as AccessibilityType | 'all';
+          this.a11yFilter = f;
+          chips.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === btn));
+          this.controller.setAccessibilityFilter(f === 'all' ? null : [f]);
+        });
+      });
+    }
+
+    // Colorblind-safe toggle rides in the zoom column.
+    const cb = document.createElement('button');
+    cb.type = 'button';
+    cb.setAttribute('aria-label', 'Toggle colorblind-friendly colors');
+    cb.setAttribute('aria-pressed', String(!!this.opts.colorblindSafe));
+    cb.innerHTML = '<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+    this.els.zfit.parentElement!.appendChild(cb);
+    let cbOn = !!this.opts.colorblindSafe;
+    cb.addEventListener('click', () => {
+      cbOn = !cbOn;
+      cb.setAttribute('aria-pressed', String(cbOn));
+      this.controller.setColorblindSafe(cbOn);
+    });
+
+    // Screen-reader announcements for keyboard seat focus.
+    this.srEl = document.createElement('div');
+    this.srEl.className = 'sl-sr';
+    this.srEl.setAttribute('aria-live', 'polite');
+    root.appendChild(this.srEl);
+
     this.syncPrices();
     this.syncTray();
     return this;
+  }
+
+  /** aria-live readout when keyboard focus lands on a seat. */
+  private announceSeat(seat: ExpandedSeat | null): void {
+    if (!this.srEl) return;
+    if (!seat) {
+      this.srEl.textContent = '';
+      return;
+    }
+    const cat = this.controller.doc?.categories.find((c) => c.key === seat.categoryKey);
+    const status = this.controller.getStatus(seat.id) ?? 'free';
+    const statusText = status === 'free' ? 'available' : status === 'held' ? 'on hold' : 'taken';
+    const price = cat?.tiers?.length ? cat.tiers[0].price : cat?.price;
+    this.srEl.textContent = `Seat ${seat.label}, ${cat?.label ?? seat.categoryKey}${
+      price != null ? `, ${this.money(price)}` : ''
+    }, ${statusText}`;
+  }
+
+  // ---- confirm popover (opt-in confirmSelection mode) ------------------------
+
+  private showConfirm(seat: ExpandedSeat): void {
+    this.closeConfirm();
+    if (this.tipEl) this.tipEl.style.display = 'none';
+    const cat = this.controller.doc?.categories.find((c) => c.key === seat.categoryKey);
+    const price = cat?.tiers?.length ? cat.tiers[0].price : cat?.price;
+    const el = document.createElement('div');
+    el.className = 'sl-confirm';
+    el.innerHTML =
+      `<div class="sl-confirm-label">${seat.label}</div>` +
+      `<div class="sl-confirm-meta"><span class="sl-dot" style="background:${cat?.color ?? '#6e7bff'}"></span>` +
+      `${cat?.label ?? seat.categoryKey}${price != null ? `<b>${this.money(price)}</b>` : ''}</div>` +
+      `<div class="sl-confirm-row">` +
+      `<button type="button" class="sl-confirm-cancel">Cancel</button>` +
+      `<button type="button" class="sl-confirm-add">Add seat</button></div>`;
+    this.els.map.appendChild(el);
+    this.confirmEl = el;
+    this.confirmSeat = seat;
+    this.reanchorConfirm();
+    el.querySelector('.sl-confirm-add')!.addEventListener('click', () => this.closeConfirm());
+    el.querySelector('.sl-confirm-cancel')!.addEventListener('click', () => {
+      this.controller.deselect([seat.id]);
+      this.closeConfirm();
+    });
+  }
+
+  private reanchorConfirm(): void {
+    if (!this.confirmEl || !this.confirmSeat) return;
+    const p = this.controller.worldToScreen({ x: this.confirmSeat.x, y: this.confirmSeat.y });
+    this.confirmEl.style.left = `${p.x}px`;
+    this.confirmEl.style.top = `${p.y}px`;
+  }
+
+  private closeConfirm(): void {
+    this.confirmEl?.remove();
+    this.confirmEl = null;
+    this.confirmSeat = null;
   }
 
   // ---- chrome sync ----------------------------------------------------------
@@ -474,7 +635,7 @@ export class SeatPicker {
       .map((c) => {
         const price = c.tiers?.length ? c.tiers[0].price : c.price;
         return (
-          `<div class="sl-price-row"><span class="sl-dot" style="background:${c.color}"></span>` +
+          `<div class="sl-price-row" data-cat="${c.key}"><span class="sl-dot" style="background:${c.color}"></span>` +
           `<span class="sl-price-label">${c.label}</span>` +
           `<span class="sl-price-left">${left[c.key] ?? 0} left</span>` +
           (price != null ? `<span class="sl-price-amt">${this.money(price)}</span>` : '') +
@@ -482,6 +643,11 @@ export class SeatPicker {
         );
       })
       .join('');
+    // Legend-hover highlight: dim other categories on the map while hovering a row.
+    this.els.prices.querySelectorAll<HTMLElement>('.sl-price-row').forEach((row) => {
+      row.addEventListener('mouseenter', () => this.controller.getRenderer()?.setCategoryHighlight?.(row.dataset.cat ?? null));
+      row.addEventListener('mouseleave', () => this.controller.getRenderer()?.setCategoryHighlight?.(null));
+    });
   }
 
   /** A live delta took one of OUR selected (not yet held) seats — evict + tell the buyer. */
@@ -500,15 +666,27 @@ export class SeatPicker {
     if (!this.els.tray) return;
     const seats = this.controller.getSelection();
     const gaAreas = this.controller.getGAAreas();
+    const heldItems = this.hold?.items ?? [];
     const parts: string[] = [];
 
-    if (!seats.length && !gaAreas.length) {
+    if (!seats.length && !heldItems.length && !gaAreas.length) {
       parts.push(`<div class="sl-tray-hint">Tap a seat on the map, or let us pick the best available for you.</div>`);
-    } else if (!seats.length) {
+    } else if (!seats.length && !heldItems.length) {
       parts.push(`<div class="sl-tray-hint">Tap a seat on the map — or grab standing tickets below.</div>`);
     }
 
-    for (const s of seats) {
+    // Held line items (best-available or a completed hold) — locked in, no remove.
+    for (const item of heldItems) {
+      const cat = this.controller.doc?.categories.find((c) => c.key === item.categoryKey);
+      parts.push(
+        `<div class="sl-chip"><b>${item.label}</b>` +
+          `<span class="cat">${cat?.label ?? item.categoryKey}</span>` +
+          `<span class="amt">${this.money(item.unitPrice * (item.quantity ?? 1))}</span></div>`,
+      );
+    }
+
+    const heldLabels = new Set(heldItems.map((item) => item.label));
+    for (const s of seats.filter((seat) => !heldLabels.has(seat.label))) {
       const cat = this.controller.doc?.categories.find((c) => c.key === s.categoryKey);
       parts.push(
         `<div class="sl-chip" data-seat="${s.id}"><b>${s.label}</b>` +
@@ -532,7 +710,37 @@ export class SeatPicker {
       );
     }
 
+    // Best available — qty (+ optional category) picked server-side and held atomically.
+    if (!this.hold) {
+      const cats = this.controller.doc?.categories ?? [];
+      parts.push(
+        `<div class="sl-ba">` +
+          (cats.length > 1
+            ? `<select aria-label="Category" data-ba-cat>` +
+              `<option value="">Any tier</option>` +
+              cats.map((c) => `<option value="${c.key}"${this.baCat === c.key ? ' selected' : ''}>${c.label}</option>`).join('') +
+              `</select>`
+            : '') +
+          `<div class="sl-ba-qty">` +
+          `<button type="button" data-ba="-1" aria-label="Fewer seats">−</button><span>${this.baQty}</span>` +
+          `<button type="button" data-ba="1" aria-label="More seats">+</button></div>` +
+          `<button type="button" class="sl-ba-go">Best available</button></div>`,
+      );
+    }
+
     this.els.tray.innerHTML = parts.join('');
+    this.els.tray.querySelectorAll<HTMLButtonElement>('[data-ba]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.baQty = Math.max(1, Math.min(8, this.baQty + Number(btn.dataset.ba)));
+        this.syncTray();
+      });
+    });
+    this.els.tray.querySelector<HTMLSelectElement>('[data-ba-cat]')?.addEventListener('change', (e) => {
+      this.baCat = (e.target as HTMLSelectElement).value;
+    });
+    this.els.tray.querySelector<HTMLButtonElement>('.sl-ba-go')?.addEventListener('click', () => {
+      void this.bestAvailable(this.baQty, this.baCat || undefined);
+    });
     this.els.tray.querySelectorAll<HTMLElement>('.sl-chip .rm').forEach((btn) => {
       btn.addEventListener('click', () => {
         const id = (btn.closest('.sl-chip') as HTMLElement).dataset.seat!;
@@ -550,23 +758,31 @@ export class SeatPicker {
       });
     });
 
-    // totals + CTA
+    // totals + CTA (held lines + fresh selections + GA)
     const gaTotal = gaAreas.reduce((sum, a) => sum + a.price * (this.gaQty.get(a.id) ?? 0), 0);
     const gaCount = [...this.gaQty.values()].reduce((a, b) => a + b, 0);
-    const total = seats.reduce((sum, s) => sum + s.price, 0) + gaTotal;
-    const count = seats.length + gaCount;
+    const heldTotal = heldItems.reduce((sum, item) => sum + item.unitPrice * (item.quantity ?? 1), 0);
+    const heldCount = heldItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+    const freshSeats = seats.filter((seat) => !heldLabels.has(seat.label));
+    const total = freshSeats.reduce((sum, s) => sum + s.price, 0) + gaTotal + heldTotal;
+    const count = freshSeats.length + gaCount + heldCount;
     this.els.count.textContent = count
       ? `${count} ${count === 1 ? 'ticket' : 'tickets'}`
       : 'No seats selected';
     this.els.total.textContent = count ? this.money(total) : '';
     const cta = this.els.cta as HTMLButtonElement;
     cta.disabled = count === 0;
-    cta.textContent = count ? 'Hold seats & checkout' : 'Select seats';
+    cta.textContent = this.hold ? 'Continue to checkout' : count ? 'Hold seats & checkout' : 'Select seats';
     this.opts.onSelectionChange?.(seats);
   }
 
   private async handleCta(): Promise<void> {
     const cta = this.els.cta as HTMLButtonElement;
+    // Best-available (or a prior CTA press) already holds the seats — hand off.
+    if (this.hold && !this.controller.getSelection().some((s) => !(this.hold!.items ?? []).some((i) => i.label === s.label))) {
+      this.opts.onCheckout?.(this.hold, this.controller.getSelection());
+      return;
+    }
     cta.disabled = true;
     cta.textContent = 'Holding…';
     try {
@@ -697,6 +913,7 @@ export class SeatPicker {
 
   destroy(): void {
     this.destroyed = true;
+    this.closeConfirm();
     this.stopHoldTimer();
     if (this.toastTimer) clearTimeout(this.toastTimer);
     this.ro?.disconnect();

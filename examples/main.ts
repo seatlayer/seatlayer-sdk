@@ -7,6 +7,7 @@ new SeatPicker({
   container: '#inline',
   event: EVENT,
   apiBase: API,
+  confirmSelection: true,
   onCheckout: (hold, seats) => console.log('[harness] checkout', hold, seats),
 }).render();
 
