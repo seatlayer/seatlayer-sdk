@@ -325,6 +325,21 @@ export class SeatingChart {
     this.controller.setColorblindSafe(on);
   }
 
+  /** Zoom in one step (same increment as the wheel/pinch gesture). */
+  zoomIn(): void {
+    this.controller.zoomIn();
+  }
+
+  /** Zoom out one step. */
+  zoomOut(): void {
+    this.controller.zoomOut();
+  }
+
+  /** Reset the camera so the whole chart fits the container. */
+  zoomToFit(): void {
+    this.controller.zoomToFit();
+  }
+
   /** Release the current hold (if any). No-op when nothing is held. */
   async release(): Promise<void> {
     await this.controller.release();

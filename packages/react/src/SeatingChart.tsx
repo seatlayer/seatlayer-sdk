@@ -46,6 +46,12 @@ export interface SeatingChartHandle {
   setFloor(floorId: string): void;
   /** Toggle colorblind-safe rendering at runtime (see the `colorblindSafe` prop). */
   setColorblindSafe(on: boolean): void;
+  /** Zoom in one step (same increment as the wheel/pinch gesture). */
+  zoomIn(): void;
+  /** Zoom out one step. */
+  zoomOut(): void;
+  /** Reset the camera so the whole chart fits the container. */
+  zoomToFit(): void;
 }
 
 export interface SeatingChartProps extends Omit<SeatingChartOptions, 'container'> {
@@ -123,6 +129,9 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
         getFloors: () => chartRef.current?.getFloors() ?? [],
         setFloor: (floorId) => chartRef.current?.setFloor(floorId),
         setColorblindSafe: (on) => chartRef.current?.setColorblindSafe(on),
+        zoomIn: () => chartRef.current?.zoomIn(),
+        zoomOut: () => chartRef.current?.zoomOut(),
+        zoomToFit: () => chartRef.current?.zoomToFit(),
       }),
       [],
     );
