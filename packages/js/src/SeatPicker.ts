@@ -252,15 +252,28 @@ const CSS = `
 .sl-picker[data-layout="narrow"] .sl-zoom [data-ref="zin"],
 .sl-picker[data-layout="narrow"] .sl-zoom [data-ref="zout"]{display:none}
 
-/* bottom-sheet head: grab handle + one-line summary (narrow only) */
-.sl-sheet-head{display:none;flex-direction:column;padding:6px 16px 8px;cursor:grab;touch-action:none;
-  user-select:none;-webkit-user-select:none;flex:none}
+/* bottom-sheet head: grab handle + one-line summary (narrow only). The WHOLE
+   head is the tap/swipe toggle target (min 44px), so it reads as one control. */
+.sl-sheet-head{display:none;flex-direction:column;justify-content:center;padding:6px 16px 8px;min-height:44px;
+  cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;flex:none}
 .sl-picker[data-layout="narrow"] .sl-sheet-head{display:flex}
 .sl-sheet-grab{width:36px;height:4px;border-radius:999px;background:var(--sl-muted);opacity:.55;margin:2px auto 7px}
-.sl-sheet-peek{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:700;color:var(--sl-text);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:20px}
+.sl-sheet-bar{display:flex;align-items:center;gap:10px;min-height:26px}
+.sl-sheet-peek{display:flex;align-items:center;gap:7px;flex:1;min-width:0;font-size:13px;font-weight:700;color:var(--sl-text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sl-sheet-peek .sub{color:var(--sl-muted);font-weight:600}
-.sl-sheet-peek .go{margin-left:auto;color:var(--sl-accent);font-weight:800;flex:none}
+/* collapsed-peek "Continue" affordance: a real accent pill, not plain text */
+.sl-sheet-peek .go{margin-left:auto;flex:none;display:inline-flex;align-items:center;min-height:30px;
+  padding:6px 13px;border-radius:999px;background:var(--sl-accent);color:var(--sl-accent-ink);
+  font-weight:800;font-size:12.5px}
+/* state chevron: points UP while peeking, rotates to point DOWN when open.
+   Base keeps an explicit rotate(0) — transitioning to/from a bare 'none' leaves
+   the value stuck in some engines, so both endpoints must be real transforms. */
+.sl-sheet-chevron{flex:none;display:flex;align-items:center;justify-content:center;color:var(--sl-muted);
+  transform:rotate(0deg);transition:transform .22s ease}
+.sl-sheet-chevron svg{width:18px;height:18px;stroke:currentColor;stroke-width:2.4;fill:none;
+  stroke-linecap:round;stroke-linejoin:round}
+.sl-picker[data-sheet="open"] .sl-sheet-chevron{transform:rotate(180deg)}
 
 /* consolidated Filters row inside the sheet (a11y chips + colorblind toggle
    dock here on narrow; they live on the map / zoom column on wide) */
@@ -309,10 +322,18 @@ const CSS = `
 .sl-foot{padding:12px 16px 14px;border-top:1px solid var(--sl-line);flex:none}
 .sl-total{display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:10px}
 .sl-total b{font-size:17px;font-variant-numeric:tabular-nums}
-.sl-cta{width:100%;padding:13px;border-radius:var(--sl-r-sm);font-weight:800;font-size:14px;
-  background:var(--sl-accent);color:var(--sl-accent-ink);transition:filter .15s,opacity .15s}
-.sl-cta:hover{filter:brightness(1.08)}
-.sl-cta:disabled{opacity:.45;cursor:not-allowed}
+/* Primary checkout CTA. Scoped under .sl-picker so it OUTWEIGHS the
+   '.sl-picker button' reset (0,1,1) — an unscoped '.sl-cta' (0,1,0) loses to it
+   and the button renders as plain text with no accent fill. */
+.sl-picker .sl-cta{display:flex;align-items:center;justify-content:center;width:100%;min-height:44px;
+  padding:12px 16px;border-radius:var(--sl-r-sm);font-weight:800;font-size:14px;line-height:1.1;
+  background:var(--sl-accent);color:var(--sl-accent-ink);
+  transition:filter .15s,background .15s,color .15s,transform .06s}
+.sl-picker .sl-cta:hover{filter:brightness(1.08)}
+.sl-picker .sl-cta:active{transform:translateY(1px);filter:brightness(.94)}
+/* Disabled ("Select seats"): quieter, but still a full-width button shape. */
+.sl-picker .sl-cta:disabled{background:var(--sl-surface);color:var(--sl-muted);opacity:1;
+  cursor:not-allowed;filter:none;transform:none}
 
 /* Chrome anchor regions (Feature 6) — every persistent map overlay is APPENDED
    INTO one of these positioned flex containers and flows/stacks within it, so no
@@ -768,7 +789,12 @@ export class SeatPicker {
         <div class="sl-side" data-ref="side">
           <div class="sl-sheet-head" data-ref="sheetHead">
             <div class="sl-sheet-grab"></div>
-            <div class="sl-sheet-peek" data-ref="peek"></div>
+            <div class="sl-sheet-bar">
+              <div class="sl-sheet-peek" data-ref="peek"></div>
+              <span class="sl-sheet-chevron" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>
+              </span>
+            </div>
           </div>
           <div class="sl-sec sl-filtersec" data-ref="filtersSec">Filters</div>
           <div class="sl-filters" data-ref="filters"></div>
@@ -1944,16 +1970,18 @@ export class SeatPicker {
     // empty → "From $min · Best available". Tap (sheet head) expands the sheet.
     if (this.els.peek) {
       if (count) {
+        // Sheet state is shown by the persistent chevron in the head; the pill is
+        // the action affordance ("Continue"/"Review") — no inline text arrow.
         this.els.peek.innerHTML =
           `<span>${count} ${count === 1 ? 'ticket' : 'tickets'} · ${this.money(total)}</span>` +
-          `<span class="go">${this.hold ? 'Continue →' : 'Review →'}</span>`;
+          `<span class="go">${this.hold ? 'Continue' : 'Review'}</span>`;
       } else {
         const prices = (this.controller.doc?.categories ?? [])
           .map((c) => this.catPrice(c))
           .filter((p): p is number => p != null);
         this.els.peek.innerHTML =
           (prices.length ? `<span>From ${this.money(Math.min(...prices))}</span>` : '<span>Pick your seats</span>') +
-          `<span class="sub">· Best available</span><span class="go">↑</span>`;
+          `<span class="sub">· Best available</span>`;
       }
     }
     // Auto-expand the sheet on the FIRST selection so tray + CTA surface;

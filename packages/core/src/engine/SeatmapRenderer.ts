@@ -46,6 +46,10 @@ const SEAT_LEGIBLE_SCALE = 0.9;
 const CACHE_THRESHOLD = 0.55 * SEAT_LEGIBLE_SCALE;
 /** Show per-seat labels above this ABSOLUTE scale (seat ⌀ ≈ 18px) — chart-size independent. */
 const LABEL_SCALE = 1.0;
+/** Extra screen-px of slack around a seat circle that still counts as a tap on
+ *  it. Gives small seats a finger-friendly hit target (§4 "hit ≥ 24px") so a
+ *  near-miss on mobile still selects the nearest seat instead of doing nothing. */
+const SEAT_TAP_SLOP_PX = 14;
 /**
  * At/below this scale, sections read as solid BLOCKS with row-line hints (seats
  * fully hidden) — the seats.io-style default overview.
@@ -2256,29 +2260,88 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   // ---- interaction ----------------------------------------------------------
 
-  private wireInteraction(): void {
-    this.seatLayer.on('click tap', (e: KonvaEventObject<Event>) => {
-      if (this.moved > 8) return; // it was a pan/pinch, not a tap
-      const id = seatIdOf(e.target);
-      if (!id) return;
-      // In the 3D all-floors overview, tapping a seat enters its deck in 2D
-      // rather than selecting (seat picking happens on the flat floor map).
-      if (this.stacked && this.opts.onDeckTap) {
-        const floorId = this.objectFloor.get(this.seatById.get(id)?.rowId ?? '');
-        if (floorId) { this.opts.onDeckTap(floorId); return; }
-      }
-      // AXS seat-pick gate (§4): seats are only pickable once they're big enough
-      // on screen (≥ LABEL_SCALE ≈ ⌀18px / ~22px pitch). Below that a tap focuses
-      // the seat's section and zooms in rather than risking a mis-pick.
-      if (this.effScale() < LABEL_SCALE && this.sections.length) {
-        const sec = this.seatSection.get(id);
-        if (sec) {
+  /**
+   * The stage scale `focusRegion(id)` would settle at — i.e. the zoom that
+   * frames this section in the current viewport. Used to decide whether
+   * redirecting a seat tap to section-focus would actually zoom in FURTHER, or
+   * whether the section already fills the viewport (small container) so the tap
+   * must fall through and pick.
+   */
+  private sectionFrameScale(id: string): number {
+    const sec = this.sections.find((s) => s.id === id);
+    if (!sec) return this.stage.scaleX();
+    const b = polyBounds(sec.outline);
+    const w = this.stage.width();
+    const h = this.stage.height();
+    const { min, max } = this.zoomBounds();
+    const margin = 1.12;
+    if (b.width <= 0 || b.height <= 0) return this.stage.scaleX();
+    return clamp(Math.min(w / (b.width * margin), h / (b.height * margin)), min, max);
+  }
+
+  /**
+   * Resolve a seat tap: honour the 3D deck-drill and the AXS seat-pick gate,
+   * then toggle. The gate (§4) redirects small on-screen seats to section-focus
+   * to avoid blind mis-picks at overview scales — but ONLY when focusing would
+   * zoom the seat up to a safe size. If we're already focused on the section, or
+   * the section already fills the viewport (a narrow — OR even a wide — container
+   * frames a big section BELOW LABEL_SCALE), redirecting is a no-op that would
+   * leave the seat permanently unpickable (§5 `picking-gate-unreachable`), so we
+   * fall through and PICK. This is the invariant: seats are never unpickable.
+   */
+  private handleSeatTap(id: string): void {
+    // In the 3D all-floors overview, tapping a seat enters its deck in 2D
+    // rather than selecting (seat picking happens on the flat floor map).
+    if (this.stacked && this.opts.onDeckTap) {
+      const floorId = this.objectFloor.get(this.seatById.get(id)?.rowId ?? '');
+      if (floorId) { this.opts.onDeckTap(floorId); return; }
+    }
+    if (this.effScale() < LABEL_SCALE && this.sections.length) {
+      const sec = this.seatSection.get(id);
+      if (sec) {
+        const alreadyFocused = this.focusedSectionId === sec.id;
+        // Would section-focus zoom us in meaningfully (>2%)? If not, the gate has
+        // nowhere left to go — pick instead of deadlocking.
+        const canZoomInFurther = this.sectionFrameScale(sec.id) > this.stage.scaleX() * 1.02;
+        if (!alreadyFocused && canZoomInFurther) {
           if (this.opts.onSectionTap) this.opts.onSectionTap(sec.id);
           else this.focusSection(sec.id);
           return;
         }
       }
-      this.toggleSeat(id);
+    }
+    this.toggleSeat(id);
+  }
+
+  /**
+   * Nearest SELECTABLE seat whose centre is within `slopPx` (screen space) of a
+   * seat circle edge, or null. Enlarges the effective tap target for small seats
+   * so a near-miss on mobile still lands on the intended seat, without ever
+   * hijacking a clean tap on empty space beyond the slop.
+   */
+  private nearestSeatToScreen(screen: { x: number; y: number }, slopPx: number): string | null {
+    const s = this.stage.scaleX() || 1;
+    const reachWorld = this.seatR + slopPx / s; // circle radius + finger slack
+    const world = this.screenToWorld(screen);
+    let best: string | null = null;
+    let bestD = reachWorld;
+    for (const seat of this.seats) {
+      if (!this.selection.has(seat.id) && !this.isSelectable(seat.id)) continue;
+      const d = Math.hypot(seat.x - world.x, seat.y - world.y);
+      if (d < bestD) {
+        bestD = d;
+        best = seat.id;
+      }
+    }
+    return best;
+  }
+
+  private wireInteraction(): void {
+    this.seatLayer.on('click tap', (e: KonvaEventObject<Event>) => {
+      if (this.moved > 8) return; // it was a pan/pinch, not a tap
+      const id = seatIdOf(e.target);
+      if (!id) return;
+      this.handleSeatTap(id);
     });
 
     // Hover (mouse only) via delegated enter/leave on seat circles.
@@ -2315,10 +2378,20 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // Zoomed out, the seat layer is a non-listening cached bitmap and seats
     // are finger-width anyway — a tap zooms into that area instead of
     // attempting a 4px-precision selection (same behaviour as seats.io).
-    this.stage.on('click tap', () => {
-      if (!this.cached || this.moved > 8) return;
+    this.stage.on('click tap', (e: KonvaEventObject<Event>) => {
+      if (this.moved > 8) return;
       const pointer = this.stage.getPointerPosition();
       if (!pointer) return;
+      // Seats are LIVE (not a cached bitmap): the seatLayer handler above owns
+      // direct seat hits. Here we only rescue near-misses — a finger landing just
+      // off a small seat picks the nearest one (mobile hit target, §4 hit ≥ 24px).
+      // A clean tap on empty space beyond the slop still does nothing.
+      if (!this.cached) {
+        if (seatIdOf(e.target)) return; // direct hit already handled
+        const near = this.nearestSeatToScreen(pointer, SEAT_TAP_SLOP_PX);
+        if (near) this.handleSeatTap(near);
+        return;
+      }
       // 3D all-floors overview: tapping a deck enters that floor in 2D. The iso
       // projection is a layer transform, so the flat screenToWorld hit-test below
       // won't work here — resolve the deck via the iso-aware nearest seat instead.
