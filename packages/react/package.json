@@ -1,7 +1,7 @@
 {
   "name": "@seatlayer/react",
-  "version": "0.3.0",
-  "description": "React component for the SeatLayer embed SDK — render an interactive seat picker and hold seats.",
+  "version": "0.4.0",
+  "description": "React component for the SeatLayer embed SDK \u2014 render an interactive seat picker and hold seats.",
   "license": "MIT",
   "homepage": "https://docs.seatlayer.io",
   "repository": {
@@ -23,9 +23,17 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "sideEffects": false,
-  "keywords": ["seating", "seat-map", "seatlayer", "react", "ticketing"],
+  "keywords": [
+    "seating",
+    "seat-map",
+    "seatlayer",
+    "react",
+    "ticketing"
+  ],
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit"

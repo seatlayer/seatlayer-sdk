@@ -35,6 +35,8 @@ export const en: Dict = {
   'map.aria': 'Seating map. Use arrow keys to move between seats, Enter to select.',
   'map.seatsLeft': '{count} LEFT',
   'map.fromPrice': 'FROM {price}',
+  'map.statusHeld': 'On hold',
+  'map.statusTaken': 'Taken',
 
   // buyer picker page (src/pages/PickerPage.tsx)
   'picker.language': 'Language',

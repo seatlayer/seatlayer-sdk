@@ -14,3 +14,4 @@ export type {
   EmbeddedDesignerMessage,
   EmbeddedDesignerEventType,
 } from './EmbeddedDesigner';
+export type { SeatHoverDetails } from '@seatlayer/core';

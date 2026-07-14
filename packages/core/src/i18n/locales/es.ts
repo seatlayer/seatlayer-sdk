@@ -29,6 +29,8 @@ export const es: Dict = {
   // renderer (drawn on the Konva map — shared by the embed SDK)
   'map.aria': 'Mapa de asientos. Usa las flechas para moverte entre asientos, Intro para seleccionar.',
   'map.seatsLeft': '{count} LIBRES',
+  'map.statusHeld': 'En espera',
+  'map.statusTaken': 'Ocupado',
   'map.fromPrice': 'DESDE {price}',
 
   // buyer picker page (src/pages/PickerPage.tsx)

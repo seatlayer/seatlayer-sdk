@@ -46,6 +46,18 @@ export interface PickerSeat {
   tierId?: string;
 }
 
+/**
+ * Rich hover payload for seat tooltips — the PickerSeat plus everything a
+ * buyer-facing popover needs: category label + swatch color, live status and
+ * the chart currency. Emitted by `onSeatHover` (null on hover-out).
+ */
+export interface SeatHoverDetails extends PickerSeat {
+  categoryLabel: string;
+  categoryColor: string;
+  status: SeatStatus;
+  currency: string;
+}
+
 export interface HoldConflict {
   label: string;
   status: string;
@@ -137,6 +149,12 @@ export interface PickerCallbacks extends RendererCallbacks {
   onBook?: (bookingRef: string) => void;
   /** Any live seat-status change arrived (delta or snapshot) — e.g. to recount "N left". */
   onStatusChange?: () => void;
+  /**
+   * Mouse hover moved onto a seat (null on hover-out) — the seat enriched with
+   * category label/color, resolved price and live status, ready for a tooltip.
+   * Fires alongside the raw renderer-level `onHover`.
+   */
+  onSeatHover?: (details: SeatHoverDetails | null) => void;
   /** The server declared the event closed (a 409 event_closed). */
   onSalesClosed?: () => void;
   /**
@@ -304,7 +322,10 @@ export class PickerController {
         this.opts.onDeselect?.(seat);
         this.emitSelectionChange();
       },
-      onHover: this.opts.onHover,
+      onHover: (seat) => {
+        this.opts.onHover?.(seat);
+        if (this.opts.onSeatHover) this.opts.onSeatHover(seat ? this.describeSeat(seat) : null);
+      },
       onFocusSeat: this.opts.onFocusSeat,
       onViewChange: this.opts.onViewChange,
       onGAClick: this.opts.onGAClick,
@@ -781,6 +802,18 @@ export class PickerController {
       tierId: chosen.id,
     };
   }
+  /** Tooltip payload for a hovered seat — see PickerCallbacks.onSeatHover. */
+  private describeSeat(s: ExpandedSeat): SeatHoverDetails {
+    const cat = this._doc?.categories.find((c) => c.key === s.categoryKey);
+    return {
+      ...this.toSeat(s),
+      categoryLabel: cat?.label ?? s.categoryKey,
+      categoryColor: cat?.color ?? '#6e7bff',
+      status: this.renderer?.getStatus(s.id) ?? 'free',
+      currency: this.currency,
+    };
+  }
+
   private priceFor(categoryKey: string): number {
     return this._doc?.categories.find((c) => c.key === categoryKey)?.price ?? 0;
   }

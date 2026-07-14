@@ -29,6 +29,8 @@ export const fr: Dict = {
   // renderer (drawn on the Konva map — shared by the embed SDK)
   'map.aria': 'Plan de salle. Utilisez les flèches pour naviguer entre les sièges, Entrée pour sélectionner.',
   'map.seatsLeft': '{count} LIBRES',
+  'map.statusHeld': 'En attente',
+  'map.statusTaken': 'Pris',
   'map.fromPrice': 'DÈS {price}',
 
   // buyer picker page (src/pages/PickerPage.tsx)

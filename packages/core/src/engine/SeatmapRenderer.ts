@@ -113,8 +113,44 @@ function seatMatchesAccess(seat: ExpandedSeat, filter: AccessibilityType[]): boo
 // Theme fallbacks (dark defaults) — used when doc.theme leaves a slot unset.
 const DEF_SEAT_LABEL = '#0b1220';
 const DEF_SELECTION = '#ffffff';
+/** Selection/hover ring on LIGHT canvases — a white ring vanishes there. */
+const DEF_SELECTION_ON_LIGHT = '#0b1220';
 const DEF_DECOR_FILL = '#232c40';
 const DEF_TEXT = '#8b93a7';
+
+/**
+ * Relative luminance (0..1) of a CSS color — supports #rgb, #rrggbb and
+ * rgb()/rgba(). Returns NaN for anything unparseable (gradients, ''), which
+ * callers must treat as "unknown → assume dark" to preserve dark defaults.
+ */
+function colorLuminance(color: string): number {
+  const s = color.trim();
+  let r = NaN;
+  let g = NaN;
+  let b = NaN;
+  const hex = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(s);
+  if (hex) {
+    const h = hex[1].length === 3 ? hex[1].split('').map((c) => c + c).join('') : hex[1];
+    r = parseInt(h.slice(0, 2), 16);
+    g = parseInt(h.slice(2, 4), 16);
+    b = parseInt(h.slice(4, 6), 16);
+  } else {
+    const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(s);
+    if (rgb) {
+      r = +rgb[1];
+      g = +rgb[2];
+      b = +rgb[3];
+    }
+  }
+  if (Number.isNaN(r)) return NaN;
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
+
+/** Light enough that white UI accents (selection ring) lose contrast. */
+function isLightColor(color: string): boolean {
+  const lum = colorLuminance(color);
+  return !Number.isNaN(lum) && lum > 0.6;
+}
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -273,6 +309,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private statusById = new Map<string, SeatStatus>();
   private catColor = new Map<string, string>();
   private theme: ChartTheme = {};
+  /** Effective selection/hover ring color — resolved per chart in setChart(). */
+  private effSelection: string = DEF_SELECTION;
   /** Colorblind-safe mode (Okabe-Ito hues + hollow booked seats). */
   private colorblind = false;
   /** Category order from the doc — the stable index into the CB palette. */
@@ -480,7 +518,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.seatR = clamp(this.theme.seatScale ?? 1, 0.7, 1.6) * SEAT_RADIUS;
     // Canvas background via container style (reset to '' when theme omits it).
     this.container.style.background = this.theme.background ?? '';
-    this.hoverRing.stroke(this.theme.selectionColor ?? DEF_SELECTION);
+    this.effSelection = this.resolveSelectionColor();
+    this.hoverRing.stroke(this.effSelection);
     this.hoverRing.radius(this.seatR + 2);
 
     this.catColor.clear();
@@ -1116,7 +1155,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
     switch (status) {
       case 'free':
-        c.fill(selected ? lighten(base, 0.28) : base);
+        // Selected: on dark canvases the lightened fill + white ring pops; on
+        // light canvases that same wash reads as *disabled*, so keep the full
+        // category fill and let the dark contrast ring carry the state.
+        c.fill(
+          selected && this.effSelection === DEF_SELECTION ? lighten(base, 0.28) : base,
+        );
         break;
       case 'held':
         c.fill(HELD_FILL);
@@ -1852,6 +1896,32 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.overlayLayer.batchDraw();
   }
 
+  /**
+   * Selection/hover ring color. An explicit theme.selectionColor always wins;
+   * otherwise auto-contrast against the effective canvas background — the
+   * designer renders on dark (white ring reads), but light-themed hosts (e.g.
+   * the DesiPass buyer picker on cream) made the white ring invisible and
+   * selected seats looked *disabled*. theme.background is checked first, then
+   * the container's computed CSS background (walking up past transparent
+   * ancestors). Unknown/unparseable backgrounds keep the dark default.
+   */
+  private resolveSelectionColor(): string {
+    if (this.theme.selectionColor) return this.theme.selectionColor;
+    let bg = this.theme.background ?? '';
+    if (!bg && typeof getComputedStyle === 'function') {
+      let el: HTMLElement | null = this.container;
+      while (el) {
+        const c = getComputedStyle(el).backgroundColor;
+        if (c && c !== 'transparent' && !/^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0\s*\)$/.test(c)) {
+          bg = c;
+          break;
+        }
+        el = el.parentElement;
+      }
+    }
+    return isLightColor(bg) ? DEF_SELECTION_ON_LIGHT : DEF_SELECTION;
+  }
+
   private setSelected(id: string, on: boolean, silent = false): void {
     const c = this.circleById.get(id);
     if (on) {
@@ -1861,7 +1931,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         x: seat.x,
         y: seat.y,
         radius: this.seatR,
-        stroke: this.theme.selectionColor ?? DEF_SELECTION,
+        stroke: this.effSelection,
         strokeWidth: 3,
         listening: false,
         perfectDrawEnabled: false,
