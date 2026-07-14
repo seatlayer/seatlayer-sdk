@@ -316,6 +316,19 @@ export class SeatPicker {
   private prevFocus: Element | null = null;
   private escHandler: ((e: KeyboardEvent) => void) | null = null;
 
+  /** Set by open(): closes the modal (scroll restore + destroy + onClose). */
+  private closeModal: (() => void) | null = null;
+
+  /**
+   * Close the picker. In modal mode (SeatPicker.open()) this dismisses the
+   * modal exactly like ESC/scrim/✕ — restores page scroll and fires onClose.
+   * For inline mounts it simply destroys the widget.
+   */
+  close(): void {
+    if (this.closeModal) this.closeModal();
+    else this.destroy();
+  }
+
   /** Mount the full picker as a document-level modal. Resolves after render. */
   static async open(options: Omit<SeatPickerOptions, 'container'>): Promise<SeatPicker> {
     ensureStyle();
@@ -336,6 +349,7 @@ export class SeatPicker {
       picker.destroy();
       options.onClose?.();
     };
+    picker.closeModal = close;
     scrim.addEventListener('mousedown', (e) => {
       if (e.target === scrim) close();
     });
