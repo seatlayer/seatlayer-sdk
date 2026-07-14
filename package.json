@@ -13,7 +13,8 @@
     "release:prep": "pnpm sync:core && pnpm check:sync && pnpm -r build && pnpm -r typecheck"
   },
   "devDependencies": {
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vite": "^8.1.4"
   },
   "packageManager": "pnpm@11.10.0"
 }

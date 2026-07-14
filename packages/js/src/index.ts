@@ -15,3 +15,5 @@ export type {
   EmbeddedDesignerEventType,
 } from './EmbeddedDesigner';
 export type { SeatHoverDetails } from '@seatlayer/core';
+export { SeatPicker } from './SeatPicker';
+export type { SeatPickerOptions, SeatPickerTheme } from './SeatPicker';

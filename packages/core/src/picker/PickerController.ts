@@ -423,6 +423,20 @@ export class PickerController {
   }
 
   /** Public GA inventory derived from the live synthetic-unit status stream. */
+  /**
+   * Live seats-left per category key (status 'free' right now). Recompute on
+   * onStatusChange — this is what a price panel's "N left" counters read.
+   */
+  categoryAvailability(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [id, s] of this.seatById) {
+      if ((this.getStatus(id) ?? 'free') === 'free') {
+        out[s.categoryKey] = (out[s.categoryKey] ?? 0) + 1;
+      }
+    }
+    return out;
+  }
+
   getGAAreas(): { id: string; label: string; capacity: number; available: number; categoryKey: string; price: number; currency: string; tiers?: CategoryTier[] }[] {
     const doc = this.visibleDoc();
     if (!doc) return [];
@@ -1036,7 +1050,9 @@ export class PickerController {
             r.getStatus(id) === 'free' &&
             !this.hold_?.labels.includes(ch.label)
           ) {
-            r.flashSeat(id);
+            // Pulse color mirrors the manager board's status language:
+            // amber for a hold landing, red for a booking.
+            r.flashSeat(id, next === 'held' ? '#f4b740' : '#f43f5e');
           }
           r.setStatus([id], next);
         }

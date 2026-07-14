@@ -13,3 +13,5 @@ export type {
   HoldLineItem,
 } from './SeatingChart';
 export type { EmbeddedDesignerProps, EmbeddedDesignerHandle, EmbeddedDesignerMessage } from './EmbeddedDesigner';
+export { SeatPicker } from './SeatPicker';
+export type { SeatPickerHandle, SeatPickerProps, SeatPickerOptions, SeatPickerTheme } from './SeatPicker';
