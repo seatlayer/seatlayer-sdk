@@ -487,6 +487,18 @@ export interface ISeatmapRenderer {
   setChart(doc: ChartDoc, opts?: { floorId?: string }): void;
   /** Bulk status update; re-renders affected seats only. */
   setStatus(seatIds: string[], status: SeatStatus): void;
+  /**
+   * SYNCHRONOUS repaint that bypasses requestAnimationFrame. Konva's batchDraw()
+   * (used by setStatus and friends) schedules the actual paint on the next rAF
+   * tick, which Chrome throttles/pauses on hidden, backgrounded, or occluded
+   * tabs — so a seat-status delta updates the scene graph but the pixels never
+   * change until the tab is foregrounded again. forceDraw() paints the affected
+   * layers immediately (Layer.draw() is synchronous) and flushes any pending
+   * cache-debounce, so a caller (visibilitychange catch-up, or an opted-in
+   * always-live board) can guarantee the canvas reflects current state
+   * regardless of tab visibility. No-op difference in the foreground.
+   */
+  forceDraw(): void;
   getStatus(seatId: string): SeatStatus;
   getSelection(): ExpandedSeat[];
   clearSelection(): void;

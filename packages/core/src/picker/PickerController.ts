@@ -188,6 +188,18 @@ export interface PickerOptions extends PickerCallbacks {
   flashOnLiveChange?: boolean;
   /** Start in colorblind-safe rendering (Okabe-Ito hues + hollow booked seats). */
   colorblindSafe?: boolean;
+  /**
+   * Keep painting seat-status deltas even while the tab is hidden/backgrounded.
+   *
+   * Default FALSE — the buyer widget stays efficient: it lets rAF stay paused
+   * while hidden and does a single synchronous catch-up repaint on regain (the
+   * visibilitychange handler resnapshots + forceDraw()s). Set TRUE only for an
+   * always-live surface — the future organizer control-room board — where a
+   * backgrounded monitor must keep repainting; then each delta calls
+   * renderer.forceDraw() when the tab is hidden. Purely a paint hint; enforcement
+   * and the WS protocol are identical either way.
+   */
+  keepLiveWhileHidden?: boolean;
 }
 
 /** Read `status`/`conflicts`/`reason` off any thrown error without importing a specific ApiError. */
@@ -231,6 +243,10 @@ export class PickerController {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private closed = false;
+  /** Bound visibilitychange listener (buyer catch-up on tab regain). Kept on the
+   *  instance so destroy() can detach it; null when not attached (guards double
+   *  mounts / non-DOM environments). */
+  private onVisibilityChange: (() => void) | null = null;
 
   // hold state
   private hold_: HoldInfo | null = null;
@@ -385,6 +401,7 @@ export class PickerController {
     this.closedSections = new Set(closedIds);
     if (closedIds.length) renderer.setClosedSections?.(closedIds);
     if (seats) this.applySeatsMap(seats);
+    this.attachVisibilityListener();
     this.connect();
     return {
       doc: res.doc,
@@ -859,6 +876,7 @@ export class PickerController {
 
   destroy(): void {
     this.closed = true;
+    this.detachVisibilityListener();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -1081,6 +1099,40 @@ export class PickerController {
 
   // ---- realtime socket ------------------------------------------------------
 
+  /**
+   * Buyer catch-up on tab regain. While a tab is hidden Chrome pauses rAF, so
+   * seat-status deltas that arrived over the WS mutated the scene graph but the
+   * canvas colors never repainted. When the tab becomes visible again we (1)
+   * resnapshot to pull authoritative state for anything the socket may have
+   * missed while backgrounded, then (2) forceDraw() a synchronous repaint so the
+   * seat colors are correct immediately rather than on the next incidental draw.
+   *
+   * Attached once per mount; guarded against double-attach and non-DOM
+   * environments; detached in destroy() (no leaks).
+   */
+  private attachVisibilityListener(): void {
+    if (this.onVisibilityChange) return; // already attached (guard double mount)
+    if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+    const handler = (): void => {
+      if (this.closed) return;
+      if (document.visibilityState !== 'visible') return;
+      // Re-fetch authoritative state, then paint it synchronously.
+      void this.resnapshot().then(() => {
+        if (!this.closed) this.renderer?.forceDraw();
+      });
+    };
+    this.onVisibilityChange = handler;
+    document.addEventListener('visibilitychange', handler);
+  }
+
+  private detachVisibilityListener(): void {
+    if (!this.onVisibilityChange) return;
+    if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    }
+    this.onVisibilityChange = null;
+  }
+
   private connect(): void {
     if (this.closed) return;
     let ws: WebSocket;
@@ -1140,6 +1192,19 @@ export class PickerController {
             r.flashSeat(id, next === 'held' ? '#f4b740' : '#f43f5e');
           }
           r.setStatus([id], next);
+        }
+        // Stay-live-while-hidden (opt-in, default OFF). setStatus paints via
+        // batchDraw (rAF), which Chrome pauses on a hidden tab — so an always-on
+        // board (the future organizer control room) would freeze while
+        // backgrounded. When enabled, force a synchronous repaint so a hidden
+        // board keeps painting. The buyer widget leaves this off and relies on
+        // the visibilitychange catch-up instead.
+        if (
+          this.opts.keepLiveWhileHidden &&
+          typeof document !== 'undefined' &&
+          document.visibilityState === 'hidden'
+        ) {
+          r.forceDraw();
         }
         this.clearBookedHoldIfSettled();
         this.opts.onStatusChange?.();

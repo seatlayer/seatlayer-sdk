@@ -2694,7 +2694,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     }
   }
 
-  private cacheSeatLayer(): void {
+  /** Rebuild the seat-layer bitmap synchronously (no paint). Shared by the
+   *  debounced cacheSeatLayer() and the synchronous forceDraw() catch-up. */
+  private rebuildSeatCache(): void {
     // Cache at ~screen resolution: bitmap px ≈ on-screen px, so a huge chart in
     // chart-units doesn't blow up into a gigapixel canvas when zoomed out.
     const pr = clamp(this.stage.scaleX() * this.dpr, 0.15, 2);
@@ -2702,7 +2704,38 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.seatLayer.cache({ pixelRatio: pr });
     this.seatLayer.listening(false);
     this.cached = true;
+  }
+
+  private cacheSeatLayer(): void {
+    this.rebuildSeatCache();
     this.seatLayer.batchDraw();
+  }
+
+  /**
+   * SYNCHRONOUS repaint that bypasses requestAnimationFrame — see the
+   * ISeatmapRenderer.forceDraw() contract. Chrome pauses rAF (and therefore
+   * Konva's batchDraw) on hidden/backgrounded/occluded tabs, so seat-status
+   * deltas applied via setStatus() mutate the scene graph but never reach the
+   * canvas until the tab is foregrounded. This flushes the cache-debounce and
+   * paints every layer setStatus() can touch, immediately.
+   *
+   * Additive: the foreground path never calls this, so foreground behaviour is
+   * byte-identical.
+   */
+  forceDraw(): void {
+    // Flush any pending cache-debounce (setStatus coalesces bursts behind a
+    // 150ms setTimeout) so a returning tab isn't left showing a stale bitmap.
+    if (this.recacheTimer) {
+      clearTimeout(this.recacheTimer);
+      this.recacheTimer = null;
+      // Fold the coalesced deltas into the bitmap now, synchronously.
+      this.rebuildSeatCache();
+    }
+    // Synchronous paint of every layer setStatus() may repaint. Layer.draw()
+    // renders on the calling thread, unlike batchDraw()'s rAF schedule.
+    this.bgLayer.draw();
+    this.seatLayer.draw();
+    this.overlayLayer.draw();
   }
 
   private updateLabels(): void {
