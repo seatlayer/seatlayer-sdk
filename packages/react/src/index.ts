@@ -15,3 +15,5 @@ export type {
 export type { EmbeddedDesignerProps, EmbeddedDesignerHandle, EmbeddedDesignerMessage } from './EmbeddedDesigner';
 export { SeatPicker } from './SeatPicker';
 export type { SeatPickerHandle, SeatPickerProps, SeatPickerOptions, SeatPickerTheme } from './SeatPicker';
+// The framework-agnostic widget class — for the one-call modal (SeatPickerWidget.open()).
+export { SeatPicker as SeatPickerWidget } from '@seatlayer/js';

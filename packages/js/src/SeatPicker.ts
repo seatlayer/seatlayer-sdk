@@ -491,6 +491,19 @@ export class SeatPicker {
     }
     this.els.boot.remove();
 
+    if (info.mode === 'test') {
+      const ribbon = document.createElement('div');
+      ribbon.textContent = t('picker.testMode');
+      ribbon.setAttribute('aria-label', t('picker.testMode'));
+      ribbon.style.cssText =
+        'position:absolute;top:18px;right:-34px;z-index:6;transform:rotate(45deg);' +
+        'width:140px;text-align:center;padding:4px 0;background:#f4b740;color:#1a1200;' +
+        'font:800 10.5px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:.12em;' +
+        'box-shadow:0 2px 8px rgba(0,0,0,.25);pointer-events:none;';
+      this.els.map.style.overflow = 'hidden';
+      this.els.map.appendChild(ribbon);
+    }
+
     // theme: defaults ← org chart theme ← host overrides
     const chartTheme = this.controller.doc?.theme;
     Object.entries(resolveTokens(chartTheme, this.opts.theme)).forEach(([k, v]) => root.style.setProperty(k, v));
