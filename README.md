@@ -35,6 +35,10 @@ const chart = new SeatingChart({ container: '#chart', event: 'ev_9f3a' });
 await chart.render();
 ```
 
+For the **full buyer experience** (branded header, price panel, tray, hold
+countdown, extend-hold, booked confirmation) use `SeatPicker` — inline, modal, or
+a plain iframe. Copy-paste recipes: **[docs/embedding.md](docs/embedding.md)**.
+
 ## Develop
 
 ```bash

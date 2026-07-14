@@ -34,11 +34,49 @@ import {
   type SeatHoverDetails,
   type SectionSummary,
 } from '@seatlayer/core';
-import { PubApi, type HoldResult } from './api';
+import { PubApi, type HoldLineItem, type HoldResult } from './api';
 import type { GAAreaAvailability } from './SeatingChart';
 
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
 const DEFAULT_MAX_SELECTION = 10;
+/** Show the "Need more time?" prompt when the hold has this long (ms) left. */
+const EXTEND_PROMPT_MS = 60_000;
+
+/**
+ * Stable checkout-handoff contract (P4). Passed as the THIRD argument to
+ * `onCheckout(hold, seats, handoff)` — additive, so the legacy `(hold, seats)`
+ * shape used by DesiPass web-v2 (SDK 0.7.3+) is untouched. This is the object to
+ * build your order against: it is self-contained (holdId, expiry, currency, and
+ * per-line tier + price) and never changes shape across minor releases.
+ */
+export interface CheckoutLineItem {
+  /** Seat label (or GA synthetic-unit label). */
+  label: string;
+  /** Chart object id (row/booth/GA area) the unit belongs to. */
+  objectId: string;
+  objectType: 'seat' | 'booth' | 'ga';
+  categoryKey: string;
+  /** Chosen ticket tier id (Adult/Child/…), or null when the category has no tiers. */
+  tierId: string | null;
+  /** Unit price in MAJOR currency units (e.g. 45 = 45.00). Server-authoritative. */
+  unitPrice: number;
+  /** ISO-4217, resolved server-side (per-event override → org → USD). */
+  currency: string;
+  quantity: number;
+}
+
+export interface CheckoutHandoff {
+  /** Server hold id — pass this to YOUR book call. */
+  holdId: string;
+  /** Epoch ms the hold expires (after any extensions). */
+  expiresAt: number;
+  /** ISO-4217 currency for the whole order. */
+  currency: string;
+  /** Priced line items (tier + unit price + currency), server-authoritative. */
+  lineItems: CheckoutLineItem[];
+  /** Convenience total in major units (Σ unitPrice × quantity). */
+  total: number;
+}
 
 /** Host theme overrides — any subset; unset keys fall back to the org's chart theme, then defaults. */
 export interface SeatPickerTheme {
@@ -102,9 +140,18 @@ export interface SeatPickerOptions {
   seatView?: boolean;
   /**
    * Buyer pressed the CTA and the hold succeeded — hand off to YOUR checkout.
-   * The hold carries holdId, expiresAt, seat labels and priced line items.
+   * `hold` and `seats` are the legacy args (unchanged since 0.6). `handoff` (P4)
+   * is the stable, self-contained {@link CheckoutHandoff} to build your order
+   * against — holdId, expiry, currency and priced line items. Prefer it.
    */
-  onCheckout?: (hold: HoldResult, seats: PickerSeat[]) => void;
+  onCheckout?: (hold: HoldResult, seats: PickerSeat[], handoff: CheckoutHandoff) => void;
+  /**
+   * The held seats were BOOKED (P4) — your server completed payment and the
+   * booking landed over the realtime channel while the widget was still open.
+   * The widget shows a success state; use this to advance your own UI (receipt,
+   * redirect). Fires once per hold.
+   */
+  onBooked?: (handoff: CheckoutHandoff) => void;
   /** Selection changed (tap or best-available). */
   onSelectionChange?: (seats: PickerSeat[]) => void;
   /** The open hold expired server-side (widget already reset itself). */
@@ -228,6 +275,30 @@ const CSS = `
 .sl-boot-title{font-weight:800;font-size:15px;color:var(--sl-text)}
 .sl-boot-retry{margin-top:4px;padding:9px 20px;border-radius:var(--sl-r-sm);background:var(--sl-accent);
   color:var(--sl-accent-ink);font-weight:700;font-size:13px}
+
+/* "Need more time?" extend prompt (bottom-center over the map, above the toast) */
+.sl-extend{position:absolute;left:50%;bottom:16px;transform:translateX(-50%) translateY(6px);z-index:9;
+  display:none;align-items:center;gap:12px;max-width:92%;background:var(--sl-surface);border:1px solid var(--sl-line);
+  color:var(--sl-text);border-radius:14px;padding:10px 12px 10px 16px;box-shadow:0 18px 50px -18px rgba(0,0,0,.6);
+  opacity:0;transition:opacity .2s,transform .2s}
+.sl-extend.on{display:flex;opacity:1;transform:translateX(-50%) translateY(0)}
+.sl-extend-txt{font-size:12.5px;font-weight:600;line-height:1.35}
+.sl-extend-txt b{font-variant-numeric:tabular-nums}
+.sl-extend-btn{flex:none;padding:8px 14px;border-radius:999px;font-weight:800;font-size:12.5px;
+  background:var(--sl-accent);color:var(--sl-accent-ink);transition:filter .15s,opacity .15s}
+.sl-extend-btn:hover{filter:brightness(1.08)}
+.sl-extend-btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* booked confirmation overlay (covers the widget once the held seats are sold) */
+.sl-booked{position:absolute;inset:0;z-index:11;display:none;flex-direction:column;align-items:center;
+  justify-content:center;gap:12px;text-align:center;padding:28px;background:var(--sl-bg)}
+.sl-booked.on{display:flex}
+.sl-booked-badge{width:60px;height:60px;border-radius:999px;display:flex;align-items:center;justify-content:center;
+  background:var(--sl-accent);color:var(--sl-accent-ink)}
+.sl-booked-badge svg{width:30px;height:30px;stroke:currentColor;stroke-width:2.6;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.sl-booked-title{font-weight:800;font-size:19px;color:var(--sl-text)}
+.sl-booked-sub{font-size:13px;color:var(--sl-muted);line-height:1.5;max-width:320px}
+.sl-booked-seats{font-weight:700;color:var(--sl-text)}
 
 /* a11y filter chips (over the map, top-left) */
 .sl-chips{position:absolute;top:12px;left:12px;z-index:5;display:flex;gap:6px;flex-wrap:wrap;max-width:70%}
@@ -384,6 +455,14 @@ export class SeatPicker {
   // state
   private currency = 'USD';
   private hold: HoldResult | null = null;
+  /** Latest server expiry for the open hold (moves on extend). */
+  private holdExpiresAt = 0;
+  /** True once we handed off to checkout — arms booked-confirmation detection. */
+  private handedOff = false;
+  /** Guards single onBooked + single success overlay per hold. */
+  private bookedShown = false;
+  private extendEl: HTMLDivElement | null = null;
+  private bookedEl: HTMLDivElement | null = null;
   private gaQty = new Map<string, number>();
   private tipEl: HTMLDivElement | null = null;
   private tipPos = { x: 0, y: 0 };
@@ -471,9 +550,12 @@ export class SeatPicker {
       onStatusChange: () => {
         this.syncPrices();
         this.evictTakenSelections();
+        this.detectBooked();
       },
       onHoldExpired: () => {
         this.hold = null;
+        this.handedOff = false;
+        this.bookedShown = false;
         this.stopHoldTimer();
         this.gaQty.clear();
         this.toast(t('picker.holdExpired', undefined) || 'Your hold expired — seats released. Pick again.');
@@ -683,9 +765,45 @@ export class SeatPicker {
     // Appended AFTER controller.render() — render() wipes the map host's children.
     this.buildArenaChrome();
 
+    // "Need more time?" prompt (over the map) + booked-confirmation overlay (over
+    // the whole widget). Both appended post-render for the same wipe reason.
+    this.buildExtendPrompt();
+    this.buildBookedOverlay();
+
     this.syncPrices();
     this.syncTray();
     return this;
+  }
+
+  /** The "Need more time?" prompt shown in the hold's final EXTEND_PROMPT_MS. */
+  private buildExtendPrompt(): void {
+    const el = document.createElement('div');
+    el.className = 'sl-extend';
+    el.setAttribute('role', 'status');
+    el.innerHTML =
+      `<span class="sl-extend-txt" data-ref="extendTxt"></span>` +
+      `<button type="button" class="sl-extend-btn" data-ref="extendBtn"></button>`;
+    this.els.map.appendChild(el);
+    this.extendEl = el;
+    this.els.extendTxt = el.querySelector('[data-ref="extendTxt"]') as HTMLElement;
+    this.els.extendBtn = el.querySelector('[data-ref="extendBtn"]') as HTMLElement;
+    this.els.extendBtn.textContent = 'Add time';
+    this.els.extendBtn.addEventListener('click', () => void this.handleExtend());
+  }
+
+  /** Success overlay + onBooked fire when the held seats settle to booked. */
+  private buildBookedOverlay(): void {
+    const el = document.createElement('div');
+    el.className = 'sl-booked';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.innerHTML =
+      `<div class="sl-booked-badge"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></div>` +
+      `<div class="sl-booked-title">You're all set</div>` +
+      `<div class="sl-booked-sub" data-ref="bookedSub"></div>`;
+    this.root!.appendChild(el);
+    this.bookedEl = el;
+    this.els.bookedSub = el.querySelector('[data-ref="bookedSub"]') as HTMLElement;
   }
 
   // ---- arena / multi-floor chrome -------------------------------------------
@@ -1210,7 +1328,9 @@ export class SeatPicker {
     // Held seats are NOT in the client selection (the server holds them), so
     // pass the hold's own seat list to the host.
     if (this.hold && !this.controller.getSelection().some((s) => !(this.hold!.items ?? []).some((i) => i.label === s.label))) {
-      this.opts.onCheckout?.(this.hold, this.hold.seats ?? this.controller.getSelection());
+      const seats = this.hold.seats ?? this.controller.getSelection();
+      this.handedOff = true;
+      this.opts.onCheckout?.(this.hold, seats, this.buildHandoff(this.hold));
       return;
     }
     cta.disabled = true;
@@ -1235,8 +1355,9 @@ export class SeatPicker {
         return;
       }
       this.hold = hold;
+      this.handedOff = true;
       this.startHoldTimer(hold.expiresAt);
-      this.opts.onCheckout?.(hold, chosenSeats.length ? chosenSeats : hold.seats ?? []);
+      this.opts.onCheckout?.(hold, chosenSeats.length ? chosenSeats : hold.seats ?? [], this.buildHandoff(hold));
     } catch (err) {
       this.opts.onError?.(err);
       this.toast('One or more seats were just taken. Please pick again.');
@@ -1247,13 +1368,16 @@ export class SeatPicker {
 
   private startHoldTimer(expiresAt: number): void {
     this.stopHoldTimer();
+    this.holdExpiresAt = expiresAt;
     const pill = this.els.hold;
     const tick = (): void => {
-      const ms = Math.max(0, expiresAt - Date.now());
+      const ms = Math.max(0, this.holdExpiresAt - Date.now());
       const m = Math.floor(ms / 60000);
       const s = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
       pill.textContent = `Held ${m}:${s}`;
       pill.classList.add('on');
+      // Offer an extension in the final stretch (but not once it's booked/expired).
+      this.setExtendPrompt(ms > 0 && ms <= EXTEND_PROMPT_MS, ms);
       if (ms <= 0) this.stopHoldTimer();
     };
     tick();
@@ -1264,6 +1388,91 @@ export class SeatPicker {
     if (this.holdTimer) clearInterval(this.holdTimer);
     this.holdTimer = null;
     this.els.hold?.classList.remove('on');
+    this.setExtendPrompt(false, 0);
+  }
+
+  /** Show/refresh (or hide) the "Need more time?" prompt with the live seconds left. */
+  private setExtendPrompt(show: boolean, ms: number): void {
+    if (!this.extendEl) return;
+    if (show && this.controller.currentHold() && !this.bookedShown) {
+      const secs = Math.ceil(ms / 1000);
+      this.els.extendTxt.innerHTML = `Your seats are held for <b>0:${String(secs).padStart(2, '0')}</b>. Need more time?`;
+      this.extendEl.classList.add('on');
+    } else {
+      this.extendEl.classList.remove('on');
+    }
+  }
+
+  private async handleExtend(): Promise<void> {
+    const btn = this.els.extendBtn as HTMLButtonElement;
+    btn.disabled = true;
+    const prev = btn.textContent;
+    btn.textContent = 'Adding…';
+    try {
+      const h = await this.controller.extendHold(this.opts.holdTtlMs);
+      if (h) {
+        // The controller re-armed its own expiry; sync ours + the pill, hide prompt.
+        this.hold = { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items };
+        this.holdExpiresAt = h.expiresAt;
+        this.extendEl?.classList.remove('on');
+        this.toast('More time added — your seats are still held.');
+      } else {
+        this.toast("Couldn't add more time — please head to checkout now.");
+      }
+    } catch (err) {
+      this.opts.onError?.(err);
+      this.toast("Couldn't add more time — please head to checkout now.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
+  }
+
+  /**
+   * Fire the booked-confirmation state once the buyer's held seats settle to
+   * booked. The controller clears its own hold the moment every held label reads
+   * 'booked' over the realtime channel (clearBookedHoldIfSettled), and this runs
+   * on the same onStatusChange — so `currentHold() === null` while we still hold
+   * a checkout handoff means "sold", not expired (expiry clears via onHoldExpired
+   * on a different path, which nulls this.hold first).
+   */
+  private detectBooked(): void {
+    if (this.bookedShown || !this.handedOff || !this.hold) return;
+    if (this.controller.currentHold() !== null) return; // hold still open
+    this.showBooked();
+  }
+
+  private showBooked(): void {
+    if (this.bookedShown || !this.hold) return;
+    this.bookedShown = true;
+    const handoff = this.buildHandoff(this.hold);
+    this.stopHoldTimer();
+    const n = handoff.lineItems.reduce((sum, i) => sum + i.quantity, 0);
+    if (this.els.bookedSub) {
+      this.els.bookedSub.innerHTML =
+        `<span class="sl-booked-seats">${n} ${n === 1 ? 'ticket' : 'tickets'}</span> confirmed. ` +
+        `A confirmation is on its way.`;
+    }
+    this.bookedEl?.classList.add('on');
+    this.opts.onBooked?.(handoff);
+  }
+
+  /** Assemble the stable {@link CheckoutHandoff} from a hold's server line items. */
+  private buildHandoff(hold: HoldResult): CheckoutHandoff {
+    const items = hold.items ?? [];
+    const lineItems: CheckoutLineItem[] = items.map((it: HoldLineItem) => ({
+      label: it.label,
+      objectId: it.objectId,
+      objectType: it.objectType,
+      categoryKey: it.categoryKey,
+      tierId: it.tierId,
+      unitPrice: it.unitPrice,
+      currency: it.currency ?? this.currency,
+      quantity: it.quantity ?? 1,
+    }));
+    const currency = lineItems[0]?.currency ?? this.currency;
+    const total = lineItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
+    return { holdId: hold.holdId, expiresAt: hold.expiresAt, currency, lineItems, total };
   }
 
   private toast(msg: string): void {
@@ -1322,6 +1531,8 @@ export class SeatPicker {
       const h = await this.controller.bestAvailable(qty, categoryKey);
       if (h) {
         this.hold = { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items };
+        this.handedOff = false;
+        this.bookedShown = false;
         this.startHoldTimer(h.expiresAt);
         this.syncTray();
         return this.hold;
@@ -1336,6 +1547,8 @@ export class SeatPicker {
   async release(): Promise<void> {
     await this.controller.release();
     this.hold = null;
+    this.handedOff = false;
+    this.bookedShown = false;
     this.stopHoldTimer();
     this.gaQty.clear();
     this.syncTray();

@@ -135,6 +135,8 @@ export interface PickerTransport {
   release(key: string, labels: string[], holdId: string): Promise<unknown>;
   /** Optional — the SDK omits booking (it hands the holdId to the host page). */
   book?(key: string, labels: string[], holdId: string, bookingRef: string): Promise<unknown>;
+  /** Optional (P4) — push an active hold's expiry out ("need more time?"). */
+  extend?(key: string, holdId: string, ttlMs?: number): Promise<{ holdId: string; expiresAt: number; extends?: number }>;
   socketUrl(key: string): string;
 }
 
@@ -419,6 +421,28 @@ export class PickerController {
     } catch (err) {
       this.handle409Conflicts(err);
       throw err;
+    }
+  }
+
+  /**
+   * P4 "need more time?": extend the OPEN hold's server-side expiry and re-arm
+   * the client expiry timer to match (via setHold), so the controller doesn't
+   * fire a false expiry and start polling. Returns the new hold, or null if
+   * there's no open hold or the transport can't extend / the server refused
+   * (hold gone, expired, or at its renewal cap). Never throws for the refusal
+   * case — the caller decides the copy.
+   */
+  async extendHold(ttlMs?: number): Promise<HoldInfo | null> {
+    const current = this.hold_;
+    if (!current || !this.api.extend) return null;
+    try {
+      const result = await this.api.extend(this.key, current.holdId, ttlMs);
+      if (this.hold_?.holdId !== current.holdId) return this.hold_; // superseded meanwhile
+      // Keep the same labels/items — only the expiry moved. setHold re-arms the timer.
+      this.setHold({ holdId: current.holdId, labels: current.labels, expiresAt: result.expiresAt, items: current.items });
+      return this.hold_;
+    } catch {
+      return null;
     }
   }
 

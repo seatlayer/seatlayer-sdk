@@ -13,7 +13,7 @@ import {
   type HoldResult,
 } from '@seatlayer/js';
 
-export type { SeatPickerOptions, SeatPickerTheme } from '@seatlayer/js';
+export type { SeatPickerOptions, SeatPickerTheme, CheckoutHandoff, CheckoutLineItem } from '@seatlayer/js';
 
 /** Imperative handle for the full-experience picker widget. */
 export interface SeatPickerHandle {
@@ -66,7 +66,8 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         seatView,
         theme: callbacks.current.theme,
         messages: callbacks.current.messages,
-        onCheckout: (hold, seats) => callbacks.current.onCheckout?.(hold, seats),
+        onCheckout: (hold, seats, handoff) => callbacks.current.onCheckout?.(hold, seats, handoff),
+        onBooked: (handoff) => callbacks.current.onBooked?.(handoff),
         onSelectionChange: (seats) => callbacks.current.onSelectionChange?.(seats),
         onHoldExpired: () => callbacks.current.onHoldExpired?.(),
         onError: (err) => callbacks.current.onError?.(err),

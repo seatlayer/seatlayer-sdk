@@ -129,6 +129,15 @@ export class PubApi {
     });
   }
 
+  /** P4 "need more time?": push an active hold's expiry out. Throws ApiError 409
+   *  (reason: expired | extend_limit | not_found | not_active) if it can't. */
+  extend(key: string, holdId: string, ttlMs?: number): Promise<{ holdId: string; expiresAt: number; extends: number }> {
+    return request(this.base, `/pub/events/${encodeURIComponent(key)}/extend`, {
+      method: 'POST',
+      body: { holdId, ...(ttlMs ? { ttlMs } : {}) },
+    });
+  }
+
   socketUrl(key: string): string {
     const wsBase = this.base.replace(/^http/, 'ws');
     return `${wsBase}/pub/events/${encodeURIComponent(key)}/subscribe`;
