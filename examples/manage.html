@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>SeatManager dev harness</title>
+<style>
+  body{margin:0;font-family:sans-serif;background:#07080d;color:#eef1f7;padding:16px;display:flex;flex-direction:column;gap:14px}
+  h1{font-size:15px;margin:0;font-weight:700;color:#8b93a7}
+  .board{height:760px;border-radius:16px;overflow:hidden;box-shadow:0 24px 70px -24px rgba(0,0,0,.7)}
+  .buyer-wrap{display:flex;gap:14px;align-items:flex-start}
+  .buyer{height:560px;width:460px;border-radius:16px;overflow:hidden;box-shadow:0 24px 70px -24px rgba(0,0,0,.7)}
+  .hint{font-size:12px;color:#8b93a7;line-height:1.6;max-width:420px}
+  code{color:#f4b740}
+</style>
+</head><body>
+  <h1>SeatManager — organizer live board + block (M1)</h1>
+  <div id="board" class="board"></div>
+  <div class="buyer-wrap">
+    <div id="buyer" class="buyer"></div>
+    <p class="hint">
+      Left/top: the organizer <b>SeatManager</b>. Right: a live <b>buyer picker</b> on the same event
+      (a second client). Hold/book in the buyer → watch the board flash + tallies tick. Marquee-drag a
+      zone in the board's <b>Block</b> mode → the buyer's seats go unavailable (realtime).<br><br>
+      Query params: <code>?event=west-end-p3</code> · <code>?token=sk_…</code> (writes) ·
+      <code>?api=https://seatmap-api.paiteq.in</code>
+    </p>
+  </div>
+  <script type="module" src="./manage.ts"></script>
+</body></html>

@@ -458,6 +458,13 @@ export interface RendererCallbacks {
   onDeckTap?: (floorId: string) => void;
   /** Fired after any pan/zoom/resize settles — re-anchor screen-space overlays. */
   onViewChange?: () => void;
+  /**
+   * Organizer manage-mode only (`manageMode` + `marqueeSelect`): fired on
+   * pointer-UP after a rubber-band marquee drag, or a ⌘A/Escape bulk shortcut,
+   * with the FULL current selection (selectable seats only). The host toolbar
+   * reads this to drive bulk block/unblock. Never fires when manageMode is off.
+   */
+  onMarquee?: (seats: ExpandedSeat[]) => void;
 }
 
 /** Far-zoom level-of-detail rung: whole zones → section blocks → individual seats. */
@@ -479,6 +486,21 @@ export interface RendererOptions extends RendererCallbacks {
   /** ISO 4217 currency for on-map prices ("FROM …"); defaults to money.DEFAULT_CURRENCY.
    *  Locale for grouping/symbol placement comes from the active i18n locale. */
   currency?: string;
+  /**
+   * Organizer manage surface (SDK SeatManager). Opt-in — enables the manage-mode
+   * gestures (marquee, ⌘A/Escape) and the bulk-selection helpers. Buyer pan /
+   * pinch / tap and every existing code path are byte-identical when this is
+   * false (every manage branch is gated on it). Default false.
+   */
+  manageMode?: boolean;
+  /**
+   * When `manageMode` is on, a mouse/pen primary-button drag at the seats rung
+   * draws a rubber-band marquee that bulk-selects the seats it covers (emitting
+   * `onMarquee` on pointer-up) instead of panning. Touch keeps single-finger
+   * pan (pinch to zoom); a middle-button drag pans with a mouse. Disabled below
+   * the seats rung (zoom in first). No effect unless `manageMode` is also set.
+   */
+  marqueeSelect?: boolean;
 }
 
 export interface ISeatmapRenderer {
@@ -502,6 +524,17 @@ export interface ISeatmapRenderer {
   getStatus(seatId: string): SeatStatus;
   getSelection(): ExpandedSeat[];
   clearSelection(): void;
+  /**
+   * Manage-mode bulk selection helpers (no-op / empty unless `manageMode`).
+   * They select the matching SELECTABLE seats (respecting `selectableStatuses`
+   * + closed sections), union with the current selection, and return the seats
+   * they added — the SDK SeatManager expands category/row/section picks to
+   * labels and drives one batched block/unblock from them.
+   */
+  selectAllSelectable?(): ExpandedSeat[];
+  selectByLabels?(labels: string[]): ExpandedSeat[];
+  /** Selectable seats belonging to a section OR zone id (no selection side-effect). */
+  getSelectableInSection?(sectionId: string): ExpandedSeat[];
   /** Programmatic deselect of specific seats (e.g. chip × in the cart). */
   deselect(seatIds: string[]): void;
   /**

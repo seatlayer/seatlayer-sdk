@@ -22,3 +22,23 @@ export type {
   CheckoutHandoff,
   CheckoutLineItem,
 } from './SeatPicker';
+// Organizer manage surface (M1: live View board + bulk Block/unblock).
+export { SeatManager } from './SeatManager';
+export type {
+  SeatManagerOptions,
+  SeatManagerMode,
+  SeatManagerTallies,
+  SeatManagerActivity,
+  SeatManagerActionResult,
+} from './SeatManager';
+export { ManageApi, ManageApiError } from './manageApi';
+export type {
+  ReportResult,
+  ReportByStatus,
+  ReportCategoryRow,
+  ReportCategoryMeta,
+  LogEntry,
+  LogPage,
+} from './manageApi';
+// Engine seat shape — surfaced for manage callbacks (selection payloads).
+export type { ExpandedSeat } from '@seatlayer/core';

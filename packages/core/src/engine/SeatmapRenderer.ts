@@ -68,6 +68,13 @@ const BLOCK_MELT_TOP = 0.9 * SEAT_LEGIBLE_SCALE;
 const ZONE_PROMINENT_SCALE = 0.55 * SECTION_PROMINENT_SCALE;
 /** Never label more than this many seats at once (viewport clutter guard). */
 const MAX_LABELS = 700;
+/**
+ * Manage-mode marquee: above this many selected seats we stop drawing per-seat
+ * selection-ring nodes (they'd be an invisible speck at that zoom and a huge
+ * node count on a 13k arena) and rely on the seat-fill selection paint instead.
+ * Selection membership (getSelection / bulk block) is unaffected.
+ */
+const MARQUEE_RING_CAP = 2500;
 
 // ---- Isometric ("3D") view mode -------------------------------------------
 /** Full-iso rotation of the chart about its centre (degrees). */
@@ -415,6 +422,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private panLast: { x: number; y: number } | null = null;
   /** Cumulative gesture movement in px — clicks are suppressed after a real pan/pinch. */
   private moved = 0;
+  /**
+   * Manage-mode rubber-band marquee (option-gated). `start`/`cur` are WORLD-space
+   * points (overlayLayer rides the stage transform); `rect` is the on-canvas
+   * selection band. Null except during an active manage-mode drag.
+   */
+  private marquee: { start: { x: number; y: number }; rect: Rect } | null = null;
+  private marqueeCur: { x: number; y: number } | null = null;
 
   constructor(container: HTMLDivElement, options: RendererOptions = {}) {
     this.container = container;
@@ -682,6 +696,154 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (changed) this.overlayLayer.batchDraw();
   }
 
+  // ---- manage-mode bulk selection (SDK SeatManager) -------------------------
+  // All option-gated: no-ops (or empty) unless `manageMode` is set, so buyer
+  // surfaces that never pass the flag can't reach any of this.
+
+  /** Select every selectable seat on the chart (⌘A). Returns the added seats. */
+  selectAllSelectable(): ExpandedSeat[] {
+    if (!this.opts.manageMode) return [];
+    const ids: string[] = [];
+    for (const seat of this.seats) if (this.isSelectable(seat.id)) ids.push(seat.id);
+    return this.selectMany(ids);
+  }
+
+  /** Select the selectable seats matching these public labels (category/row/
+   *  section bulk resolves to labels host-side). Returns the newly added seats. */
+  selectByLabels(labels: string[]): ExpandedSeat[] {
+    if (!this.opts.manageMode) return [];
+    const want = new Set(labels);
+    const ids: string[] = [];
+    for (const seat of this.seats) {
+      if (want.has(seat.label) && this.isSelectable(seat.id)) ids.push(seat.id);
+    }
+    return this.selectMany(ids);
+  }
+
+  /** Selectable seats in a section OR zone id — pure read (no selection change). */
+  getSelectableInSection(sectionId: string): ExpandedSeat[] {
+    const out: ExpandedSeat[] = [];
+    const seen = new Set<string>();
+    for (const sec of this.sections) {
+      if (sec.id !== sectionId && sec.zone !== sectionId) continue;
+      for (const id of sec.memberIds) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (!this.isSelectable(id)) continue;
+        const s = this.seatById.get(id);
+        if (s) out.push(s);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Union `ids` into the selection in one batched pass. Beyond MARQUEE_RING_CAP
+   * total selected we skip the per-seat ring nodes (fill paint still marks the
+   * seats) so a whole-arena select doesn't spawn thousands of Konva shapes.
+   * Returns the full current selection.
+   */
+  private selectMany(ids: string[]): ExpandedSeat[] {
+    const fresh = ids.filter((id) => !this.selection.has(id));
+    if (!fresh.length) return this.getSelection();
+    const drawRings = this.selection.size + fresh.length <= MARQUEE_RING_CAP;
+    for (const id of fresh) {
+      if (drawRings) {
+        this.setSelected(id, true, true); // ring + fill, silent (batch draw below)
+      } else {
+        this.selection.add(id);
+        const c = this.circleById.get(id);
+        if (c) this.paintSeat(c, id);
+      }
+    }
+    if (!this.cached) this.seatLayer.batchDraw();
+    this.overlayLayer.batchDraw();
+    return this.getSelection();
+  }
+
+  // ---- manage-mode marquee gesture ------------------------------------------
+
+  private beginMarquee(clientPt: { x: number; y: number }): void {
+    const w = this.screenToWorld(clientPt);
+    const s = this.stage.scaleX() || 1;
+    const rect = new Rect({
+      x: w.x,
+      y: w.y,
+      width: 0,
+      height: 0,
+      stroke: this.effSelection,
+      strokeWidth: 1.5 / s, // world units → ~constant on-screen px under the stage scale
+      dash: [5 / s, 4 / s],
+      fill: 'rgba(110,123,255,0.10)',
+      listening: false,
+      perfectDrawEnabled: false,
+      shadowForStrokeEnabled: false,
+    });
+    this.overlayLayer.add(rect);
+    this.marquee = { start: w, rect };
+    this.marqueeCur = w;
+    this.overlayLayer.batchDraw();
+  }
+
+  private updateMarquee(clientPt: { x: number; y: number }): void {
+    if (!this.marquee) return;
+    const w = this.screenToWorld(clientPt);
+    const { start, rect } = this.marquee;
+    rect.setAttrs({
+      x: Math.min(start.x, w.x),
+      y: Math.min(start.y, w.y),
+      width: Math.abs(w.x - start.x),
+      height: Math.abs(w.y - start.y),
+    });
+    this.marqueeCur = w;
+    this.overlayLayer.batchDraw();
+  }
+
+  private cancelMarquee(): void {
+    if (!this.marquee) return;
+    this.marquee.rect.destroy();
+    this.marquee = null;
+    this.marqueeCur = null;
+    this.overlayLayer.batchDraw();
+  }
+
+  /**
+   * Pointer-up: hit-test the marquee world-rect against the in-memory seat
+   * centres (NOT the Konva hit-graph — that's a cached bitmap when zoomed and
+   * far slower), keep only SELECTABLE seats, union them into the selection and
+   * fire `onMarquee`. A near-zero drag reads as a click: clear the selection.
+   */
+  private finishMarquee(): void {
+    const m = this.marquee;
+    this.marquee = null;
+    if (!m) return;
+    m.rect.destroy();
+    this.overlayLayer.batchDraw();
+    const cur = this.marqueeCur ?? m.start;
+    this.marqueeCur = null;
+    const x0 = Math.min(m.start.x, cur.x);
+    const x1 = Math.max(m.start.x, cur.x);
+    const y0 = Math.min(m.start.y, cur.y);
+    const y1 = Math.max(m.start.y, cur.y);
+    const s = this.stage.scaleX() || 1;
+    // Sub-4px drag = a click on empty canvas → deselect-all affordance.
+    if ((x1 - x0) * s < 4 && (y1 - y0) * s < 4) {
+      if (this.selection.size) {
+        this.clearSelection();
+        this.opts.onMarquee?.([]);
+      }
+      return;
+    }
+    const ids: string[] = [];
+    for (const seat of this.seats) {
+      if (seat.x < x0 || seat.x > x1 || seat.y < y0 || seat.y > y1) continue;
+      if (!this.isSelectable(seat.id)) continue;
+      ids.push(seat.id);
+    }
+    this.selectMany(ids);
+    this.opts.onMarquee?.(this.getSelection());
+  }
+
   flashSeat(seatId: string, color = '#f43f5e'): void {
     const seat = this.seatById.get(seatId);
     if (!seat) return;
@@ -718,6 +880,21 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   // ---- keyboard navigation (accessibility) ----------------------------------
 
   private onKeyDown = (e: KeyboardEvent): void => {
+    // Manage-mode bulk shortcuts: ⌘/Ctrl-A selects all selectable, Escape clears.
+    // Both fire onMarquee so the SDK toolbar tracks selection through one path.
+    if (this.opts.manageMode) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        this.opts.onMarquee?.(this.selectAllSelectable());
+        return;
+      }
+      if (e.key === 'Escape' && this.selection.size) {
+        e.preventDefault();
+        this.clearSelection();
+        this.opts.onMarquee?.([]);
+        return;
+      }
+    }
     const dir =
       e.key === 'ArrowLeft' ? { x: -1, y: 0 }
       : e.key === 'ArrowRight' ? { x: 1, y: 0 }
@@ -2454,9 +2631,25 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.pointers.set(e.pointerId, this.toLocal(e));
     if (this.pointers.size === 1) {
       this.moved = 0;
-      this.panLast = this.toLocal(e);
       this.pinch = null;
+      // Manage-mode rubber-band marquee (option-gated — buyer pan is byte-
+      // identical when manageMode is off). A mouse/pen primary-button drag at
+      // the seats rung selects instead of panning; touch keeps single-finger
+      // pan (pinch zooms) and a middle-button drag (button !== 0) still pans.
+      // Disabled below the seats rung so the organizer zooms in first.
+      if (
+        this.opts.manageMode && this.opts.marqueeSelect &&
+        e.pointerType !== 'touch' && e.button === 0 &&
+        this.getRung() === 'seats'
+      ) {
+        this.beginMarquee(this.toLocal(e));
+        this.panLast = null;
+      } else {
+        this.panLast = this.toLocal(e);
+      }
     } else if (this.pointers.size === 2) {
+      // A second finger converts an in-progress marquee into a pinch-zoom.
+      if (this.marquee) this.cancelMarquee();
       // Anchor the whole pinch to its starting geometry: scale follows the
       // finger-distance ratio and the world point under the midpoint stays
       // glued to the midpoint. No per-event compounding → no drift.
@@ -2480,6 +2673,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.moved += Math.hypot(p.x - prev.x, p.y - prev.y);
     this.pointers.set(e.pointerId, p);
 
+    if (this.marquee) {
+      this.updateMarquee(p);
+      return;
+    }
     if (this.pinch && this.pointers.size >= 2) {
       const [a, b] = [...this.pointers.values()];
       const dist = Math.hypot(b.x - a.x, b.y - a.y);
@@ -2506,6 +2703,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   };
 
   private onPointerEnd = (e: PointerEvent): void => {
+    // Finishing a manage-mode marquee: compute the selection on pointer-UP.
+    if (this.marquee) {
+      this.finishMarquee();
+      this.pointers.delete(e.pointerId);
+      if (this.pointers.size === 0) this.panLast = null;
+      return;
+    }
     this.pointers.delete(e.pointerId);
     if (this.pointers.size < 2) this.pinch = null;
     if (this.pointers.size === 1) {
