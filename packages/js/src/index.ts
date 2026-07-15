@@ -37,6 +37,7 @@ export type {
   ReportByStatus,
   ReportCategoryRow,
   ReportCategoryMeta,
+  ControlRoomActivityEntry,
   ControlRoomSectionMetric,
   ControlRoomSnapshot,
   LogEntry,

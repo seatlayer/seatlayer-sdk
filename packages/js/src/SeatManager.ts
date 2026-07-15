@@ -32,6 +32,7 @@ import {
 import {
   ManageApi,
   ManageApiError,
+  type ControlRoomActivityEntry,
   type ControlRoomSnapshot,
   type LogEntry,
   type ReportResult,
@@ -413,12 +414,15 @@ export class SeatManager {
       }
       this.buildRenderer();
       this.buildSectionOptions();
-      await Promise.all([
+      const [, controlRoom] = await Promise.all([
         this.resnapshot(),
         this.refreshControlRoom().catch((err) => this.opts.onError?.(err)),
       ]);
-      // Seed the activity feed from the audit log (best-effort; token-gated).
-      this.api.log(this.key, { limit: 24 }).then((page) => this.seedFeed(page.entries)).catch(() => {});
+      // Restore recent activity through the view-safe control-room projection.
+      // Older workers lack this field, so privileged/secret-key hosts retain the
+      // legacy best-effort audit-log fallback during rolling upgrades.
+      if (controlRoom?.activity) this.seedFeed(controlRoom.activity);
+      else this.api.log(this.key, { limit: 24 }).then((page) => this.seedFeed(page.entries)).catch(() => {});
       this.connect();
       this.startFeedClock();
       this.ready = true;
@@ -965,12 +969,13 @@ export class SeatManager {
     this.opts.onActivity?.(item);
   }
 
-  private seedFeed(entries: LogEntry[]): void {
+  private seedFeed(entries: ControlRoomActivityEntry[]): void {
     const verbByAction: Record<string, string> = {
       hold: 'held', book: 'booked', release: 'released', expire: 'expired', block: 'blocked', unblock: 'unblocked',
+      unbook: 'cancelled',
     };
     const stByAction: Record<string, DoStatus> = {
-      hold: 'held', book: 'booked', release: 'free', expire: 'free', block: 'blocked', unblock: 'free',
+      hold: 'held', book: 'booked', release: 'free', expire: 'free', block: 'blocked', unblock: 'free', unbook: 'free',
     };
     for (const e of entries) {
       const label = e.labels[0];

@@ -36,4 +36,4 @@ export type {
   SeatManagerActivity,
   SeatManagerActionResult,
 } from './SeatManager';
-export type { ControlRoomSectionMetric, ControlRoomSnapshot } from '@seatlayer/js';
+export type { ControlRoomActivityEntry, ControlRoomSectionMetric, ControlRoomSnapshot } from '@seatlayer/js';

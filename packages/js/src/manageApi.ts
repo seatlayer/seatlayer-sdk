@@ -78,6 +78,15 @@ export interface ControlRoomSectionMetric {
   bookedRevenue: number;
 }
 
+/** Recent seat-state change safe for an event:view control-room grant. Full
+ * audit references remain available only through the event:reports log API. */
+export interface ControlRoomActivityEntry {
+  id: number;
+  at: number;
+  action: string;
+  labels: string[];
+}
+
 export interface ControlRoomSnapshot {
   version: number;
   currency: string;
@@ -94,6 +103,8 @@ export interface ControlRoomSnapshot {
     }>;
   };
   presence: { shoppingSessions: number; activeHolds: number };
+  /** Present on workers that support reload-safe activity hydration. */
+  activity?: ControlRoomActivityEntry[];
   event: { key: string; name: string; seatTotal: number; currency?: string };
 }
 
