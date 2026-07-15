@@ -220,8 +220,12 @@ const CSS = `
 .sl-head-meta{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--sl-muted);margin-top:3px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
 .sl-hold-pill{display:none;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;flex:none;
-  background:var(--sl-accent);color:var(--sl-accent-ink);font-weight:700;font-size:12px;font-variant-numeric:tabular-nums}
-.sl-hold-pill.on{display:inline-flex}
+  background:var(--sl-accent);color:var(--sl-accent-ink);font-weight:700;font-size:12px;font-variant-numeric:tabular-nums;
+  transform-origin:right center}
+.sl-hold-pill.on{display:inline-flex;animation:slPillIn .34s cubic-bezier(.2,.8,.2,1) both}
+.sl-hold-dot{width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.78;box-shadow:0 0 0 0 currentColor}
+.sl-hold-pill.is-expiring .sl-hold-dot{animation:slHoldPulse 1.4s ease-out infinite}
+.sl-hold-time{min-width:3.35em;text-align:left}
 .sl-close{width:32px;height:32px;border-radius:999px;flex:none;display:none;align-items:center;justify-content:center;
   border:1px solid var(--sl-line);color:var(--sl-muted);transition:color .15s,border-color .15s}
 .sl-close:hover{color:var(--sl-text);border-color:var(--sl-muted)}
@@ -243,7 +247,7 @@ const CSS = `
 .sl-picker[data-layout="narrow"] .sl-body{flex-direction:column}
 .sl-picker[data-layout="narrow"] .sl-map{min-height:0;flex:1}
 .sl-picker[data-layout="narrow"] .sl-side{width:100%;border-left:0;border-top:1px solid var(--sl-line);
-  flex:none;height:50%;transition:height .22s ease}
+  flex:none;height:50%;transition:height .3s cubic-bezier(.2,.8,.2,1)}
 .sl-picker[data-layout="narrow"][data-sheet="peek"] .sl-side{height:86px;overflow:hidden}
 .sl-picker[data-layout="narrow"][data-sheet="peek"] .sl-side > :not(.sl-sheet-head){display:none}
 .sl-picker[data-layout="narrow"] .sl-tray{flex:none}
@@ -299,10 +303,17 @@ const CSS = `
 .sl-tray{flex:1;padding:10px 16px;display:flex;flex-direction:column;gap:8px;min-height:0}
 .sl-tray-hint{font-size:12.5px;color:var(--sl-muted);line-height:1.5}
 .sl-chip{display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid var(--sl-line);
-  border-radius:var(--sl-r-sm);background:var(--sl-surface);font-size:13px}
+  border-radius:var(--sl-r-sm);background:var(--sl-surface);font-size:13px;transform-origin:center}
+.sl-chip.sl-enter{animation:slChipIn .38s cubic-bezier(.2,.8,.2,1) both}
+.sl-chip.sl-leave{pointer-events:none;animation:slChipOut .16s ease-in both}
+.sl-chip.sl-held{border-color:var(--sl-line);background:color-mix(in srgb,var(--sl-accent) 7%,var(--sl-surface));
+  box-shadow:inset 3px 0 0 color-mix(in srgb,var(--sl-accent) 72%,transparent)}
 .sl-chip b{font-weight:800}
 .sl-chip .cat{color:var(--sl-muted);font-size:11.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sl-chip .amt{font-weight:700;font-variant-numeric:tabular-nums}
+.sl-chip-state{flex:none;padding:3px 6px;border-radius:999px;background:var(--sl-accent);color:var(--sl-accent-ink);
+  font-size:8.5px;line-height:1;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
+.sl-chip-state.sl-pending{background:transparent;color:var(--sl-muted);border:1px solid var(--sl-line)}
 .sl-chip .rm{width:22px;height:22px;border-radius:999px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--sl-muted)}
 .sl-chip .rm:hover{color:var(--sl-text)}
 .sl-chip .rm svg{width:11px;height:11px;stroke:currentColor;stroke-width:2.4;fill:none;stroke-linecap:round}
@@ -320,17 +331,30 @@ const CSS = `
 
 /* footer */
 .sl-foot{padding:12px 16px 14px;border-top:1px solid var(--sl-line);flex:none}
+.sl-hold-note{display:none;align-items:center;gap:9px;margin-bottom:10px;padding:9px 10px;border-radius:var(--sl-r-sm);
+  border:1px solid var(--sl-line);background:color-mix(in srgb,var(--sl-accent) 7%,var(--sl-surface));
+  box-shadow:inset 3px 0 0 color-mix(in srgb,var(--sl-accent) 72%,transparent);
+  font-size:11.5px;line-height:1.35;color:var(--sl-muted)}
+.sl-hold-note.on{display:flex;animation:slNoticeIn .38s cubic-bezier(.2,.8,.2,1) both}
+.sl-hold-note svg{width:16px;height:16px;flex:none;stroke:var(--sl-accent);stroke-width:2.4;fill:none;
+  stroke-linecap:round;stroke-linejoin:round}
+.sl-hold-note b{display:block;color:var(--sl-text);font-size:12px}
+.sl-hold-copy{display:block}
 .sl-total{display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:10px}
 .sl-total b{font-size:17px;font-variant-numeric:tabular-nums}
+.sl-value-pop{animation:slValuePop .32s cubic-bezier(.2,.8,.2,1)}
 /* Primary checkout CTA. Scoped under .sl-picker so it OUTWEIGHS the
    '.sl-picker button' reset (0,1,1) — an unscoped '.sl-cta' (0,1,0) loses to it
    and the button renders as plain text with no accent fill. */
 .sl-picker .sl-cta{display:flex;align-items:center;justify-content:center;width:100%;min-height:44px;
   padding:12px 16px;border-radius:var(--sl-r-sm);font-weight:800;font-size:14px;line-height:1.1;
   background:var(--sl-accent);color:var(--sl-accent-ink);
-  transition:filter .15s,background .15s,color .15s,transform .06s}
+  transition:filter .15s,background .22s,color .22s,transform .12s,box-shadow .22s;gap:8px}
 .sl-picker .sl-cta:hover{filter:brightness(1.08)}
 .sl-picker .sl-cta:active{transform:translateY(1px);filter:brightness(.94)}
+.sl-picker .sl-cta.sl-ready{animation:slCtaReady .42s cubic-bezier(.2,.8,.2,1)}
+.sl-cta-spin,.sl-ba-spin{width:14px;height:14px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;
+  animation:slspin .7s linear infinite;flex:none}
 /* Disabled ("Select seats"): quieter, but still a full-width button shape. */
 .sl-picker .sl-cta:disabled{background:var(--sl-surface);color:var(--sl-muted);opacity:1;
   cursor:not-allowed;filter:none;transform:none}
@@ -368,11 +392,15 @@ const CSS = `
 .sl-zoom svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
 
 /* toast + boot states (toast flows in the bottom-center region) */
-.sl-toast{transform:translateY(6px);max-width:100%;
+.sl-toast{transform:translateY(6px) scale(.98);max-width:100%;
   background:var(--sl-surface);border:1px solid var(--sl-line);color:var(--sl-text);border-radius:999px;padding:9px 16px;
-  font-size:12.5px;font-weight:600;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;white-space:nowrap;
+  font-size:12.5px;font-weight:600;opacity:0;pointer-events:none;transition:opacity .22s,transform .22s;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-.sl-toast.on{opacity:1;transform:translateY(0)}
+.sl-toast.on{opacity:1;transform:translateY(0) scale(1)}
+.sl-toast[data-tone="error"]{border-color:#ef4444}
+.sl-toast[data-tone="warning"]{border-color:var(--sl-accent)}
+.sl-toast[data-tone="success"]{border-color:#22c55e}
+.sl-toast.on[data-tone="error"]{animation:slToastNudge .32s ease-out}
 .sl-boot{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:10px;background:var(--sl-bg);font-size:13px;font-weight:600;color:var(--sl-muted)}
 .sl-boot-spin{width:24px;height:24px;border-radius:50%;border:3px solid var(--sl-line);border-top-color:var(--sl-accent);
@@ -396,15 +424,22 @@ const CSS = `
 .sl-extend-btn:disabled{opacity:.5;cursor:not-allowed}
 
 /* booked confirmation overlay (covers the widget once the held seats are sold) */
-.sl-booked{position:absolute;inset:0;z-index:11;display:none;flex-direction:column;align-items:center;
-  justify-content:center;gap:12px;text-align:center;padding:28px;background:var(--sl-bg)}
-.sl-booked.on{display:flex}
+.sl-booked{position:absolute;inset:0;z-index:11;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:12px;text-align:center;padding:28px;background:var(--sl-bg);opacity:0;visibility:hidden;
+  pointer-events:none;transition:opacity .34s ease,visibility 0s linear .34s}
+.sl-booked.on{opacity:1;visibility:visible;pointer-events:auto;transition:opacity .34s ease,visibility 0s}
 .sl-booked-badge{width:60px;height:60px;border-radius:999px;display:flex;align-items:center;justify-content:center;
-  background:var(--sl-accent);color:var(--sl-accent-ink)}
-.sl-booked-badge svg{width:30px;height:30px;stroke:currentColor;stroke-width:2.6;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  background:var(--sl-accent);color:var(--sl-accent-ink);transform:scale(.72)}
+.sl-booked.on .sl-booked-badge{animation:slSuccessPop .58s cubic-bezier(.2,1.25,.3,1) .08s both}
+.sl-booked-badge svg{width:30px;height:30px;stroke:currentColor;stroke-width:2.6;fill:none;stroke-linecap:round;stroke-linejoin:round;
+  stroke-dasharray:30;stroke-dashoffset:30}
+.sl-booked.on .sl-booked-badge svg{animation:slCheckDraw .42s ease-out .32s forwards}
 .sl-booked-title{font-weight:800;font-size:19px;color:var(--sl-text)}
 .sl-booked-sub{font-size:13px;color:var(--sl-muted);line-height:1.5;max-width:320px}
 .sl-booked-seats{font-weight:700;color:var(--sl-text)}
+.sl-booked.on .sl-booked-title,.sl-booked.on .sl-booked-sub{animation:slCopyRise .42s ease-out both}
+.sl-booked.on .sl-booked-title{animation-delay:.22s}
+.sl-booked.on .sl-booked-sub{animation-delay:.3s}
 
 /* a11y filter chips (flow within the top-left region) */
 .sl-chips{display:flex;gap:6px;flex-wrap:wrap}
@@ -415,7 +450,8 @@ const CSS = `
 
 /* confirm popover */
 .sl-confirm{position:absolute;z-index:9;min-width:190px;background:var(--sl-surface);border:1px solid var(--sl-line);
-  border-radius:12px;padding:12px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);transform:translate(-50%,calc(-100% - 14px))}
+  border-radius:12px;padding:12px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);transform:translate(-50%,calc(-100% - 14px));
+  animation:slConfirmIn .24s cubic-bezier(.2,.8,.2,1) both}
 .sl-confirm-label{font-weight:800;font-size:14px}
 .sl-confirm-meta{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--sl-muted);margin-top:4px}
 .sl-confirm-meta b{color:var(--sl-text);margin-left:auto}
@@ -433,8 +469,10 @@ const CSS = `
 .sl-ba-qty button{width:24px;height:24px;border-radius:999px;background:var(--sl-surface);border:1px solid var(--sl-line);
   font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
 .sl-ba-qty span{min-width:14px;text-align:center;font-weight:800}
-.sl-ba-go{margin-left:auto;padding:7px 12px;border-radius:999px;border:1px solid var(--sl-line);font-weight:700;font-size:12px;transition:border-color .15s}
+.sl-ba-go{margin-left:auto;padding:7px 12px;border-radius:999px;border:1px solid var(--sl-line);font-weight:700;font-size:12px;
+  transition:border-color .15s,opacity .15s;display:flex;align-items:center;gap:6px}
 .sl-ba-go:hover{border-color:var(--sl-muted)}
+.sl-ba-go:disabled{opacity:.62;cursor:wait}
 
 /* screen-reader live region */
 .sl-sr{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
@@ -540,6 +578,27 @@ const CSS = `
 .sl-price-row.sl-dim{opacity:.4}
 .sl-seccard-mix-item.sl-dim{opacity:.4}
 
+/* Buyer-journey motion: every animation explains a state transition (selected,
+   held, checkout handoff, conflict or booked). No decorative infinite motion
+   except the expiring-hold pulse and active progress spinners. */
+@keyframes slPillIn{from{opacity:0;transform:translateX(7px) scale(.9)}to{opacity:1;transform:translateX(0) scale(1)}}
+@keyframes slHoldPulse{0%{box-shadow:0 0 0 0 currentColor;opacity:.9}75%,100%{box-shadow:0 0 0 7px transparent;opacity:.55}}
+@keyframes slChipIn{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes slChipOut{to{opacity:0;transform:translateX(10px) scale(.98)}}
+@keyframes slNoticeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slValuePop{0%{opacity:.6;transform:translateY(3px)}55%{transform:translateY(-1px) scale(1.05)}100%{opacity:1;transform:none}}
+@keyframes slCtaReady{0%{transform:scale(.98);box-shadow:0 0 0 0 transparent}55%{transform:scale(1.01);box-shadow:0 0 0 5px color-mix(in srgb,var(--sl-accent) 18%,transparent)}100%{transform:none;box-shadow:none}}
+@keyframes slToastNudge{0%,100%{margin-left:0}30%{margin-left:-4px}60%{margin-left:3px}}
+@keyframes slSuccessPop{0%{opacity:0;transform:scale(.72)}65%{opacity:1;transform:scale(1.08)}100%{opacity:1;transform:scale(1)}}
+@keyframes slCheckDraw{to{stroke-dashoffset:0}}
+@keyframes slCopyRise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slConfirmIn{from{opacity:0;transform:translate(-50%,calc(-100% - 8px)) scale(.96)}to{opacity:1;transform:translate(-50%,calc(-100% - 14px)) scale(1)}}
+
+@media(prefers-reduced-motion:reduce){
+  .sl-picker *,.sl-modal-scrim *{animation-duration:.001ms!important;animation-iteration-count:1!important;
+    transition-duration:.001ms!important;scroll-behavior:auto!important}
+}
+
 /* modal host */
 .sl-modal-scrim{position:fixed;inset:0;z-index:2147483000;background:rgba(5,7,12,.66);display:flex;align-items:center;justify-content:center;padding:18px}
 .sl-modal-frame{width:min(1200px,100%);height:min(820px,100%);border-radius:16px;overflow:hidden;box-shadow:0 40px 120px -30px rgba(0,0,0,.8)}
@@ -573,6 +632,7 @@ function resolveTokens(chart: ChartTheme | undefined, host: SeatPickerTheme | un
 
 export class SeatPicker {
   private readonly opts: SeatPickerOptions;
+  private readonly api: PubApi;
   private readonly controller: PickerController;
 
   private root: HTMLDivElement | null = null;
@@ -587,6 +647,8 @@ export class SeatPicker {
   private ro: ResizeObserver | null = null;
   private holdTimer: ReturnType<typeof setInterval> | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Short-lived UI motion timers; all are cancelled on destroy. */
+  private motionTimers = new Set<ReturnType<typeof setTimeout>>();
 
   // state
   private currency = 'USD';
@@ -634,6 +696,12 @@ export class SeatPicker {
   private secCardShownAt = 0;
   /** Previous tray ticket count — first 0→n transition auto-expands the mobile sheet. */
   private lastTrayCount = 0;
+  /** Previous computed total — drives a single explanatory value bump. */
+  private lastTrayTotal = 0;
+  /** Stable item keys prevent tray chips re-animating on unrelated realtime syncs. */
+  private lastTrayKeys = new Set<string>();
+  private bestAvailableBusy = false;
+  private ctaPhase: 'idle' | 'holding' | 'checkout' = 'idle';
   // narrow-layout chrome that docks into the sheet's Filters row on mobile
   private a11yChipsEl: HTMLDivElement | null = null;
   private cbEl: HTMLButtonElement | null = null;
@@ -671,10 +739,22 @@ export class SeatPicker {
     const picker = new SeatPicker({ ...options, container: frame });
     picker.modalScrim = scrim;
     picker.prevFocus = document.activeElement;
+    let closing = false;
     const close = (): void => {
+      if (closing) return;
+      closing = true;
       document.body.style.overflow = prevOverflow;
-      picker.destroy();
-      options.onClose?.();
+      // Visually dismiss immediately, but let an abandoned auto-hold finish its
+      // release request before tearing down the transport. This keeps closing a
+      // modal from stranding inventory until the normal hold expiry.
+      scrim.style.opacity = '0';
+      scrim.style.pointerEvents = 'none';
+      const finish = (): void => {
+        picker.destroy();
+        options.onClose?.();
+      };
+      if (picker.hold && !picker.handedOff) void picker.release().finally(finish);
+      else finish();
     };
     picker.closeModal = close;
     scrim.addEventListener('mousedown', (e) => {
@@ -695,9 +775,9 @@ export class SeatPicker {
     if (!options.event || typeof options.event !== 'string') throw new Error('seatmap: `event` key is required');
     if (!options.container) throw new Error('seatmap: `container` is required (or use SeatPicker.open())');
     this.opts = options;
-    const api = new PubApi((options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, ''));
+    this.api = new PubApi((options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, ''));
     this.controller = new PickerController({
-      transport: api,
+      transport: this.api,
       eventKey: options.event,
       maxSelection: options.maxSelection ?? DEFAULT_MAX_SELECTION,
       currency: options.currency,
@@ -719,14 +799,16 @@ export class SeatPicker {
         this.hold = null;
         this.handedOff = false;
         this.bookedShown = false;
+        this.ctaPhase = 'idle';
         this.stopHoldTimer();
         this.gaQty.clear();
-        this.toast(t('picker.holdExpired', undefined) || 'Your hold expired — seats released. Pick again.');
+        this.toast(t('picker.holdExpired', undefined) || 'Your hold expired — seats released. Pick again.', 'warning');
         this.syncTray();
         this.opts.onHoldExpired?.();
       },
       confirmSelection: options.confirmSelection,
       onSelect: (seat) => {
+        this.flashPickedSeat(seat.id);
         if (this.opts.confirmSelection) this.showConfirm(seat);
       },
       onViewChange: () => {
@@ -803,6 +885,10 @@ export class SeatPicker {
           <div class="sl-sec">Your seats</div>
           <div class="sl-tray" data-ref="tray"></div>
           <div class="sl-foot">
+            <div class="sl-hold-note" data-ref="holdNote" role="status" aria-live="polite">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+              <span><b data-ref="holdTitle">Seats secured</b><span class="sl-hold-copy" data-ref="holdCopy">Checkout timer is running.</span></span>
+            </div>
             <div class="sl-total"><span data-ref="count"></span><b data-ref="total"></b></div>
             <button type="button" class="sl-cta" data-ref="cta" disabled></button>
           </div>
@@ -1101,6 +1187,101 @@ export class SeatPicker {
     return this.root ? getComputedStyle(this.root).getPropertyValue(name).trim() : '';
   }
 
+  /** Motion is progressive enhancement; all state remains legible when reduced. */
+  private reducedMotion(): boolean {
+    return typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  private scheduleMotion(fn: () => void, delay: number): void {
+    const timer = setTimeout(() => {
+      this.motionTimers.delete(timer);
+      if (!this.destroyed) fn();
+    }, delay);
+    this.motionTimers.add(timer);
+  }
+
+  /** Restart one finite CSS animation without leaving a permanent state class. */
+  private animateOnce(el: HTMLElement | undefined, className: string, duration = 600): void {
+    if (!el || this.reducedMotion()) return;
+    el.classList.remove(className);
+    void el.offsetWidth;
+    el.classList.add(className);
+    this.scheduleMotion(() => el.classList.remove(className), duration);
+  }
+
+  /** Selection feedback belongs on the selected seat, not across the whole map. */
+  private flashPickedSeat(id: string): void {
+    if (this.reducedMotion()) return;
+    this.controller.flashSeat(id, this.cssVar('--sl-accent') || '#f4b740');
+  }
+
+  /** A completed hold gets one short map ripple per concrete seat. */
+  private flashHeldSeats(hold: HoldResult): void {
+    if (this.reducedMotion()) return;
+    const labels = (hold.items ?? []).filter((item) => item.objectType !== 'ga').map((item) => item.label);
+    labels.slice(0, 10).forEach((label, index) => {
+      const seat = this.controller.seatByLabel(label);
+      if (!seat) return;
+      this.scheduleMotion(
+        () => this.controller.flashSeat(seat.id, this.cssVar('--sl-accent') || '#f4b740'),
+        index * 55,
+      );
+    });
+  }
+
+  /** Update only the action affordance; selection callbacks must not refire. */
+  private pendingSelectionCount(): number {
+    const heldItems = this.hold?.items ?? [];
+    const heldLabels = new Set(heldItems.map((item) => item.label));
+    const pendingSeats = this.controller.getSelection().filter((seat) => !heldLabels.has(seat.label)).length;
+    const heldGA = new Map<string, number>();
+    for (const item of heldItems.filter((candidate) => candidate.objectType === 'ga')) {
+      heldGA.set(item.objectId, (heldGA.get(item.objectId) ?? 0) + (item.quantity ?? 1));
+    }
+    const pendingGA = [...this.gaQty.entries()].reduce(
+      (sum, [areaId, qty]) => sum + Math.max(0, qty - (heldGA.get(areaId) ?? 0)),
+      0,
+    );
+    return pendingSeats + pendingGA;
+  }
+
+  private syncCta(count = this.lastTrayCount, pending = this.pendingSelectionCount()): void {
+    const cta = this.els.cta as HTMLButtonElement | undefined;
+    if (!cta) return;
+    if (this.ctaPhase === 'holding') {
+      cta.disabled = true;
+      cta.innerHTML = '<span class="sl-cta-spin" aria-hidden="true"></span>Securing seats…';
+      return;
+    }
+    if (this.ctaPhase === 'checkout') {
+      cta.disabled = true;
+      cta.innerHTML = '<span class="sl-cta-spin" aria-hidden="true"></span>Opening checkout…';
+      return;
+    }
+    cta.disabled = count === 0;
+    cta.textContent = this.hold
+      ? pending
+        ? `Secure ${pending} more & checkout`
+        : 'Continue to checkout'
+      : count
+        ? 'Hold seats & checkout'
+        : 'Select seats';
+  }
+
+  private setCtaPhase(phase: 'idle' | 'holding' | 'checkout'): void {
+    this.ctaPhase = phase;
+    this.syncCta();
+    if (phase === 'checkout') {
+      this.scheduleMotion(() => {
+        if (this.ctaPhase !== 'checkout') return;
+        this.ctaPhase = 'idle';
+        this.syncCta();
+      }, 1100);
+    }
+  }
+
   /** Section-bearing objects on the active floor (single-floor → doc.objects). */
   private activeFloorObjects(): SectionLike[] {
     const doc = this.controller.doc;
@@ -1385,7 +1566,11 @@ export class SeatPicker {
         (r) => `<button type="button" data-rung="${r}" title="${TIP[r]}" aria-pressed="false">${LABEL[r]}</button>`,
       ).join('');
       pills.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
-        btn.addEventListener('click', () => this.controller.setRung(btn.dataset.rung as LodRung));
+        btn.addEventListener('click', () => {
+          const rung = btn.dataset.rung as LodRung;
+          this.controller.setRung(rung);
+          if (rung === 'seats') this.collapseSectionCard();
+        });
       });
       this.regions['top-center'].appendChild(pills);
       this.rungsEl = pills;
@@ -1443,7 +1628,9 @@ export class SeatPicker {
     this.secCardEl?.remove();
     this.secCardEl = null;
     if (!summary) return;
-    this.secCardCollapsed = false;
+    // At seat level the summary is context, not a blocking decision surface.
+    // Keep it as the compact pill from the first seat-level paint.
+    this.secCardCollapsed = this.controller.getRung() === 'seats';
     this.secCardShownAt = Date.now();
     this.renderSectionCard(summary);
   }
@@ -1542,6 +1729,10 @@ export class SeatPicker {
   private sectionCardOnView(): void {
     if (!this.secCardEl || this.secCardCollapsed || !this.lastSection) return;
     if (this.root?.dataset.layout === 'narrow') return;
+    if (this.controller.getRung() === 'seats') {
+      this.collapseSectionCard();
+      return;
+    }
     if (Date.now() - this.secCardShownAt < 1400) {
       if (this.sectionCardCoverage() > 0.25) this.collapseSectionCard();
       return;
@@ -1817,7 +2008,7 @@ export class SeatPicker {
       .filter((s) => !ownLabels.has(s.label) && (this.controller.getStatus(s.id) ?? 'free') !== 'free');
     if (!gone.length) return;
     this.controller.deselect(gone.map((s) => s.id));
-    this.toast(`Seat ${gone[0].label} was just taken by another buyer.`);
+    this.toast(`Seat ${gone[0].label} was just taken by another buyer.`, 'error');
   }
 
   private syncTray(): void {
@@ -1826,6 +2017,7 @@ export class SeatPicker {
     const gaAreas = this.controller.getGAAreas();
     const heldItems = this.hold?.items ?? [];
     const parts: string[] = [];
+    const nextTrayKeys = new Set<string>();
 
     if (!seats.length && !heldItems.length && !gaAreas.length) {
       parts.push(`<div class="sl-tray-hint">Tap a seat on the map, or let us pick the best available for you.</div>`);
@@ -1836,12 +2028,15 @@ export class SeatPicker {
     // Held line items (best-available or a completed hold) — locked in, no remove.
     // Tier is server-committed on a hold, so it shows read-only (no re-pick).
     for (const item of heldItems) {
+      const itemKey = `held:${item.label}`;
+      nextTrayKeys.add(itemKey);
       const cat = this.controller.doc?.categories.find((c) => c.key === item.categoryKey);
       const tierName = item.tierId ? cat?.tiers?.find((ti) => ti.id === item.tierId)?.name : undefined;
       const canView = this.seatViewEnabled() && item.objectType !== 'ga' && !!this.controller.seatByLabel(item.label);
       parts.push(
-        `<div class="sl-chip"><b>${item.label}</b>` +
+        `<div class="sl-chip sl-held${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}"><b>${item.label}</b>` +
           `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>` +
+          `<span class="sl-chip-state">Held</span>` +
           `<span class="amt">${this.money(item.unitPrice * (item.quantity ?? 1))}</span>` +
           (canView
             ? `<button type="button" class="view" data-view-label="${item.label}" aria-label="${t('picker.viewFromSeat', { label: item.label })}">` +
@@ -1854,6 +2049,8 @@ export class SeatPicker {
     const heldLabels = new Set(heldItems.map((item) => item.label));
     const canView = this.seatViewEnabled();
     for (const s of seats.filter((seat) => !heldLabels.has(seat.label))) {
+      const itemKey = `seat:${s.id}`;
+      nextTrayKeys.add(itemKey);
       const cat = this.controller.doc?.categories.find((c) => c.key === s.categoryKey);
       const tierSelect =
         s.tiers && s.tiers.length
@@ -1868,9 +2065,10 @@ export class SeatPicker {
           `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`
         : '';
       parts.push(
-        `<div class="sl-chip" data-seat="${s.id}"><b>${s.label}</b>` +
+        `<div class="sl-chip${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-seat="${s.id}"><b>${s.label}</b>` +
           `<span class="cat">${cat?.label ?? s.categoryKey}</span>` +
           tierSelect +
+          `<span class="sl-chip-state sl-pending">Selected</span>` +
           `<span class="amt">${this.money(s.price)}</span>` +
           viewBtn +
           `<button type="button" class="rm" aria-label="Remove ${s.label}">` +
@@ -1905,11 +2103,14 @@ export class SeatPicker {
           `<div class="sl-ba-qty">` +
           `<button type="button" data-ba="-1" aria-label="Fewer seats">−</button><span>${this.baQty}</span>` +
           `<button type="button" data-ba="1" aria-label="More seats">+</button></div>` +
-          `<button type="button" class="sl-ba-go">Best available</button></div>`,
+          `<button type="button" class="sl-ba-go"${this.bestAvailableBusy ? ' disabled' : ''}>` +
+          (this.bestAvailableBusy ? `<span class="sl-ba-spin" aria-hidden="true"></span>Finding…` : 'Best available') +
+          `</button></div>`,
       );
     }
 
     this.els.tray.innerHTML = parts.join('');
+    this.lastTrayKeys = nextTrayKeys;
     this.els.tray.querySelectorAll<HTMLButtonElement>('[data-ba]').forEach((btn) => {
       btn.addEventListener('click', () => {
         this.baQty = Math.max(1, Math.min(8, this.baQty + Number(btn.dataset.ba)));
@@ -1924,8 +2125,14 @@ export class SeatPicker {
     });
     this.els.tray.querySelectorAll<HTMLElement>('.sl-chip .rm').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const id = (btn.closest('.sl-chip') as HTMLElement).dataset.seat!;
-        this.controller.deselect([id]);
+        const chip = btn.closest('.sl-chip') as HTMLElement;
+        const id = chip.dataset.seat!;
+        if (this.reducedMotion()) {
+          this.controller.deselect([id]);
+          return;
+        }
+        chip.classList.add('sl-leave');
+        this.scheduleMotion(() => this.controller.deselect([id]), 150);
       });
     });
     // Per-seat ticket-tier pick (Adult/Child/…) — updates price via onSelectionChange.
@@ -1958,13 +2165,28 @@ export class SeatPicker {
     const freshSeats = seats.filter((seat) => !heldLabels.has(seat.label));
     const total = freshSeats.reduce((sum, s) => sum + s.price, 0) + gaTotal + heldTotal;
     const count = freshSeats.length + gaCount + heldCount;
+    const pendingCount = this.pendingSelectionCount();
+    const previousCount = this.lastTrayCount;
+    const previousTotal = this.lastTrayTotal;
     this.els.count.textContent = count
       ? `${count} ${count === 1 ? 'ticket' : 'tickets'}`
       : 'No seats selected';
     this.els.total.textContent = count ? this.money(total) : '';
-    const cta = this.els.cta as HTMLButtonElement;
-    cta.disabled = count === 0;
-    cta.textContent = this.hold ? 'Continue to checkout' : count ? 'Hold seats & checkout' : 'Select seats';
+    this.syncCta(count, pendingCount);
+    if (this.hold) {
+      const securedCount = heldCount || this.hold.seats?.length || 0;
+      if (this.els.holdTitle) {
+        this.els.holdTitle.textContent = `${securedCount} ${securedCount === 1 ? 'seat' : 'seats'} secured`;
+      }
+      if (this.els.holdCopy) {
+        this.els.holdCopy.textContent = pendingCount
+          ? `${pendingCount} more selected — secure before checkout.`
+          : 'Checkout timer is running.';
+      }
+    }
+    if (count !== previousCount) this.animateOnce(this.els.count, 'sl-value-pop', 380);
+    if (total !== previousTotal) this.animateOnce(this.els.total, 'sl-value-pop', 380);
+    if (previousCount === 0 && count > 0) this.animateOnce(this.els.cta, 'sl-ready', 520);
 
     // Mobile sheet: one-line peek summary. Selected → "N tickets · $X · Continue";
     // empty → "From $min · Best available". Tap (sheet head) expands the sheet.
@@ -1974,7 +2196,7 @@ export class SeatPicker {
         // the action affordance ("Continue"/"Review") — no inline text arrow.
         this.els.peek.innerHTML =
           `<span>${count} ${count === 1 ? 'ticket' : 'tickets'} · ${this.money(total)}</span>` +
-          `<span class="go">${this.hold ? 'Continue' : 'Review'}</span>`;
+          `<span class="go">${this.hold ? (pendingCount ? 'Secure more' : 'Continue') : 'Review'}</span>`;
       } else {
         const prices = (this.controller.doc?.categories ?? [])
           .map((c) => this.catPrice(c))
@@ -1990,23 +2212,23 @@ export class SeatPicker {
       this.root.dataset.sheet = 'open';
     }
     this.lastTrayCount = count;
+    this.lastTrayTotal = total;
 
     this.opts.onSelectionChange?.(seats);
   }
 
   private async handleCta(): Promise<void> {
-    const cta = this.els.cta as HTMLButtonElement;
     // Best-available (or a prior CTA press) already holds the seats — hand off.
     // Held seats are NOT in the client selection (the server holds them), so
     // pass the hold's own seat list to the host.
     if (this.hold && !this.controller.getSelection().some((s) => !(this.hold!.items ?? []).some((i) => i.label === s.label))) {
       const seats = this.hold.seats ?? this.controller.getSelection();
       this.handedOff = true;
+      this.setCtaPhase('checkout');
       this.opts.onCheckout?.(this.hold, seats, this.buildHandoff(this.hold));
       return;
     }
-    cta.disabled = true;
-    cta.textContent = 'Holding…';
+    this.setCtaPhase('holding');
     try {
       // seats first (controller.hold covers selected seats); GA quantities ride along
       let hold: HoldResult | null = null;
@@ -2022,18 +2244,26 @@ export class SeatPicker {
         hold = h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : hold;
       }
       if (!hold) {
-        this.toast('One or more seats were just taken. Please pick again.');
+        this.toast('One or more seats were just taken. Please pick again.', 'error');
+        this.setCtaPhase('idle');
         this.syncTray();
         return;
       }
       this.hold = hold;
       this.handedOff = true;
       this.startHoldTimer(hold.expiresAt);
-      this.opts.onCheckout?.(hold, chosenSeats.length ? chosenSeats : hold.seats ?? [], this.buildHandoff(hold));
+      this.flashHeldSeats(hold);
+      this.setCtaPhase('checkout');
+      // The replacement hold can combine an earlier best-available set with
+      // newly selected seats. Hand the host the complete held seat set; the
+      // server-priced line items remain authoritative for GA and totals.
+      this.opts.onCheckout?.(hold, hold.seats ?? chosenSeats, this.buildHandoff(hold));
     } catch (err) {
       this.opts.onError?.(err);
-      this.toast('One or more seats were just taken. Please pick again.');
+      this.toast('One or more seats were just taken. Please pick again.', 'error');
+      this.setCtaPhase('idle');
     } finally {
+      if (this.ctaPhase === 'holding') this.ctaPhase = 'idle';
       this.syncTray();
     }
   }
@@ -2042,12 +2272,17 @@ export class SeatPicker {
     this.stopHoldTimer();
     this.holdExpiresAt = expiresAt;
     const pill = this.els.hold;
+    pill.innerHTML =
+      '<span class="sl-hold-dot" aria-hidden="true"></span><span>Held</span><span class="sl-hold-time" data-ref="holdTime"></span>';
+    const time = pill.querySelector<HTMLElement>('[data-ref="holdTime"]');
+    this.els.holdNote?.classList.add('on');
     const tick = (): void => {
       const ms = Math.max(0, this.holdExpiresAt - Date.now());
       const m = Math.floor(ms / 60000);
       const s = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
-      pill.textContent = `Held ${m}:${s}`;
+      if (time) time.textContent = `${m}:${s}`;
       pill.classList.add('on');
+      pill.classList.toggle('is-expiring', ms > 0 && ms <= EXTEND_PROMPT_MS);
       // Offer an extension in the final stretch (but not once it's booked/expired).
       this.setExtendPrompt(ms > 0 && ms <= EXTEND_PROMPT_MS, ms);
       if (ms <= 0) this.stopHoldTimer();
@@ -2059,7 +2294,8 @@ export class SeatPicker {
   private stopHoldTimer(): void {
     if (this.holdTimer) clearInterval(this.holdTimer);
     this.holdTimer = null;
-    this.els.hold?.classList.remove('on');
+    this.els.hold?.classList.remove('on', 'is-expiring');
+    this.els.holdNote?.classList.remove('on');
     this.setExtendPrompt(false, 0);
   }
 
@@ -2087,13 +2323,13 @@ export class SeatPicker {
         this.hold = { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items };
         this.holdExpiresAt = h.expiresAt;
         this.extendEl?.classList.remove('on');
-        this.toast('More time added — your seats are still held.');
+        this.toast('More time added — your seats are still held.', 'success');
       } else {
-        this.toast("Couldn't add more time — please head to checkout now.");
+        this.toast("Couldn't add more time — please head to checkout now.", 'warning');
       }
     } catch (err) {
       this.opts.onError?.(err);
-      this.toast("Couldn't add more time — please head to checkout now.");
+      this.toast("Couldn't add more time — please head to checkout now.", 'warning');
     } finally {
       btn.disabled = false;
       btn.textContent = prev;
@@ -2147,13 +2383,17 @@ export class SeatPicker {
     return { holdId: hold.holdId, expiresAt: hold.expiresAt, currency, lineItems, total };
   }
 
-  private toast(msg: string): void {
+  private toast(msg: string, tone: 'neutral' | 'success' | 'warning' | 'error' = 'neutral'): void {
     const el = this.els.toast;
     if (!el) return;
     el.textContent = msg;
+    el.dataset.tone = tone;
     el.classList.add('on');
     if (this.toastTimer) clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => el.classList.remove('on'), 4200);
+    this.toastTimer = setTimeout(() => {
+      el.classList.remove('on');
+      el.dataset.tone = 'neutral';
+    }, 4200);
   }
 
   private placeTooltip(): void {
@@ -2199,6 +2439,13 @@ export class SeatPicker {
   }
 
   async bestAvailable(qty: number, categoryKey?: string): Promise<HoldResult | null> {
+    if (this.bestAvailableBusy) return null;
+    this.bestAvailableBusy = true;
+    const button = this.els.tray?.querySelector<HTMLButtonElement>('.sl-ba-go');
+    if (button) {
+      button.disabled = true;
+      button.innerHTML = '<span class="sl-ba-spin" aria-hidden="true"></span>Finding…';
+    }
     try {
       const h = await this.controller.bestAvailable(qty, categoryKey);
       if (h) {
@@ -2206,21 +2453,49 @@ export class SeatPicker {
         this.handedOff = false;
         this.bookedShown = false;
         this.startHoldTimer(h.expiresAt);
+        this.flashHeldSeats(this.hold);
         this.syncTray();
         return this.hold;
       }
       return null;
     } catch (err) {
       this.opts.onError?.(err);
+      this.toast('Those seats are no longer available. Try another quantity or category.', 'error');
       return null;
+    } finally {
+      this.bestAvailableBusy = false;
+      if (!this.hold && button?.isConnected) {
+        button.disabled = false;
+        button.textContent = 'Best available';
+      }
     }
   }
 
   async release(): Promise<void> {
-    await this.controller.release();
+    const tracked = this.hold;
+    const controllerHold = this.controller.currentHold();
+    if (controllerHold) {
+      await this.controller.release();
+    } else if (tracked) {
+      // The live controller can legitimately settle/clear its local hold before
+      // the shell finishes dismissing. The shell still owns the server handoff,
+      // so release from that authoritative copy instead of silently no-oping.
+      const labels = [...new Set([
+        ...(tracked.items ?? []).map((item) => item.label),
+        ...(tracked.seats ?? []).map((seat) => seat.label),
+      ])];
+      if (labels.length) {
+        try {
+          await this.api.release(this.opts.event, labels, tracked.holdId);
+        } catch (error) {
+          this.opts.onError?.(error);
+        }
+      }
+    }
     this.hold = null;
     this.handedOff = false;
     this.bookedShown = false;
+    this.ctaPhase = 'idle';
     this.stopHoldTimer();
     this.gaQty.clear();
     this.syncTray();
@@ -2228,10 +2503,16 @@ export class SeatPicker {
 
   destroy(): void {
     this.destroyed = true;
+    // Closing/tearing down before checkout means the buyer abandoned any
+    // best-available hold. Release it server-side; a handed-off checkout keeps
+    // its hold alive across the host's route transition.
+    if (this.hold && !this.handedOff) void this.controller.release();
     this.closeConfirm();
     this.closeSeatView();
     this.stopHoldTimer();
     if (this.toastTimer) clearTimeout(this.toastTimer);
+    for (const timer of this.motionTimers) clearTimeout(timer);
+    this.motionTimers.clear();
     this.ro?.disconnect();
     this.ro = null;
     if (this.escHandler) document.removeEventListener('keydown', this.escHandler);
