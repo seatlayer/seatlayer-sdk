@@ -1002,6 +1002,70 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     requestAnimationFrame(step);
   }
 
+  /**
+   * Pulse a section outline without moving the camera or mutating the authored
+   * geometry. The temporary halo is drawn in the non-listening overlay layer,
+   * so the apparent 4% lift never changes hit testing or selection bounds.
+   */
+  flashSection(sectionId: string, color = '#22a06b'): void {
+    const matches = this.sections.filter((section) =>
+      section.id === sectionId || section.zone === sectionId);
+    if (!matches.length) return;
+
+    for (const section of matches) {
+      const centre = section.outline.reduce(
+        (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
+        { x: 0, y: 0 },
+      );
+      centre.x /= section.outline.length;
+      centre.y /= section.outline.length;
+      const lift = section.elevation > 0 ? this.isoLiftLocal(section.elevation) : { x: 0, y: 0 };
+      const halo = new Line({
+        x: centre.x + lift.x,
+        y: centre.y + lift.y,
+        points: section.outline.flatMap((point) => [point.x - centre.x, point.y - centre.y]),
+        closed: true,
+        stroke: color,
+        strokeWidth: 3,
+        strokeScaleEnabled: false,
+        opacity: 0.92,
+        listening: false,
+        perfectDrawEnabled: false,
+        shadowForStrokeEnabled: true,
+        shadowColor: color,
+        shadowBlur: 14,
+        shadowOpacity: 0.7,
+      });
+      this.overlayLayer.add(halo);
+      this.overlayLayer.batchDraw();
+
+      const remove = (): void => {
+        if (!halo.getLayer()) return;
+        halo.destroy();
+        this.overlayLayer.batchDraw();
+      };
+      if (this.reducedMotion || (typeof document !== 'undefined' && document.hidden)) {
+        setTimeout(remove, 520);
+        continue;
+      }
+
+      const start = performance.now();
+      const duration = 820;
+      const step = (now: number): void => {
+        if (this.destroyed || !halo.getLayer()) return;
+        const t = Math.min(1, (now - start) / duration);
+        const eased = 1 - Math.pow(1 - t, 3);
+        const scale = 1 + eased * 0.04;
+        halo.scale({ x: scale, y: scale });
+        halo.opacity(0.92 * (1 - t));
+        this.overlayLayer.batchDraw();
+        if (t < 1) requestAnimationFrame(step);
+        else remove();
+      };
+      requestAnimationFrame(step);
+    }
+  }
+
   // ---- keyboard navigation (accessibility) ----------------------------------
 
   private onKeyDown = (e: KeyboardEvent): void => {

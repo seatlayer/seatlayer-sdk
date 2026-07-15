@@ -578,6 +578,12 @@ export interface ISeatmapRenderer {
    * delta. Purely visual; no state change. `color` overrides the default.
    */
   flashSeat(seatId: string, color?: string): void;
+  /**
+   * Brief organizer attention pulse around a whole section. This is a visual
+   * overlay only: it never changes section geometry, hit targets, selection, or
+   * the active camera. Useful for grouped realtime operations at venue overview.
+   */
+  flashSection?(sectionId: string, color?: string): void;
   zoomToFit(): void;
   /** Zoom in one step about the viewport center, clamped to the usual zoom bounds. */
   zoomIn(): void;

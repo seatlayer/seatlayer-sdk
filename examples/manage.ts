@@ -2,6 +2,11 @@ import { SeatManager } from '@seatlayer/js';
 import { SeatPicker } from '@seatlayer/js';
 
 const q = new URLSearchParams(location.search);
+const requestedWidth = Number(q.get('width'));
+const requestedHeight = Number(q.get('height'));
+const board = document.querySelector<HTMLElement>('#board');
+if (board && Number.isFinite(requestedWidth) && requestedWidth >= 320) board.style.width = `${requestedWidth}px`;
+if (board && Number.isFinite(requestedHeight) && requestedHeight >= 480) board.style.height = `${requestedHeight}px`;
 const API = q.get('api') || 'https://seatmap-api.paiteq.in';
 const EVENT = q.get('event') || 'west-end-p3';
 // Reads (chart/objects/WS) are public; only writes need a real Bearer token

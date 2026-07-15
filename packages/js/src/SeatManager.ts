@@ -74,6 +74,9 @@ export interface SeatManagerActivity {
   /** Human verb: held / booked / released / blocked / unblocked. */
   verb: string;
   status: DoStatus;
+  /** Spatial context for grouped activity when the chart defines sections. */
+  sectionIds?: string[];
+  sectionLabels?: string[];
 }
 
 /** Fired after a successful organizer action, for host toasts/telemetry. */
@@ -106,6 +109,11 @@ export interface SeatManagerOptions {
    * rAF throttling on occluded tabs never leaves the board stale. Default true.
    */
   keepLiveWhileHidden?: boolean;
+  /**
+   * Opt in to camera-following for new buyer holds/bookings. Off by default so
+   * a live event never steals an operator's current map context.
+   */
+  followLive?: boolean;
   /** Chart + first snapshot are loaded and the board is live. */
   onReady?: () => void;
   /** Live KPI tallies changed. */
@@ -118,6 +126,8 @@ export interface SeatManagerOptions {
   onTokenRefresh?: () => Promise<{ token: string; expiresAt: number }>;
   /** Tool/mode changed from inside the shared cockpit. */
   onModeChange?: (mode: SeatManagerMode) => void;
+  /** Follow-live preference changed from inside the cockpit. */
+  onFollowLiveChange?: (enabled: boolean) => void;
   /** Block-mode selection changed (marquee / ⌘A / category / section / tap). */
   onSelectionChange?: (seats: ExpandedSeat[]) => void;
   /** A block/unblock/cancel action completed successfully. */
@@ -145,6 +155,8 @@ function toRenderStatus(s: DoStatus): SeatStatus {
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
 const STYLE_ID = 'seatlayer-manager-style';
 const FEED_CAP = 80;
+const MAX_LIVE_SEAT_PULSES = 16;
+const MAX_LIVE_SECTION_PULSES = 4;
 
 const LEGEND: { key: 'free' | 'held' | 'booked' | 'blocked'; label: string; color: string }[] = [
   { key: 'free', label: 'Free', color: '#6e7bff' },
@@ -172,13 +184,21 @@ const CSS = `
 @keyframes slm-pulse{0%{box-shadow:0 0 0 0 rgba(34,160,107,.5)}70%{box-shadow:0 0 0 7px rgba(34,160,107,0)}100%{box-shadow:0 0 0 0 rgba(34,160,107,0)}}
 .slm-kpis{grid-column:1/-1;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));width:100%;padding-top:10px;
   border-top:1px solid var(--slm-line)}
-.slm-kpi{display:flex;min-width:0;flex-direction:column;align-items:center;padding:0 5px;line-height:1.15;text-align:center}
+.slm-kpi{position:relative;display:flex;min-width:0;flex-direction:column;align-items:center;padding:0 5px;line-height:1.15;text-align:center}
 .slm-kpi b{display:flex;min-width:0;align-items:baseline;justify-content:center;font-size:17px;font-weight:800;
   font-variant-numeric:tabular-nums;white-space:nowrap}
 .slm-kpi span{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--slm-muted);font-weight:700}
 .slm-kpi .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:baseline}
+.slm-kpi.changed b{animation:slm-kpi-bump .58s cubic-bezier(.2,.8,.2,1)}
+.slm-kpidelta{position:absolute;right:4px;top:-12px;padding:2px 5px;border-radius:999px;background:rgba(34,160,107,.17);
+  color:#5bd39b!important;font-size:9px!important;letter-spacing:0!important;text-transform:none!important;white-space:nowrap;
+  animation:slm-kpi-delta 1.45s ease-out both;pointer-events:none}
+.slm-kpidelta.down{background:rgba(244,183,64,.14);color:#f7ca6b!important}
+@keyframes slm-kpi-bump{0%,100%{transform:none}35%{transform:translateY(-2px) scale(1.08);text-shadow:0 0 18px rgba(255,255,255,.24)}}
+@keyframes slm-kpi-delta{0%{opacity:0;transform:translateY(5px)}18%,72%{opacity:1;transform:none}100%{opacity:0;transform:translateY(-5px)}}
 .slm-barbtn{padding:7px 13px;border-radius:9px;border:1px solid var(--slm-line);color:var(--slm-text);font-weight:700;font-size:12.5px}
 .slm-barbtn:hover{border-color:var(--slm-muted)}
+.slm-barbtn.follow.on{background:rgba(34,160,107,.13);border-color:#22a06b;color:#5bd39b}
 
 /* body */
 .slm-body{display:flex;flex:1;min-height:0}
@@ -190,6 +210,14 @@ const CSS = `
 .slm-zoomhint{position:absolute;left:50%;top:14px;transform:translateX(-50%);padding:6px 13px;border-radius:999px;
   background:rgba(0,0,0,.55);color:#fff;font-size:12px;font-weight:700;pointer-events:none;opacity:0;transition:opacity .2s}
 .slm-zoomhint.on{opacity:1}
+.slm-liveevent{position:absolute;left:50%;top:14px;z-index:4;display:flex;align-items:center;gap:8px;max-width:min(560px,calc(100% - 32px));
+  padding:8px 12px;border:1px solid var(--slm-line);border-radius:999px;background:color-mix(in srgb,var(--slm-surface) 92%,transparent);
+  box-shadow:0 10px 34px rgba(0,0,0,.32);opacity:0;transform:translate(-50%,-8px);pointer-events:none;
+  transition:opacity .18s ease,transform .24s ease;backdrop-filter:blur(10px)}
+.slm-liveevent.on{opacity:1;transform:translate(-50%,0)}
+.slm.block-mode .slm-liveevent{top:52px}
+.slm-liveeventdot{width:8px;height:8px;border-radius:50%;flex:none}.slm-liveeventcopy{min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:12px;font-weight:800}.slm-liveeventhint{color:var(--slm-muted);font-size:10px;white-space:nowrap}
 .slm-rail{width:320px;flex:none;border-left:1px solid var(--slm-line);display:flex;flex-direction:column;min-height:0}
 .slm-railscroll{flex:1;overflow-y:auto;padding:16px}
 .slm-eyebrow{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--slm-muted);font-weight:800;margin-bottom:6px}
@@ -204,13 +232,16 @@ const CSS = `
 
 /* activity feed */
 .slm-feed{display:flex;flex-direction:column;gap:0}
-.slm-feedrow{display:flex;align-items:center;gap:9px;padding:8px 2px;border-bottom:1px solid var(--slm-line);
-  font-size:12.5px;animation:slm-in .35s ease}
+.slm-feedrow{display:flex!important;width:100%;align-items:center;gap:9px;padding:8px 2px!important;border-bottom:1px solid var(--slm-line)!important;
+  border-radius:6px;font-size:12.5px;text-align:left!important;animation:slm-in .35s ease}
+.slm-feedrow:hover{background:rgba(255,255,255,.035)!important}
 @keyframes slm-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 .slm-feeddot{width:8px;height:8px;border-radius:50%;flex:none}
 .slm-feedtext{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .slm-feedtext b{font-weight:800}
-.slm-feedtime{font-size:11px;color:var(--slm-muted);font-variant-numeric:tabular-nums;flex:none}
+.slm-feedsection{display:block;overflow:hidden;text-overflow:ellipsis;color:var(--slm-muted);font-size:10px;font-weight:750}
+.slm-feedmeta{display:flex;flex:none;flex-direction:column;align-items:flex-end;gap:1px}.slm-feedtime{font-size:10px;color:var(--slm-muted);font-variant-numeric:tabular-nums}
+.slm-feedlocate{font-size:9.5px;color:var(--slm-accent);font-weight:800}
 .slm-empty{font-size:12.5px;color:var(--slm-muted);padding:12px 0}
 
 /* block toolbar */
@@ -280,10 +311,13 @@ const CSS = `
 .slm-barbtn.on{background:rgba(244,183,64,.13);border-color:#f4b740;color:#f7ca6b}
 .slm-sectionlist{display:flex;flex-direction:column;gap:8px;margin-top:4px}
 .slm-sectionlist + .slm-eyebrow{margin-top:18px}
-.slm-sectionrow{padding:10px;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface)}
+.slm-sectionrow{width:100%;padding:10px!important;border:1px solid var(--slm-line)!important;border-radius:10px;background:var(--slm-surface)!important;text-align:left!important;transition:border-color .15s ease,transform .15s ease}
+.slm-sectionrow:hover{border-color:var(--slm-muted)!important;transform:translateY(-1px)}
 .slm-sectiontop,.slm-sectionmeta{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .slm-sectiontop{font-size:12.5px;font-weight:800}.slm-sectionmeta{margin-top:5px;color:var(--slm-muted);font-size:11px}
+.slm-sectionmeta>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .slm-trend{font-size:10px;text-transform:uppercase;letter-spacing:.08em}.slm-trend.rising{color:#22a06b}.slm-trend.cooling{color:#f4b740}
+.slm-sectionlocate{color:var(--slm-accent);font-size:9.5px;font-weight:800}
 .slm-health{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
 .slm-healthitem{padding:10px;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface)}
 .slm-healthitem b{display:block;font-size:17px;font-variant-numeric:tabular-nums}.slm-healthitem span{display:block;margin-top:2px;color:var(--slm-muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}
@@ -310,6 +344,10 @@ const CSS = `
 .slm.compact .slm-barbtn{flex:1;padding:6px 9px}.slm.compact .slm-kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
 .slm.compact .slm-kpi[data-kpi="buyers"],.slm.compact .slm-kpi[data-kpi="active-holds"],
 .slm.compact .slm-kpi[data-kpi="sold-pct"],.slm.compact .slm-kpi[data-kpi="gross-sales"]{display:none}
+@media (prefers-reduced-motion:reduce){
+  .slm.live .slm-live-dot,.slm-feedrow,.slm-kpi.changed b,.slm-kpidelta{animation:none!important}
+  .slm-liveevent,.slm-sectionrow{transition:none!important}
+}
 `;
 
 function injectStyle(): void {
@@ -390,6 +428,9 @@ export class SeatManager {
   private controlRoomSnapshot: ControlRoomSnapshot | null = null;
   private trendWindowMinutes = 15;
   private heatEnabled = false;
+  private followLive: boolean;
+  private lastKpiValues = new Map<string, number>();
+  private activeKpiDeltas = new Map<string, { text: string; down: boolean }>();
 
   // realtime socket
   private ws: WebSocket | null = null;
@@ -401,6 +442,10 @@ export class SeatManager {
   private feed: SeatManagerActivity[] = [];
   private feedTimer: ReturnType<typeof setInterval> | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  private liveEventTimer: ReturnType<typeof setTimeout> | null = null;
+  private kpiCleanupTimer: ReturnType<typeof setTimeout> | null = null;
+  private followLiveTimer: ReturnType<typeof setTimeout> | null = null;
+  private followSeatTimer: ReturnType<typeof setTimeout> | null = null;
   private releaseAt: number | null = null;
   private layoutObserver: ResizeObserver | null = null;
   private tokenExpiresAt: number | null = null;
@@ -433,11 +478,23 @@ export class SeatManager {
     event.preventDefault();
   };
 
+  private readonly onRailClick = (event: Event): void => {
+    const target = event.target as HTMLElement | null;
+    const sectionButton = target?.closest<HTMLElement>('[data-section-focus]');
+    if (sectionButton?.dataset.sectionFocus) {
+      this.locateSection(sectionButton.dataset.sectionFocus);
+      return;
+    }
+    const feedButton = target?.closest<HTMLElement>('[data-feed-id]');
+    if (feedButton?.dataset.feedId) this.locateActivity(feedButton.dataset.feedId);
+  };
+
   constructor(options: SeatManagerOptions) {
     this.opts = options;
     this.key = options.eventKey;
     this.mode = options.mode ?? 'view';
     this.keepLive = options.keepLiveWhileHidden ?? true;
+    this.followLive = options.followLive ?? false;
     this.currency = options.currency ?? 'USD';
     this.tokenExpiresAt = options.tokenExpiresAt ?? null;
     this.api = new ManageApi(options.apiBase ?? DEFAULT_API_BASE, options.token);
@@ -499,6 +556,20 @@ export class SeatManager {
     this.heatEnabled = enabled;
     this.applyHeatOverlay();
     this.paintHeatButton();
+  }
+
+  /** Toggle opt-in camera following for new buyer hold/book events. */
+  setFollowLive(enabled: boolean): void {
+    const changed = this.followLive !== enabled;
+    this.followLive = enabled;
+    if (!enabled) {
+      if (this.followLiveTimer) clearTimeout(this.followLiveTimer);
+      if (this.followSeatTimer) clearTimeout(this.followSeatTimer);
+      this.followLiveTimer = null;
+      this.followSeatTimer = null;
+    }
+    this.paintFollowLiveButton();
+    if (changed) this.opts.onFollowLiveChange?.(enabled);
   }
 
   /** Change the current-vs-previous sales window and refresh the private projection. */
@@ -700,6 +771,7 @@ export class SeatManager {
   }
 
   zoomToFit(): void {
+    this.renderer?.clearSectionFocus();
     this.renderer?.zoomToFit();
   }
 
@@ -708,12 +780,17 @@ export class SeatManager {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.feedTimer) clearInterval(this.feedTimer);
     if (this.toastTimer) clearTimeout(this.toastTimer);
+    if (this.liveEventTimer) clearTimeout(this.liveEventTimer);
+    if (this.kpiCleanupTimer) clearTimeout(this.kpiCleanupTimer);
+    if (this.followLiveTimer) clearTimeout(this.followLiveTimer);
+    if (this.followSeatTimer) clearTimeout(this.followSeatTimer);
     if (this.unblockAllConfirmTimer) clearTimeout(this.unblockAllConfirmTimer);
     if (this.revenueRefreshTimer) clearTimeout(this.revenueRefreshTimer);
     if (this.tokenRefreshTimer) clearTimeout(this.tokenRefreshTimer);
     this.layoutObserver?.disconnect();
     this.layoutObserver = null;
     this.root?.removeEventListener('keydown', this.onKeyDown);
+    this.els.rail?.removeEventListener('click', this.onRailClick);
     if (typeof document !== 'undefined') document.removeEventListener('fullscreenchange', this.onFullscreenChange);
     if (this.ws) { try { this.ws.close(); } catch { /* ignore */ } this.ws = null; }
     this.renderer?.destroy();
@@ -860,14 +937,17 @@ export class SeatManager {
         if (prev === st) continue;
         this.status.set(ch.label, st);
         const id = this.labelToId.get(ch.label);
-        if (id) { this.renderer?.setStatus([id], toRenderStatus(st)); this.flash(id, st); ids.push(id); }
+        if (id) { this.renderer?.setStatus([id], toRenderStatus(st)); ids.push(id); }
         const verb = this.verbFor(prev, st);
         const groupKey = `${verb}:${st}`;
         const group = groups.get(groupKey) ?? { labels: [], verb, status: st };
         group.labels.push(ch.label);
         groups.set(groupKey, group);
       }
-      for (const group of groups.values()) this.pushActivity(group.labels, group.verb, group.status);
+      for (const group of groups.values()) {
+        const activity = this.pushActivity(group.labels, group.verb, group.status);
+        if (activity) this.paintSpatialActivity(activity);
+      }
       if (ids.length) {
         this.lastSyncedAt = Date.now();
         this.afterPaint();
@@ -919,9 +999,122 @@ export class SeatManager {
     }
   }
 
-  private flash(id: string, st: DoStatus): void {
-    if (st === 'held') this.renderer?.flashSeat(id, '#f4b740');
-    else if (st === 'booked') this.renderer?.flashSeat(id, '#22a06b');
+  private activityColor(status: DoStatus): string {
+    return status === 'held' ? '#f4b740'
+      : status === 'booked' ? '#22a06b'
+        : status === 'blocked' ? '#8b94ac'
+          : '#6e7bff';
+  }
+
+  private sectionsForLabels(labels: string[]): { ids: string[]; labels: string[] } {
+    const ids = new Set<string>();
+    for (const label of labels) {
+      const seat = this.labelToSeat.get(label);
+      if (!seat) continue;
+      const sectionId = this.sectionByObject.get(seat.rowId);
+      if (sectionId && sectionId !== UNGROUPED_ID) ids.add(sectionId);
+    }
+    const sectionIds = [...ids];
+    return {
+      ids: sectionIds,
+      labels: sectionIds.map((id) => this.sectionLabelById.get(id) ?? id),
+    };
+  }
+
+  private pulseSeatLabels(labels: string[], status: DoStatus): void {
+    const color = this.activityColor(status);
+    for (const label of labels.slice(0, MAX_LIVE_SEAT_PULSES)) {
+      const id = this.labelToId.get(label);
+      if (id) this.renderer?.flashSeat(id, color);
+    }
+  }
+
+  /** Render one grouped realtime operation at the right semantic zoom level. */
+  private paintSpatialActivity(activity: SeatManagerActivity): void {
+    const sectionIds = activity.sectionIds ?? this.sectionsForLabels(activity.labels).ids;
+    const focused = this.renderer?.getFocusedSection() ?? null;
+    const followable = this.followLive && sectionIds.length === 1 &&
+      (activity.status === 'held' || activity.status === 'booked');
+
+    if (followable && focused === sectionIds[0]) {
+      this.pulseSeatLabels(activity.labels, activity.status);
+      return;
+    }
+    if (followable) {
+      if (this.followLiveTimer) clearTimeout(this.followLiveTimer);
+      if (this.followSeatTimer) clearTimeout(this.followSeatTimer);
+      this.followLiveTimer = setTimeout(() => {
+        this.followLiveTimer = null;
+        this.renderer?.focusSection(sectionIds[0]);
+        this.followSeatTimer = setTimeout(() => {
+          this.followSeatTimer = null;
+          this.pulseSeatLabels(activity.labels, activity.status);
+        }, 520);
+      }, 220);
+      return;
+    }
+
+    if (!focused && sectionIds.length) {
+      const color = this.activityColor(activity.status);
+      for (const sectionId of sectionIds.slice(0, MAX_LIVE_SECTION_PULSES)) {
+        this.renderer?.flashSection(sectionId, color);
+      }
+      return;
+    }
+    if (!sectionIds.length || (focused && sectionIds.includes(focused))) {
+      this.pulseSeatLabels(activity.labels, activity.status);
+    }
+  }
+
+  private locateSection(sectionId: string): void {
+    this.renderer?.focusSection(sectionId);
+  }
+
+  private locateActivity(activityId: string): void {
+    const activity = this.feed.find((item) => item.id === activityId);
+    if (!activity) return;
+    const sectionIds = activity.sectionIds ?? this.sectionsForLabels(activity.labels).ids;
+    if (this.followSeatTimer) clearTimeout(this.followSeatTimer);
+    if (sectionIds.length === 1) {
+      this.locateSection(sectionIds[0]);
+      this.followSeatTimer = setTimeout(() => {
+        this.followSeatTimer = null;
+        this.pulseSeatLabels(activity.labels, activity.status);
+      }, 520);
+      return;
+    }
+    this.zoomToFit();
+    this.followSeatTimer = setTimeout(() => {
+      this.followSeatTimer = null;
+      if (sectionIds.length) {
+        const color = this.activityColor(activity.status);
+        for (const sectionId of sectionIds.slice(0, MAX_LIVE_SECTION_PULSES)) {
+          this.renderer?.flashSection(sectionId, color);
+        }
+      } else {
+        this.pulseSeatLabels(activity.labels, activity.status);
+      }
+    }, 280);
+  }
+
+  private showLiveEvent(activity: SeatManagerActivity): void {
+    const element = this.els.liveevent;
+    if (!element) return;
+    const sections = activity.sectionLabels ?? [];
+    const place = sections.length === 1 ? sections[0]
+      : sections.length > 1 ? `${sections.length} sections`
+        : activity.label;
+    const noun = activity.count === 1 ? 'seat' : 'seats';
+    element.innerHTML = `<span class="slm-liveeventdot" style="background:${this.activityColor(activity.status)}"></span>
+      <span class="slm-liveeventcopy">${esc(place)} · ${activity.count.toLocaleString()} ${noun} ${esc(activity.verb)}</span>
+      <span class="slm-liveeventhint">Live</span>`;
+    element.classList.add('on');
+    if (this.liveEventTimer) clearTimeout(this.liveEventTimer);
+    this.liveEventTimer = setTimeout(() => {
+      this.liveEventTimer = null;
+      element.classList.remove('on');
+      element.innerHTML = '';
+    }, 2800);
   }
 
   // ---- tallies + feed -------------------------------------------------------
@@ -1005,9 +1198,10 @@ export class SeatManager {
     return next;
   }
 
-  private pushActivity(labels: string[], verb: string, status: DoStatus, at = Date.now()): void {
+  private pushActivity(labels: string[], verb: string, status: DoStatus, at = Date.now()): SeatManagerActivity | null {
     const label = labels[0];
-    if (!label) return;
+    if (!label) return null;
+    const sections = this.sectionsForLabels(labels);
     const item: SeatManagerActivity = {
       id: `${label}:${at}:${Math.random().toString(36).slice(2, 6)}`,
       at,
@@ -1016,11 +1210,15 @@ export class SeatManager {
       count: labels.length,
       verb,
       status,
+      sectionIds: sections.ids,
+      sectionLabels: sections.labels,
     };
     this.feed.unshift(item);
     if (this.feed.length > FEED_CAP) this.feed.length = FEED_CAP;
     if (this.mode === 'view') this.paintFeed();
+    this.showLiveEvent(item);
     this.opts.onActivity?.(item);
+    return item;
   }
 
   private seedFeed(entries: ControlRoomActivityEntry[]): void {
@@ -1034,6 +1232,7 @@ export class SeatManager {
     for (const e of entries) {
       const label = e.labels[0];
       if (!label) continue;
+      const sections = this.sectionsForLabels(e.labels);
       const item: SeatManagerActivity = {
         id: `log:${e.id}`,
         at: e.at,
@@ -1042,6 +1241,8 @@ export class SeatManager {
         count: e.labels.length,
         verb: verbByAction[e.action] ?? e.action,
         status: stByAction[e.action] ?? 'free',
+        sectionIds: sections.ids,
+        sectionLabels: sections.labels,
       };
       this.feed.push(item);
       this.opts.onActivity?.(item);
@@ -1085,13 +1286,15 @@ export class SeatManager {
     for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
     root.innerHTML = `
       <div class="slm-bar">
-        <div class="slm-modes" data-ref="modes">
-          <button class="slm-mode" data-mode="view" title="Monitor (M)" aria-keyshortcuts="M">Monitor</button>
-          <button class="slm-mode" data-mode="inspect" title="Inspect (I)" aria-keyshortcuts="I">Inspect</button>
-          <button class="slm-mode" data-mode="block" title="Block (B)" aria-keyshortcuts="B">Block</button>
+        <div class="slm-modes" data-ref="modes" role="tablist" aria-label="Manager tools">
+          <button class="slm-mode" role="tab" data-mode="view" title="Monitor (M)" aria-keyshortcuts="M">Monitor</button>
+          <button class="slm-mode" role="tab" data-mode="inspect" title="Inspect (I)" aria-keyshortcuts="I">Inspect</button>
+          <button class="slm-mode" role="tab" data-mode="block" title="Block (B)" aria-keyshortcuts="B">Block</button>
         </div>
         <span class="slm-live"><span class="slm-live-dot"></span><span data-ref="livetext">CONNECTING</span></span>
         <div class="slm-bar-actions">
+          <button class="slm-barbtn follow" data-ref="follow" aria-pressed="false"
+            title="Stay on the current map view unless enabled">Follow live</button>
           <button class="slm-barbtn" data-ref="heat" aria-pressed="false"
             aria-label="Sales momentum overlay off"
             title="Highlight sections selling fastest in the selected time window">Sales momentum</button>
@@ -1103,6 +1306,7 @@ export class SeatManager {
         <div class="slm-map">
           <div class="slm-map-host" data-ref="maphost"></div>
           <div class="slm-zoomhint" data-ref="zoomhint">Zoom in to marquee-select</div>
+          <div class="slm-liveevent" data-ref="liveevent" role="status" aria-live="polite"></div>
           <div class="slm-hud"><button class="slm-hud-chip" data-ref="zfit">Zoom to fit</button></div>
         </div>
         <aside class="slm-rail"><div class="slm-railscroll" data-ref="rail"></div></aside>
@@ -1120,17 +1324,20 @@ export class SeatManager {
     this.mapHost = ref('maphost') as HTMLDivElement;
     this.els = {
       modes: ref('modes'), livetext: ref('livetext'), kpis: ref('kpis'),
-      heat: ref('heat'), fullscreen: ref('fullscreen'),
-      zoomhint: ref('zoomhint'), rail: ref('rail'), toast: ref('toast'), zfit: ref('zfit'),
+      follow: ref('follow'), heat: ref('heat'), fullscreen: ref('fullscreen'),
+      zoomhint: ref('zoomhint'), liveevent: ref('liveevent'), rail: ref('rail'), toast: ref('toast'), zfit: ref('zfit'),
     };
     this.els.modes.querySelectorAll('[data-mode]').forEach((b) =>
       b.addEventListener('click', () => this.setMode((b as HTMLElement).dataset.mode as SeatManagerMode)));
     this.els.zfit.addEventListener('click', () => this.zoomToFit());
+    this.els.follow.addEventListener('click', () => this.setFollowLive(!this.followLive));
     this.els.heat.addEventListener('click', () => this.setHeatOverlay(!this.heatEnabled));
     this.els.fullscreen.addEventListener('click', () => this.toggleFullscreen());
     root.addEventListener('keydown', this.onKeyDown);
+    this.els.rail.addEventListener('click', this.onRailClick);
     document.addEventListener('fullscreenchange', this.onFullscreenChange);
     this.paintModeTabs();
+    this.paintFollowLiveButton();
     this.paintHeatButton();
     this.paintFullscreenButton();
   }
@@ -1163,9 +1370,22 @@ export class SeatManager {
   private paintModeTabs(): void {
     this.els.modes?.querySelectorAll('[data-mode]').forEach((b) => {
       const el = b as HTMLElement;
-      el.classList.toggle('on', el.dataset.mode === this.mode);
+      const active = el.dataset.mode === this.mode;
+      el.classList.toggle('on', active);
+      el.setAttribute('aria-selected', String(active));
+      el.tabIndex = active ? 0 : -1;
     });
     this.root?.classList.toggle('block-mode', this.mode === 'block');
+  }
+
+  private paintFollowLiveButton(): void {
+    const button = this.els.follow;
+    if (!button) return;
+    button.classList.toggle('on', this.followLive);
+    button.setAttribute('aria-pressed', String(this.followLive));
+    button.setAttribute('title', this.followLive
+      ? 'Following new buyer holds and bookings. Turn off to keep the current view.'
+      : 'Stay on the current map view. Enable to follow new buyer holds and bookings.');
   }
 
   private paintHeatButton(): void {
@@ -1216,20 +1436,59 @@ export class SeatManager {
     hint.classList.toggle('on', !!show);
   }
 
+  private formatKpiDelta(key: string, delta: number, currency: string): string {
+    const sign = delta > 0 ? '+' : '−';
+    const absolute = Math.abs(delta);
+    if (key === 'gross-sales') return `${sign}${fmtMoney(absolute, currency)}`;
+    if (key === 'sold-pct') return `${sign}${absolute.toLocaleString()}pt`;
+    return `${sign}${absolute.toLocaleString()}`;
+  }
+
   private paintKpis(t: SeatManagerTallies): void {
     if (!this.els.kpis) return;
     const rev = t.revenueStatus === 'current' ? fmtMoney(t.grossRevenue, t.currency) : '—';
     const presence = this.controlRoomSnapshot?.presence;
-    this.els.kpis.innerHTML = [
-      { key: 'sold-seats', n: t.booked.toLocaleString(), l: 'Sold seats', dot: '#22a06b' },
-      { key: 'held-seats', n: t.held.toLocaleString(), l: 'Held seats', dot: '#f4b740' },
-      { key: 'buyers', n: presence ? presence.shoppingSessions.toLocaleString() : '—', l: 'Buyers' },
-      { key: 'active-holds', n: presence ? presence.activeHolds.toLocaleString() : '—', l: 'Active holds' },
-      { key: 'free-seats', n: t.free.toLocaleString(), l: 'Free seats', dot: '#6e7bff' },
-      { key: 'blocked', n: t.blocked.toLocaleString(), l: 'Blocked', dot: '#8b94ac' },
-      { key: 'sold-pct', n: `${t.capacityPct}%`, l: 'Sold' },
-      { key: 'gross-sales', n: rev, l: 'Gross sales' },
-    ].map((k) => `<div class="slm-kpi" data-kpi="${k.key}"><b>${k.dot ? `<span class="dot" style="background:${k.dot}"></span>` : ''}${k.n}</b><span>${k.l}</span></div>`).join('');
+    const items: { key: string; raw: number | null; n: string; l: string; dot?: string }[] = [
+      { key: 'sold-seats', raw: t.booked, n: t.booked.toLocaleString(), l: 'Sold seats', dot: '#22a06b' },
+      { key: 'held-seats', raw: t.held, n: t.held.toLocaleString(), l: 'Held seats', dot: '#f4b740' },
+      { key: 'buyers', raw: presence?.shoppingSessions ?? null, n: presence ? presence.shoppingSessions.toLocaleString() : '—', l: 'Buyers' },
+      { key: 'active-holds', raw: presence?.activeHolds ?? null, n: presence ? presence.activeHolds.toLocaleString() : '—', l: 'Active holds' },
+      { key: 'free-seats', raw: t.free, n: t.free.toLocaleString(), l: 'Free seats', dot: '#6e7bff' },
+      { key: 'blocked', raw: t.blocked, n: t.blocked.toLocaleString(), l: 'Blocked', dot: '#8b94ac' },
+      { key: 'sold-pct', raw: t.capacityPct, n: `${t.capacityPct}%`, l: 'Sold' },
+      { key: 'gross-sales', raw: t.revenueStatus === 'current' ? t.grossRevenue : null, n: rev, l: 'Gross sales' },
+    ];
+    let hasChanges = false;
+    this.els.kpis.innerHTML = items.map((item) => {
+      const previous = this.lastKpiValues.get(item.key);
+      const changed = item.raw != null && previous != null && item.raw !== previous;
+      const delta = changed ? item.raw! - previous! : 0;
+      if (changed) {
+        hasChanges = true;
+        this.activeKpiDeltas.set(item.key, {
+          text: this.formatKpiDelta(item.key, delta, t.currency),
+          down: delta < 0,
+        });
+      }
+      if (item.raw != null) this.lastKpiValues.set(item.key, item.raw);
+      const activeDelta = this.activeKpiDeltas.get(item.key);
+      return `<div class="slm-kpi${activeDelta ? ' changed' : ''}" data-kpi="${item.key}">
+        <b>${item.dot ? `<span class="dot" style="background:${item.dot}"></span>` : ''}${item.n}</b><span>${item.l}</span>
+        ${activeDelta ? `<span class="slm-kpidelta${activeDelta.down ? ' down' : ''}">${activeDelta.text}</span>` : ''}
+      </div>`;
+    }).join('');
+    if (hasChanges) {
+      // The map above has already adopted the new values, so detect the rendered
+      // change markers directly and remove their accessibility footprint after
+      // the visual cue completes.
+      if (this.kpiCleanupTimer) clearTimeout(this.kpiCleanupTimer);
+      this.kpiCleanupTimer = setTimeout(() => {
+        this.kpiCleanupTimer = null;
+        this.activeKpiDeltas.clear();
+        this.els.kpis?.querySelectorAll('.slm-kpidelta').forEach((element) => element.remove());
+        this.els.kpis?.querySelectorAll('.slm-kpi.changed').forEach((element) => element.classList.remove('changed'));
+      }, 1500);
+    }
   }
 
   // ---- DOM: rails -----------------------------------------------------------
@@ -1304,10 +1563,10 @@ export class SeatManager {
       const net = speed?.netBooked ?? 0;
       const netLabel = `${net > 0 ? '+' : ''}${net}`;
       const trend = speed?.trend === 'rising' || speed?.trend === 'cooling' ? speed.trend : 'steady';
-      return `<div class="slm-sectionrow">
-        <div class="slm-sectiontop"><span>${esc(row.sectionLabel)}</span><span>${fmtMoney(row.bookedRevenue, snapshot.currency)}</span></div>
-        <div class="slm-sectionmeta"><span>${row.booked.toLocaleString()}/${row.total.toLocaleString()} sold · ${netLabel} in ${snapshot.velocity.windowMinutes}m</span><span class="slm-trend ${trend}">${trend}</span></div>
-      </div>`;
+      return `<button type="button" class="slm-sectionrow" data-section-focus="${esc(row.sectionId)}" title="Focus ${esc(row.sectionLabel)} on the map">
+        <span class="slm-sectiontop"><span>${esc(row.sectionLabel)}</span><span>${fmtMoney(row.bookedRevenue, snapshot.currency)}</span></span>
+        <span class="slm-sectionmeta"><span>${row.booked.toLocaleString()}/${row.total.toLocaleString()} sold · ${netLabel} in ${snapshot.velocity.windowMinutes}m</span><span class="slm-trend ${trend}">${trend}</span><span class="slm-sectionlocate">Locate</span></span>
+      </button>`;
     }).join('') : '<div class="slm-empty">No section metrics are available for this chart.</div>';
     this.paintTrendWindow();
     this.paintMomentumHelp();
@@ -1384,9 +1643,13 @@ export class SeatManager {
     const color: Record<DoStatus, string> = { free: '#6e7bff', held: '#f4b740', booked: '#22a06b', blocked: '#8b94ac' };
     this.els.feed.innerHTML = this.feed.map((a) => {
       const extra = a.count > 1 ? ` +${a.count - 1}` : '';
-      return `<div class="slm-feedrow"><span class="slm-feeddot" style="background:${color[a.status]}"></span>
-        <span class="slm-feedtext">${a.count === 1 ? 'Seat' : 'Seats'} <b>${esc(a.label)}${extra}</b> ${esc(a.verb)}</span>
-        <span class="slm-feedtime">${relTime(a.at, now)}</span></div>`;
+      const sections = a.sectionLabels ?? [];
+      const sectionCopy = sections.length === 1 ? sections[0] : sections.length > 1 ? `${sections.length} sections` : '';
+      return `<button type="button" class="slm-feedrow" data-feed-id="${esc(a.id)}" title="Locate this activity on the map">
+        <span class="slm-feeddot" style="background:${color[a.status]}"></span>
+        <span class="slm-feedtext">${sectionCopy ? `<span class="slm-feedsection">${esc(sectionCopy)}</span>` : ''}${a.count === 1 ? 'Seat' : 'Seats'} <b>${esc(a.label)}${extra}</b> ${esc(a.verb)}</span>
+        <span class="slm-feedmeta"><span class="slm-feedtime">${relTime(a.at, now)}</span><span class="slm-feedlocate">Locate</span></span>
+      </button>`;
     }).join('');
   }
 
@@ -1668,6 +1931,16 @@ export class SeatManager {
 
   private done(action: SeatManagerActionResult['action'], labels: string[], msg: string): void {
     this.toastOk(msg);
+    if (labels.length) {
+      const activity = action === 'block'
+        ? this.pushActivity(labels, 'blocked', 'blocked')
+        : action === 'unblock' || action === 'unblockAll'
+          ? this.pushActivity(labels, 'unblocked', 'free')
+          : action === 'cancelBooking'
+            ? this.pushActivity(labels, 'cancelled', 'free')
+            : null;
+      if (activity) this.paintSpatialActivity(activity);
+    }
     if (action !== 'setHoldTtl') this.scheduleRevenueRefresh(0);
     this.opts.onActionComplete?.({ action, labels, count: labels.length });
   }
