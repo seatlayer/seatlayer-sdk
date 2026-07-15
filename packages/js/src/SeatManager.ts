@@ -253,6 +253,10 @@ const CSS = `
 .slm-sectionhead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-top:18px}
 .slm-windows{display:flex;gap:3px;padding:2px;border:1px solid var(--slm-line);border-radius:8px;background:var(--slm-surface)}
 .slm-window{padding:4px 6px;border-radius:6px;font-size:10px;font-weight:800;color:var(--slm-muted)}.slm-window.on{background:var(--slm-accent);color:var(--slm-accent-ink)}
+.slm-momentumhelp{margin:10px 0 14px;padding:10px;border:1px solid rgba(244,183,64,.28);border-radius:10px;background:rgba(244,183,64,.07)}
+.slm-momentumhelp[hidden]{display:none}.slm-momentumscale{display:flex;align-items:center;gap:7px;color:var(--slm-muted);font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.07em}
+.slm-momentumgradient{height:6px;min-width:64px;flex:1;border-radius:999px;background:linear-gradient(90deg,#f4b740,#ef4444)}
+.slm-momentumcopy{margin-top:7px;color:var(--slm-muted);font-size:11px;line-height:1.45}
 .slm-inspect-card{padding:12px;border:1px solid var(--slm-line);border-radius:12px;background:var(--slm-surface)}
 .slm-inspect-label{font-size:24px;font-weight:850;letter-spacing:-.02em}.slm-inspect-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
 .slm-inspect-grid span{display:block;color:var(--slm-muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}.slm-inspect-grid b{display:block;margin-top:3px;font-size:12.5px}
@@ -1029,7 +1033,9 @@ export class SeatManager {
         </div>
         <span class="slm-live"><span class="slm-live-dot"></span><span data-ref="livetext">CONNECTING</span></span>
         <div class="slm-bar-actions">
-          <button class="slm-barbtn" data-ref="heat" aria-pressed="false">Heat</button>
+          <button class="slm-barbtn" data-ref="heat" aria-pressed="false"
+            aria-label="Sales momentum overlay off"
+            title="Highlight sections selling fastest in the selected time window">Sales momentum</button>
           <button class="slm-barbtn" data-ref="fullscreen" title="Full screen (F)" aria-keyshortcuts="F">Full screen</button>
         </div>
         <div class="slm-kpis" data-ref="kpis"></div>
@@ -1108,7 +1114,22 @@ export class SeatManager {
     if (!button) return;
     button.classList.toggle('on', this.heatEnabled);
     button.setAttribute('aria-pressed', String(this.heatEnabled));
-    button.textContent = this.heatEnabled ? 'Heat on' : 'Heat';
+    button.setAttribute('aria-label', `Sales momentum overlay ${this.heatEnabled ? 'on' : 'off'}`);
+    button.setAttribute('title', `${this.heatEnabled ? 'Hide' : 'Highlight'} sections selling fastest in the selected time window`);
+    button.textContent = 'Sales momentum';
+    this.paintMomentumHelp();
+  }
+
+  private paintMomentumHelp(): void {
+    const help = this.els.rail?.querySelector('[data-ref="momentumhelp"]') as HTMLElement | null;
+    if (!help) return;
+    help.hidden = !this.heatEnabled;
+    const copy = help.querySelector('[data-ref="momentumcopy"]');
+    if (!copy) return;
+    const hasRecentSales = this.controlRoomSnapshot?.velocity.bySection.some((row) => row.netBooked > 0);
+    copy.textContent = hasRecentSales
+      ? 'Warmer sections have more completed bookings, adjusted for section size. Holds and viewers are not counted.'
+      : `No completed bookings in the last ${this.trendWindowMinutes} minutes.`;
   }
 
   private paintFullscreenButton(): void {
@@ -1173,6 +1194,10 @@ export class SeatManager {
           ${[5, 15, 30, 60].map((window) => `<button class="slm-window" data-window="${window}">${window}m</button>`).join('')}
         </div>
       </div>
+      <div class="slm-momentumhelp" data-ref="momentumhelp" ${this.heatEnabled ? '' : 'hidden'}>
+        <div class="slm-momentumscale"><span>Warm</span><span class="slm-momentumgradient"></span><span>Hot</span></div>
+        <p class="slm-momentumcopy" data-ref="momentumcopy"></p>
+      </div>
       <div class="slm-sectionlist" data-ref="sections"></div>
       <p class="slm-eyebrow">Activity</p>
       <div class="slm-feed" data-ref="feed"></div>
@@ -1188,6 +1213,7 @@ export class SeatManager {
     this.recomputeTallies();
     this.paintMonitorInsights();
     this.paintTrendWindow();
+    this.paintMomentumHelp();
     this.paintFeed();
   }
 
@@ -1225,6 +1251,7 @@ export class SeatManager {
       </div>`;
     }).join('') : '<div class="slm-empty">No section metrics are available for this chart.</div>';
     this.paintTrendWindow();
+    this.paintMomentumHelp();
   }
 
   private applyHeatOverlay(): void {

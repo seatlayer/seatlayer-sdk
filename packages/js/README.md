@@ -46,7 +46,7 @@ Svelte → `onMount` / `onDestroy`. Angular → `ngAfterViewInit` / `ngOnDestroy
 realtime organizer cockpit. Mint a short-lived, event-scoped `mse_` token from
 your backend, bound to the browser's exact origin and only the capabilities it
 needs. The shared surface owns Monitor, Inspect, Block/unblock, fullscreen,
-presence, exact section revenue, sales velocity, and its heat overlay.
+presence, exact section revenue, sales velocity, and a clearly explained **Sales momentum** overlay.
 
 ```js
 import { SeatManager } from '@seatlayer/js';

@@ -65,7 +65,7 @@ Built on [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js).
 
 Use `SeatManager` with a short-lived, event-scoped manage token minted by your
 backend. Monitor, Inspect, Block/unblock, fullscreen, presence, exact section
-revenue, velocity, and heat are one shared package surface—not host-owned tabs.
+revenue, velocity, and the **Sales momentum** overlay are one shared package surface—not host-owned tabs.
 
 ```tsx
 <SeatManager
