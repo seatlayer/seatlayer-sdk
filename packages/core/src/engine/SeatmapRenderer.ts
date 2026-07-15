@@ -279,6 +279,7 @@ interface SectionRender {
   free: number;
   /** Category-mix (or explicit override) fill BEFORE the availability tint. */
   baseFill: string;
+  outlineTint: string;
   /** Faint outline drawn under seats — the existing near-zoom look, untouched. */
   outlinePoly: Line;
   /** Solid block fill that melts in at the block rung. */
@@ -365,6 +366,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private currency: string | undefined;
   /** Section/zone ids to render dimmed (organizer manager: held-back inventory). */
   private dimmedSections = new Set<string>();
+  /** Organizer control-room velocity overlay; absent on buyer surfaces. */
+  private sectionHeat = new Map<string, number>();
   /** Phase 2: section/zone ids in the event-level `closed` state — flat grey
    *  block, seats greyed + not pickable, but the section stays rendered. */
   private closedSections = new Set<string>();
@@ -683,6 +686,41 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const ids = [...this.selection];
     for (const id of ids) this.setSelected(id, false, true);
     this.overlayLayer.batchDraw();
+  }
+
+  /** Switch organizer interaction in place so the host preserves camera, LOD,
+   * focus and live status state while moving between Monitor and Block. */
+  setManageInteraction(options: {
+    manageMode: boolean;
+    marqueeSelect: boolean;
+    selectableStatuses: SeatStatus[];
+    maxSelection?: number;
+  }): void {
+    if (this.marquee) this.cancelMarquee();
+    this.panLast = null;
+    this.opts.manageMode = options.manageMode;
+    this.opts.marqueeSelect = options.marqueeSelect;
+    this.opts.selectableStatuses = [...options.selectableStatuses];
+    if (options.maxSelection != null) this.opts.maxSelection = options.maxSelection;
+
+    // A selection from a previous interaction mode must not remain actionable
+    // after the new mode makes it read-only or changes its eligible statuses.
+    const invalid = [...this.selection].filter((id) => !this.isSelectable(id));
+    if (invalid.length) this.deselect(invalid);
+    if (!options.manageMode && this.selection.size) this.clearSelection();
+    this.container.style.cursor = 'default';
+    this.overlayLayer.batchDraw();
+  }
+
+  /** Apply a non-destructive velocity treatment to section outlines. Seat
+   * category/status fills remain untouched so heat never changes seat meaning. */
+  setSectionHeat(scores: Record<string, number> | null): void {
+    this.sectionHeat.clear();
+    for (const [sectionId, raw] of Object.entries(scores ?? {})) {
+      if (Number.isFinite(raw)) this.sectionHeat.set(sectionId, Math.max(0, Math.min(1, raw)));
+    }
+    for (const section of this.sections) this.refreshSectionHeat(section);
+    this.bgLayer.batchDraw();
   }
 
   deselect(seatIds: string[]): void {
@@ -2061,6 +2099,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       total: memberIds.length,
       free,
       baseFill,
+      outlineTint,
       outlinePoly,
       blockPoly,
       rowLines,
@@ -2073,7 +2112,26 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     };
     for (const id of memberIds) this.seatSection.set(id, sec);
     this.refreshSectionFill(sec);
+    this.refreshSectionHeat(sec);
     this.sections.push(sec);
+  }
+
+  private refreshSectionHeat(sec: SectionRender): void {
+    const raw = this.sectionHeat.get(sec.id) ?? (sec.zone ? this.sectionHeat.get(sec.zone) : undefined);
+    if (raw == null || raw <= 0) {
+      sec.outlinePoly.stroke(rgba(sec.outlineTint, 0.5));
+      sec.outlinePoly.fill(rgba(sec.outlineTint, 0.08));
+      sec.outlinePoly.strokeWidth(1.75);
+      sec.outlinePoly.shadowOpacity(0);
+      return;
+    }
+    const color = lerpColor('#f4b740', '#ef4444', raw);
+    sec.outlinePoly.stroke(rgba(color, 0.72 + raw * 0.25));
+    sec.outlinePoly.fill(rgba(color, 0.08 + raw * 0.13));
+    sec.outlinePoly.strokeWidth(2 + raw * 3.5);
+    sec.outlinePoly.shadowColor(color);
+    sec.outlinePoly.shadowBlur(4 + raw * 12);
+    sec.outlinePoly.shadowOpacity(0.25 + raw * 0.45);
   }
 
   /** Recompute a section's availability-tinted fill + "N LEFT" (cheap; on status change). */

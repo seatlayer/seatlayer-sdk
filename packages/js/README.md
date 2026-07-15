@@ -40,6 +40,32 @@ onUnmounted(() => chart?.destroy());
 
 Svelte → `onMount` / `onDestroy`. Angular → `ngAfterViewInit` / `ngOnDestroy`.
 
+## Embed the live control room
+
+`SeatManager` gives first-party dashboards and external platforms the same
+realtime organizer cockpit. Mint a short-lived, event-scoped `mse_` token from
+your backend, bound to the browser's exact origin and only the capabilities it
+needs. The shared surface owns Monitor, Inspect, Block/unblock, fullscreen,
+presence, exact section revenue, sales velocity, and its heat overlay.
+
+```js
+import { SeatManager } from '@seatlayer/js';
+
+const manager = new SeatManager({
+  container: '#control-room',
+  apiBase: 'https://api.seatlayer.io',
+  eventKey: 'ev_9f3a',
+  token: session.token,
+  tokenExpiresAt: session.expiresAt,
+  onTokenRefresh: () => mintManageSession(),
+});
+await manager.render();
+```
+
+Switching tools and rotating tokens happen in place: the renderer, camera,
+selection, WebSocket, and DOM are not remounted. Give the container a height;
+the cockpit responds to its container rather than the browser viewport.
+
 ## Embed the chart Designer
 
 For organizer-facing venue design, use `EmbeddedDesigner`. Your backend mints the

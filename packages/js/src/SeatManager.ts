@@ -4,15 +4,16 @@
  * Productizes the SeatLayer dashboard's ManageEventPage into a framework-
  * agnostic class (mirrors how SeatPicker productized the buyer flow). It mounts
  * the shared engine in `manageMode`, subscribes to the event's realtime channel
- * and drives two M1 modes on one canvas:
+ * and drives three control-room tools on one persistent canvas:
  *
  *   - **view**  — a live board: realtime seat repaint (flash on hold/book),
  *                 live KPI tallies + gross revenue, and a streaming activity
  *                 feed derived from the delta stream + audit log. Read-only.
+ *   - **inspect** — select one seat to read its live inventory context.
  *   - **block** — bulk-first block/unblock: marquee-drag, ⌘A select-all,
  *                 whole-category / whole-section select, single-seat fallback →
  *                 one batched block/unblock (optimistic, reconciled by the WS),
- *                 timed auto-release, and cancel-a-booking.
+ *                 and timed auto-release.
  *
  * Auth: reads (chart/objects/WS) are public; writes/reports carry a Bearer
  * event-scoped manage token (`mse_…`) or a tenant secret key (`sk_…`) via
@@ -28,9 +29,15 @@ import {
   type ExpandedSeat,
   type SeatStatus,
 } from '@seatlayer/core';
-import { ManageApi, ManageApiError, type LogEntry, type ReportResult } from './manageApi';
+import {
+  ManageApi,
+  ManageApiError,
+  type ControlRoomSnapshot,
+  type LogEntry,
+  type ReportResult,
+} from './manageApi';
 
-export type SeatManagerMode = 'view' | 'block';
+export type SeatManagerMode = 'view' | 'inspect' | 'block';
 
 /** DO seat status — 'blocked' has no engine analogue (→ 'not_for_sale'). */
 type DoStatus = 'free' | 'held' | 'booked' | 'blocked';
@@ -47,8 +54,10 @@ export interface SeatManagerTallies {
   capacityPct: number;
   /** booked / (total − blocked), 0–100 — sell-through of sellable inventory. */
   sellThroughPct: number;
-  /** Σ price(booked seat), major units. */
+  /** Exact Σ booked unit_price snapshots from the authenticated report. */
   grossRevenue: number;
+  /** Revenue is never reconstructed from chart list price. */
+  revenueStatus: 'loading' | 'current' | 'stale';
   /** ISO-4217 currency for grossRevenue. */
   currency: string;
 }
@@ -58,6 +67,9 @@ export interface SeatManagerActivity {
   id: string;
   at: number;
   label: string;
+  /** Full labels affected by this one backend/realtime operation. */
+  labels: string[];
+  count: number;
   /** Human verb: held / booked / released / blocked / unblocked. */
   verb: string;
   status: DoStatus;
@@ -79,6 +91,8 @@ export interface SeatManagerOptions {
   eventKey: string;
   /** Bearer manage token — event-scoped `mse_…` or a tenant secret `sk_…`. */
   token: string;
+  /** Absolute token expiry (epoch ms). Enables proactive in-place rotation. */
+  tokenExpiresAt?: number;
   /** Initial mode. Default 'view'. */
   mode?: SeatManagerMode;
   /** ISO-4217 fallback currency for revenue (chart/event currency wins). */
@@ -95,6 +109,14 @@ export interface SeatManagerOptions {
   onReady?: () => void;
   /** Live KPI tallies changed. */
   onTallies?: (tallies: SeatManagerTallies) => void;
+  /** A grouped live/audit activity item arrived. */
+  onActivity?: (activity: SeatManagerActivity) => void;
+  /** Exact private control-room projection changed. */
+  onControlRoom?: (snapshot: ControlRoomSnapshot) => void;
+  /** Called before token expiry. The manager swaps the result without remounting. */
+  onTokenRefresh?: () => Promise<{ token: string; expiresAt: number }>;
+  /** Tool/mode changed from inside the shared cockpit. */
+  onModeChange?: (mode: SeatManagerMode) => void;
   /** Block-mode selection changed (marquee / ⌘A / category / section / tap). */
   onSelectionChange?: (seats: ExpandedSeat[]) => void;
   /** A block/unblock/cancel action completed successfully. */
@@ -216,7 +238,31 @@ const CSS = `
 .slm-toast.err{background:#c0392b;color:#fff;border-color:#c0392b}
 .slm-toast.ok{background:#1f7a4d;color:#fff;border-color:#1f7a4d}
 
-@media (max-width:720px){.slm-rail{width:100%;border-left:0;border-top:1px solid var(--slm-line);height:44%}.slm-body{flex-direction:column}}
+/* control-room actions + insights */
+.slm-bar-actions{display:flex;align-items:center;gap:7px}
+.slm-barbtn.on{background:rgba(244,183,64,.13);border-color:#f4b740;color:#f7ca6b}
+.slm-sectionlist{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.slm-sectionlist + .slm-eyebrow{margin-top:18px}
+.slm-sectionrow{padding:10px;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface)}
+.slm-sectiontop,.slm-sectionmeta{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.slm-sectiontop{font-size:12.5px;font-weight:800}.slm-sectionmeta{margin-top:5px;color:var(--slm-muted);font-size:11px}
+.slm-trend{font-size:10px;text-transform:uppercase;letter-spacing:.08em}.slm-trend.rising{color:#22a06b}.slm-trend.cooling{color:#f4b740}
+.slm-health{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
+.slm-healthitem{padding:10px;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface)}
+.slm-healthitem b{display:block;font-size:17px;font-variant-numeric:tabular-nums}.slm-healthitem span{display:block;margin-top:2px;color:var(--slm-muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}
+.slm-sectionhead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-top:18px}
+.slm-windows{display:flex;gap:3px;padding:2px;border:1px solid var(--slm-line);border-radius:8px;background:var(--slm-surface)}
+.slm-window{padding:4px 6px;border-radius:6px;font-size:10px;font-weight:800;color:var(--slm-muted)}.slm-window.on{background:var(--slm-accent);color:var(--slm-accent-ink)}
+.slm-inspect-card{padding:12px;border:1px solid var(--slm-line);border-radius:12px;background:var(--slm-surface)}
+.slm-inspect-label{font-size:24px;font-weight:850;letter-spacing:-.02em}.slm-inspect-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.slm-inspect-grid span{display:block;color:var(--slm-muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}.slm-inspect-grid b{display:block;margin-top:3px;font-size:12.5px}
+.slm:fullscreen{border-radius:0;min-height:100vh;background:var(--slm-bg)}
+.slm:fullscreen .slm-bar{padding:14px 22px}.slm:fullscreen .slm-kpi b{font-size:21px}.slm:fullscreen .slm-rail{width:360px}
+
+.slm.compact .slm-rail{width:100%;border-left:0;border-top:1px solid var(--slm-line);height:44%}
+.slm.compact .slm-body{flex-direction:column}
+.slm.compact .slm-bar{gap:8px;padding:8px}.slm.compact .slm-barbtn{padding:6px 9px}
+.slm.compact .slm-kpis{gap:9px}.slm.compact .slm-kpi:nth-child(n+5){display:none}
 `;
 
 function injectStyle(): void {
@@ -260,6 +306,15 @@ function fmtMoney(amount: number, currency: string): string {
   }
 }
 
+function esc(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 export class SeatManager {
   private readonly opts: SeatManagerOptions;
   private readonly api: ManageApi;
@@ -280,8 +335,14 @@ export class SeatManager {
   private labelToSeat = new Map<string, ExpandedSeat>();
   private allIds: string[] = [];
   private status = new Map<string, DoStatus>();
-  private priceByCat = new Map<string, number>();
   private currency = 'USD';
+  private authoritativeGrossRevenue = 0;
+  private revenueStatus: SeatManagerTallies['revenueStatus'] = 'loading';
+  private revenueRequest = 0;
+  private revenueRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private controlRoomSnapshot: ControlRoomSnapshot | null = null;
+  private trendWindowMinutes = 15;
+  private heatEnabled = false;
 
   // realtime socket
   private ws: WebSocket | null = null;
@@ -294,6 +355,32 @@ export class SeatManager {
   private feedTimer: ReturnType<typeof setInterval> | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
   private releaseAt: number | null = null;
+  private layoutObserver: ResizeObserver | null = null;
+  private tokenExpiresAt: number | null = null;
+  private tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private tokenRefreshInFlight = false;
+  private sectionByObject = new Map<string, string>();
+  private sectionLabelById = new Map<string, string>();
+  private lastSyncedAt: number | null = null;
+
+  private readonly onFullscreenChange = (): void => {
+    this.paintFullscreenButton();
+    this.updateContainerLayout();
+    this.renderer?.forceDraw();
+  };
+
+  private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.matches('input,select,textarea,[contenteditable="true"]')) return;
+    const key = event.key.toLowerCase();
+    if (key === 'm') this.setMode('view');
+    else if (key === 'i') this.setMode('inspect');
+    else if (key === 'b') this.setMode('block');
+    else if (key === 'f') this.toggleFullscreen();
+    else return;
+    event.preventDefault();
+  };
 
   constructor(options: SeatManagerOptions) {
     this.opts = options;
@@ -301,6 +388,7 @@ export class SeatManager {
     this.mode = options.mode ?? 'view';
     this.keepLive = options.keepLiveWhileHidden ?? true;
     this.currency = options.currency ?? 'USD';
+    this.tokenExpiresAt = options.tokenExpiresAt ?? null;
     this.api = new ManageApi(options.apiBase ?? DEFAULT_API_BASE, options.token);
     this.host = resolveContainer(options.container);
   }
@@ -313,7 +401,6 @@ export class SeatManager {
       const res = await this.api.chart(this.key);
       this.doc = res.doc;
       this.currency = res.event.currency ?? this.opts.currency ?? this.currency;
-      for (const cat of res.doc.categories) this.priceByCat.set(cat.key, cat.price ?? 0);
       const seats = expandChart(res.doc);
       for (const s of seats) {
         this.labelToId.set(s.label, s.id);
@@ -322,13 +409,17 @@ export class SeatManager {
       }
       this.buildRenderer();
       this.buildSectionOptions();
-      await this.resnapshot();
+      await Promise.all([
+        this.resnapshot(),
+        this.refreshControlRoom().catch((err) => this.opts.onError?.(err)),
+      ]);
       // Seed the activity feed from the audit log (best-effort; token-gated).
       this.api.log(this.key, { limit: 24 }).then((page) => this.seedFeed(page.entries)).catch(() => {});
       this.connect();
       this.startFeedClock();
       this.ready = true;
       this.setMode(this.mode); // paint the right rail
+      this.scheduleTokenRefresh();
       this.opts.onReady?.();
     } catch (err) {
       this.fail(err);
@@ -339,11 +430,91 @@ export class SeatManager {
   // ---- public API -----------------------------------------------------------
 
   setMode(mode: SeatManagerMode): void {
-    const changed = mode !== this.mode || !this.renderer;
+    const changed = mode !== this.mode;
     this.mode = mode;
-    if (changed && this.doc) this.buildRenderer();
+    if (!this.renderer && this.doc) this.buildRenderer();
+    else this.updateRendererInteraction();
+    if (changed) this.renderer?.clearSelection();
     this.paintModeTabs();
     this.paintRail();
+    if (changed) this.opts.onModeChange?.(mode);
+  }
+
+  /** Toggle the normalized sales-velocity outline overlay without changing seat colors. */
+  setHeatOverlay(enabled: boolean): void {
+    this.heatEnabled = enabled;
+    this.applyHeatOverlay();
+    this.paintHeatButton();
+  }
+
+  /** Change the current-vs-previous sales window and refresh the private projection. */
+  setTrendWindow(windowMinutes: number): Promise<ControlRoomSnapshot> {
+    const normalized = Number.isFinite(windowMinutes) ? Math.floor(windowMinutes) : 15;
+    this.trendWindowMinutes = Math.max(5, Math.min(60, normalized));
+    this.paintTrendWindow();
+    return this.refreshControlRoom();
+  }
+
+  async enterFullscreen(): Promise<void> {
+    if (!this.root?.requestFullscreen || this.isFullscreen()) return;
+    await this.root.requestFullscreen();
+    this.root.focus({ preventScroll: true });
+  }
+
+  async exitFullscreen(): Promise<void> {
+    if (typeof document === 'undefined' || !this.isFullscreen()) return;
+    await document.exitFullscreen();
+  }
+
+  isFullscreen(): boolean {
+    return typeof document !== 'undefined' && document.fullscreenElement === this.root;
+  }
+
+  private toggleFullscreen(): void {
+    const request = this.isFullscreen() ? this.exitFullscreen() : this.enterFullscreen();
+    void request.catch((err) => this.opts.onError?.(err));
+  }
+
+  /** Rotate the delegated credential without rebuilding DOM, canvas or socket. */
+  setToken(token: string, expiresAt?: number): void {
+    this.api.setToken(token);
+    this.tokenExpiresAt = expiresAt ?? null;
+    this.scheduleTokenRefresh();
+  }
+
+  private scheduleTokenRefresh(): void {
+    if (this.tokenRefreshTimer) clearTimeout(this.tokenRefreshTimer);
+    this.tokenRefreshTimer = null;
+    const refresh = this.opts.onTokenRefresh;
+    const expiresAt = this.tokenExpiresAt;
+    if (this.closed || !refresh || !expiresAt || !Number.isFinite(expiresAt)) return;
+    const remaining = expiresAt - Date.now();
+    const lead = Math.min(120_000, Math.max(30_000, remaining * 0.2));
+    const delay = Math.max(0, remaining - lead);
+    this.tokenRefreshTimer = setTimeout(() => {
+      this.tokenRefreshTimer = null;
+      void this.rotateToken();
+    }, delay);
+  }
+
+  private async rotateToken(): Promise<void> {
+    if (this.closed || this.tokenRefreshInFlight || !this.opts.onTokenRefresh) return;
+    this.tokenRefreshInFlight = true;
+    try {
+      const next = await this.opts.onTokenRefresh();
+      if (!next?.token || !Number.isFinite(next.expiresAt)) throw new Error('invalid_token_refresh_result');
+      this.setToken(next.token, next.expiresAt);
+    } catch (err) {
+      this.opts.onError?.(err);
+      if (!this.closed) {
+        this.tokenRefreshTimer = setTimeout(() => {
+          this.tokenRefreshTimer = null;
+          void this.rotateToken();
+        }, 30_000);
+      }
+    } finally {
+      this.tokenRefreshInFlight = false;
+    }
   }
 
   /** Bulk block the given labels (or the current selection when omitted). */
@@ -443,7 +614,14 @@ export class SeatManager {
   }
 
   getReport(): Promise<ReportResult> {
-    return this.api.report(this.key);
+    return this.api.report(this.key).then((report) => {
+      this.applyReportRevenue(report);
+      return report;
+    });
+  }
+
+  getControlRoomSnapshot(windowMinutes = this.trendWindowMinutes): Promise<ControlRoomSnapshot> {
+    return this.setTrendWindow(windowMinutes);
   }
 
   getLog(opts: { limit?: number; before?: number } = {}): Promise<{ entries: LogEntry[]; nextBefore: number | null }> {
@@ -475,32 +653,65 @@ export class SeatManager {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.feedTimer) clearInterval(this.feedTimer);
     if (this.toastTimer) clearTimeout(this.toastTimer);
+    if (this.revenueRefreshTimer) clearTimeout(this.revenueRefreshTimer);
+    if (this.tokenRefreshTimer) clearTimeout(this.tokenRefreshTimer);
+    this.layoutObserver?.disconnect();
+    this.layoutObserver = null;
+    this.root?.removeEventListener('keydown', this.onKeyDown);
+    if (typeof document !== 'undefined') document.removeEventListener('fullscreenchange', this.onFullscreenChange);
     if (this.ws) { try { this.ws.close(); } catch { /* ignore */ } this.ws = null; }
     this.renderer?.destroy();
     this.renderer = null;
     if (this.root && this.root.parentNode === this.host) this.host.removeChild(this.root);
   }
 
-  // ---- renderer lifecycle (rebuilt per mode, like ManageEventPage) ----------
+  // ---- renderer lifecycle ---------------------------------------------------
 
   private buildRenderer(): void {
     if (!this.doc) return;
-    this.renderer?.destroy();
     const block = this.mode === 'block';
+    const inspect = this.mode === 'inspect';
     this.renderer = new SeatmapRenderer(this.mapHost, {
       manageMode: true,
       marqueeSelect: block,
       maxSelection: 1_000_000,
-      selectableStatuses: block ? ['free', 'not_for_sale', 'booked'] : [],
+      selectableStatuses: block
+        ? ['free', 'not_for_sale']
+        : inspect ? ['free', 'held', 'booked', 'not_for_sale'] : [],
       currency: this.currency,
-      onSelect: () => this.syncSelection(),
+      onSelect: (seat) => this.handleSeatSelect(seat),
       onDeselect: () => this.syncSelection(),
       onMarquee: () => this.syncSelection(),
       onViewChange: () => this.updateZoomHint(),
     });
     this.renderer.setChart(this.doc);
     this.repaintAll();
+    this.applyHeatOverlay();
     this.updateZoomHint();
+  }
+
+  private updateRendererInteraction(): void {
+    const block = this.mode === 'block';
+    const inspect = this.mode === 'inspect';
+    this.renderer?.setManageInteraction({
+      manageMode: true,
+      marqueeSelect: block,
+      maxSelection: 1_000_000,
+      selectableStatuses: block
+        ? ['free', 'not_for_sale']
+        : inspect ? ['free', 'held', 'booked', 'not_for_sale'] : [],
+    });
+    this.updateZoomHint();
+  }
+
+  private handleSeatSelect(seat: ExpandedSeat): void {
+    if (this.mode === 'inspect') {
+      const others = this.getSelection()
+        .filter((selected) => selected.id !== seat.id)
+        .map((selected) => selected.id);
+      if (others.length) this.renderer?.deselect(others);
+    }
+    this.syncSelection();
   }
 
   private repaintAll(): void {
@@ -532,7 +743,7 @@ export class SeatManager {
     ws.onopen = () => {
       this.attempt = 0;
       this.setLive(true);
-      void this.resnapshot();
+      void this.resnapshot().then(() => this.scheduleRevenueRefresh(0));
     };
     ws.onmessage = (e) => this.onMessage(e);
     ws.onclose = () => {
@@ -557,12 +768,36 @@ export class SeatManager {
       return;
     }
     if (!msg || typeof msg !== 'object') return;
-    const m = msg as { type?: string; seats?: Record<string, string>; changes?: { label: string; status: string }[] };
+    const m = msg as {
+      type?: string;
+      seats?: Record<string, string>;
+      changes?: { label: string; status: string }[];
+      shoppingSessions?: number;
+      activeHolds?: number;
+    };
+    if (m.type === 'presence') {
+      if (
+        this.controlRoomSnapshot &&
+        typeof m.shoppingSessions === 'number' &&
+        typeof m.activeHolds === 'number'
+      ) {
+        this.controlRoomSnapshot = {
+          ...this.controlRoomSnapshot,
+          presence: { shoppingSessions: m.shoppingSessions, activeHolds: m.activeHolds },
+        };
+        this.lastSyncedAt = Date.now();
+        this.recomputeTallies();
+        this.paintMonitorInsights();
+        this.opts.onControlRoom?.(this.controlRoomSnapshot);
+      }
+      return;
+    }
     if (m.type === 'hidden') return;
     if (m.seats && typeof m.seats === 'object') {
       this.applySnapshot(m.seats);
     } else if (Array.isArray(m.changes)) {
       const ids: string[] = [];
+      const groups = new Map<string, { labels: string[]; verb: string; status: DoStatus }>();
       for (const ch of m.changes) {
         const st = (['free', 'held', 'booked', 'blocked'].includes(ch.status) ? ch.status : 'free') as DoStatus;
         const prev = this.status.get(ch.label) ?? 'free';
@@ -570,10 +805,19 @@ export class SeatManager {
         this.status.set(ch.label, st);
         const id = this.labelToId.get(ch.label);
         if (id) { this.renderer?.setStatus([id], toRenderStatus(st)); this.flash(id, st); ids.push(id); }
-        this.pushActivity(ch.label, prev, st);
+        const verb = this.verbFor(prev, st);
+        const groupKey = `${verb}:${st}`;
+        const group = groups.get(groupKey) ?? { labels: [], verb, status: st };
+        group.labels.push(ch.label);
+        groups.set(groupKey, group);
       }
-      if (ids.length) this.afterPaint();
+      for (const group of groups.values()) this.pushActivity(group.labels, group.verb, group.status);
+      if (ids.length) {
+        this.lastSyncedAt = Date.now();
+        this.afterPaint();
+      }
       this.recomputeTallies();
+      if (ids.length) this.scheduleRevenueRefresh();
     }
   }
 
@@ -592,6 +836,7 @@ export class SeatManager {
       next.set(label, (['free', 'held', 'booked', 'blocked'].includes(st) ? st : 'free') as DoStatus);
     }
     this.status = next;
+    this.lastSyncedAt = Date.now();
     this.repaintAll();
     this.afterPaint();
     this.recomputeTallies();
@@ -620,28 +865,73 @@ export class SeatManager {
 
   // ---- tallies + feed -------------------------------------------------------
 
+  private applyReportRevenue(report: ReportResult): void {
+    this.authoritativeGrossRevenue = report.report.byCategory.reduce(
+      (sum, row) => sum + (Number.isFinite(row.bookedRevenue) ? row.bookedRevenue : 0),
+      0,
+    );
+    this.revenueStatus = 'current';
+    this.recomputeTallies();
+  }
+
+  private async refreshControlRoom(): Promise<ControlRoomSnapshot> {
+    const request = ++this.revenueRequest;
+    try {
+      const snapshot = await this.api.controlRoom(this.key, this.trendWindowMinutes);
+      if (request === this.revenueRequest) {
+        this.controlRoomSnapshot = snapshot;
+        this.lastSyncedAt = Date.now();
+        this.authoritativeGrossRevenue = snapshot.revenue.gross;
+        this.currency = snapshot.currency;
+        this.revenueStatus = 'current';
+        this.recomputeTallies();
+        this.applyHeatOverlay();
+        this.paintMonitorInsights();
+        this.opts.onControlRoom?.(snapshot);
+      }
+      return snapshot;
+    } catch (err) {
+      if (request === this.revenueRequest) {
+        this.revenueStatus = 'stale';
+        this.recomputeTallies();
+      }
+      throw err;
+    }
+  }
+
+  private scheduleRevenueRefresh(delay = 140): void {
+    this.revenueStatus = 'stale';
+    this.recomputeTallies();
+    if (this.revenueRefreshTimer) clearTimeout(this.revenueRefreshTimer);
+    this.revenueRefreshTimer = setTimeout(() => {
+      this.revenueRefreshTimer = null;
+      void this.refreshControlRoom().catch((err) => this.opts.onError?.(err));
+    }, delay);
+  }
+
   private recomputeTallies(): void {
     const t: SeatManagerTallies = {
       free: 0, held: 0, booked: 0, blocked: 0,
       total: this.allIds.length, capacityPct: 0, sellThroughPct: 0,
-      grossRevenue: 0, currency: this.currency,
+      grossRevenue: this.authoritativeGrossRevenue,
+      revenueStatus: this.revenueStatus,
+      currency: this.currency,
     };
     // free = total − (held+booked+blocked); the snapshot only carries non-free.
     let nonFree = 0;
-    for (const [label, st] of this.status.entries()) {
+    for (const st of this.status.values()) {
       t[st] += 1;
       if (st !== 'free') nonFree += 1;
-      if (st === 'booked') {
-        const seat = this.labelToSeat.get(label);
-        if (seat) t.grossRevenue += this.priceByCat.get(seat.categoryKey) ?? 0;
-      }
     }
     t.free = Math.max(0, t.total - nonFree);
     t.capacityPct = t.total ? Math.round((t.booked / t.total) * 100) : 0;
     const sellable = t.total - t.blocked;
     t.sellThroughPct = sellable > 0 ? Math.round((t.booked / sellable) * 100) : 0;
     this.paintKpis(t);
-    if (this.mode === 'view') this.paintLegend(t);
+    if (this.mode === 'view') {
+      this.paintLegend(t);
+      this.paintMonitorInsights();
+    } else if (this.mode === 'inspect') this.renderInspectRail(this.getSelection());
     this.opts.onTallies?.(t);
   }
 
@@ -653,17 +943,22 @@ export class SeatManager {
     return next;
   }
 
-  private pushActivity(label: string, prev: DoStatus, next: DoStatus): void {
+  private pushActivity(labels: string[], verb: string, status: DoStatus, at = Date.now()): void {
+    const label = labels[0];
+    if (!label) return;
     const item: SeatManagerActivity = {
-      id: `${label}:${Date.now()}:${Math.random().toString(36).slice(2, 6)}`,
-      at: Date.now(),
+      id: `${label}:${at}:${Math.random().toString(36).slice(2, 6)}`,
+      at,
       label,
-      verb: this.verbFor(prev, next),
-      status: next,
+      labels: [...labels],
+      count: labels.length,
+      verb,
+      status,
     };
     this.feed.unshift(item);
     if (this.feed.length > FEED_CAP) this.feed.length = FEED_CAP;
     if (this.mode === 'view') this.paintFeed();
+    this.opts.onActivity?.(item);
   }
 
   private seedFeed(entries: LogEntry[]): void {
@@ -676,14 +971,17 @@ export class SeatManager {
     for (const e of entries) {
       const label = e.labels[0];
       if (!label) continue;
-      const extra = e.labels.length > 1 ? ` +${e.labels.length - 1}` : '';
-      this.feed.push({
+      const item: SeatManagerActivity = {
         id: `log:${e.id}`,
         at: e.at,
-        label: label + extra,
+        label,
+        labels: [...e.labels],
+        count: e.labels.length,
         verb: verbByAction[e.action] ?? e.action,
         status: stByAction[e.action] ?? 'free',
-      });
+      };
+      this.feed.push(item);
+      this.opts.onActivity?.(item);
     }
     this.feed.sort((a, b) => b.at - a.at);
     if (this.feed.length > FEED_CAP) this.feed.length = FEED_CAP;
@@ -691,7 +989,12 @@ export class SeatManager {
   }
 
   private startFeedClock(): void {
-    this.feedTimer = setInterval(() => { if (this.mode === 'view') this.paintFeed(); }, 10000);
+    this.feedTimer = setInterval(() => {
+      if (this.mode === 'view') {
+        this.paintFeed();
+        this.paintMonitorInsights();
+      }
+    }, 10000);
   }
 
   // ---- selection ------------------------------------------------------------
@@ -703,6 +1006,7 @@ export class SeatManager {
   private syncSelection(): void {
     const seats = this.getSelection();
     if (this.mode === 'block') this.paintSelBar(seats);
+    else if (this.mode === 'inspect') this.renderInspectRail(seats);
     this.opts.onSelectionChange?.(seats);
   }
 
@@ -711,15 +1015,23 @@ export class SeatManager {
   private buildChrome(): void {
     const root = document.createElement('div');
     root.className = 'slm';
+    root.tabIndex = 0;
+    root.setAttribute('role', 'region');
+    root.setAttribute('aria-label', 'SeatLayer live control room');
     const vars = themeVars(this.opts.theme);
     for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
     root.innerHTML = `
       <div class="slm-bar">
         <div class="slm-modes" data-ref="modes">
-          <button class="slm-mode" data-mode="view">View</button>
-          <button class="slm-mode" data-mode="block">Block</button>
+          <button class="slm-mode" data-mode="view" title="Monitor (M)" aria-keyshortcuts="M">Monitor</button>
+          <button class="slm-mode" data-mode="inspect" title="Inspect (I)" aria-keyshortcuts="I">Inspect</button>
+          <button class="slm-mode" data-mode="block" title="Block (B)" aria-keyshortcuts="B">Block</button>
         </div>
         <span class="slm-live"><span class="slm-live-dot"></span><span data-ref="livetext">CONNECTING</span></span>
+        <div class="slm-bar-actions">
+          <button class="slm-barbtn" data-ref="heat" aria-pressed="false">Heat</button>
+          <button class="slm-barbtn" data-ref="fullscreen" title="Full screen (F)" aria-keyshortcuts="F">Full screen</button>
+        </div>
         <div class="slm-kpis" data-ref="kpis"></div>
       </div>
       <div class="slm-body">
@@ -734,16 +1046,33 @@ export class SeatManager {
     `;
     this.host.appendChild(root);
     this.root = root;
+    this.updateContainerLayout();
+    if (typeof ResizeObserver !== 'undefined') {
+      this.layoutObserver = new ResizeObserver(() => this.updateContainerLayout());
+      this.layoutObserver.observe(root);
+    }
     const ref = (n: string) => root.querySelector(`[data-ref="${n}"]`) as HTMLElement;
     this.mapHost = ref('maphost') as HTMLDivElement;
     this.els = {
       modes: ref('modes'), livetext: ref('livetext'), kpis: ref('kpis'),
+      heat: ref('heat'), fullscreen: ref('fullscreen'),
       zoomhint: ref('zoomhint'), rail: ref('rail'), toast: ref('toast'), zfit: ref('zfit'),
     };
     this.els.modes.querySelectorAll('[data-mode]').forEach((b) =>
       b.addEventListener('click', () => this.setMode((b as HTMLElement).dataset.mode as SeatManagerMode)));
     this.els.zfit.addEventListener('click', () => this.zoomToFit());
+    this.els.heat.addEventListener('click', () => this.setHeatOverlay(!this.heatEnabled));
+    this.els.fullscreen.addEventListener('click', () => this.toggleFullscreen());
+    root.addEventListener('keydown', this.onKeyDown);
+    document.addEventListener('fullscreenchange', this.onFullscreenChange);
     this.paintModeTabs();
+    this.paintHeatButton();
+    this.paintFullscreenButton();
+  }
+
+  private updateContainerLayout(): void {
+    const width = this.root?.getBoundingClientRect().width || this.host.clientWidth;
+    this.root?.classList.toggle('compact', width > 0 && width < 800);
   }
 
   private sectionOptions: { id: string; label: string }[] = [];
@@ -752,8 +1081,17 @@ export class SeatManager {
     if (!this.doc) return;
     try {
       const secs = computeSections(this.doc);
-      for (const s of secs.sections) this.sectionOptions.push({ id: s.id, label: s.label });
-      if (secs.ungrouped) this.sectionOptions.push({ id: UNGROUPED_ID, label: secs.ungrouped.label });
+      this.sectionOptions = [];
+      this.sectionByObject = new Map(secs.objectToSection);
+      this.sectionLabelById.clear();
+      for (const s of secs.sections) {
+        this.sectionOptions.push({ id: s.id, label: s.label });
+        this.sectionLabelById.set(s.id, s.label);
+      }
+      if (secs.ungrouped) {
+        this.sectionOptions.push({ id: UNGROUPED_ID, label: secs.ungrouped.label });
+        this.sectionLabelById.set(UNGROUPED_ID, secs.ungrouped.label);
+      }
     } catch { /* no sections */ }
   }
 
@@ -765,9 +1103,30 @@ export class SeatManager {
     this.root?.classList.toggle('block-mode', this.mode === 'block');
   }
 
+  private paintHeatButton(): void {
+    const button = this.els.heat;
+    if (!button) return;
+    button.classList.toggle('on', this.heatEnabled);
+    button.setAttribute('aria-pressed', String(this.heatEnabled));
+    button.textContent = this.heatEnabled ? 'Heat on' : 'Heat';
+  }
+
+  private paintFullscreenButton(): void {
+    if (!this.els.fullscreen) return;
+    this.els.fullscreen.textContent = this.isFullscreen() ? 'Exit full screen' : 'Full screen';
+  }
+
+  private paintTrendWindow(): void {
+    this.els.rail?.querySelectorAll('[data-window]').forEach((button) => {
+      const value = Number((button as HTMLElement).dataset.window);
+      button.classList.toggle('on', value === this.trendWindowMinutes);
+    });
+  }
+
   private setLive(on: boolean): void {
     this.root?.classList.toggle('live', on);
     if (this.els.livetext) this.els.livetext.textContent = on ? 'LIVE' : 'RECONNECTING';
+    this.paintMonitorInsights();
   }
 
   private updateZoomHint(): void {
@@ -779,10 +1138,13 @@ export class SeatManager {
 
   private paintKpis(t: SeatManagerTallies): void {
     if (!this.els.kpis) return;
-    const rev = fmtMoney(t.grossRevenue, t.currency);
+    const rev = t.revenueStatus === 'current' ? fmtMoney(t.grossRevenue, t.currency) : '—';
+    const presence = this.controlRoomSnapshot?.presence;
     this.els.kpis.innerHTML = [
       { n: t.booked.toLocaleString(), l: 'Sold', dot: '#22a06b' },
       { n: t.held.toLocaleString(), l: 'Held', dot: '#f4b740' },
+      { n: presence ? presence.shoppingSessions.toLocaleString() : '—', l: 'Shopping' },
+      { n: presence ? presence.activeHolds.toLocaleString() : '—', l: 'Live holds' },
       { n: t.free.toLocaleString(), l: 'Free', dot: '#6e7bff' },
       { n: t.blocked.toLocaleString(), l: 'Blocked', dot: '#8b94ac' },
       { n: `${t.capacityPct}%`, l: 'Capacity' },
@@ -794,22 +1156,123 @@ export class SeatManager {
 
   private paintRail(): void {
     if (this.mode === 'view') this.renderViewRail();
+    else if (this.mode === 'inspect') this.renderInspectRail(this.getSelection());
     else this.renderBlockRail();
     this.updateZoomHint();
   }
 
   private renderViewRail(): void {
     this.els.rail.innerHTML = `
-      <p class="slm-eyebrow">Live board</p>
-      <p class="slm-hint">Read-only. Seats repaint and flash as buyers hold and book — watch your event breathe.</p>
+      <p class="slm-eyebrow">Monitor</p>
+      <p class="slm-hint">Read-only. Inventory, buyer presence and sales movement update on the same live board.</p>
+      <div class="slm-health" data-ref="presence"></div>
       <div class="slm-legend" data-ref="legend"></div>
+      <div class="slm-sectionhead">
+        <div><p class="slm-eyebrow">Section performance</p><p class="slm-note">Exact booked revenue · net sales velocity</p></div>
+        <div class="slm-windows" aria-label="Sales velocity window">
+          ${[5, 15, 30, 60].map((window) => `<button class="slm-window" data-window="${window}">${window}m</button>`).join('')}
+        </div>
+      </div>
+      <div class="slm-sectionlist" data-ref="sections"></div>
       <p class="slm-eyebrow">Activity</p>
       <div class="slm-feed" data-ref="feed"></div>
     `;
+    this.els.presence = this.els.rail.querySelector('[data-ref="presence"]') as HTMLElement;
     this.els.legend = this.els.rail.querySelector('[data-ref="legend"]') as HTMLElement;
+    this.els.sections = this.els.rail.querySelector('[data-ref="sections"]') as HTMLElement;
     this.els.feed = this.els.rail.querySelector('[data-ref="feed"]') as HTMLElement;
+    this.els.rail.querySelectorAll('[data-window]').forEach((button) => button.addEventListener('click', () => {
+      const windowMinutes = Number((button as HTMLElement).dataset.window);
+      void this.setTrendWindow(windowMinutes).catch((err) => this.opts.onError?.(err));
+    }));
     this.recomputeTallies();
+    this.paintMonitorInsights();
+    this.paintTrendWindow();
     this.paintFeed();
+  }
+
+  private paintMonitorInsights(): void {
+    if (this.mode !== 'view') return;
+    const snapshot = this.controlRoomSnapshot;
+    if (this.els.presence) {
+      const connected = this.root?.classList.contains('live');
+      const sync = this.lastSyncedAt ? relTime(this.lastSyncedAt, Date.now()) : 'waiting';
+      this.els.presence.innerHTML = `
+        <div class="slm-healthitem"><b>${snapshot ? snapshot.presence.shoppingSessions.toLocaleString() : '—'}</b><span>Buyer sessions</span></div>
+        <div class="slm-healthitem"><b>${snapshot ? snapshot.presence.activeHolds.toLocaleString() : '—'}</b><span>Active holds</span></div>
+        <div class="slm-healthitem"><b>${connected ? 'Healthy' : 'Reconnecting'}</b><span>Live connection</span></div>
+        <div class="slm-healthitem"><b>${sync}</b><span>Last sync</span></div>`;
+    }
+    if (!this.els.sections) return;
+    if (!snapshot) {
+      this.els.sections.innerHTML = '<div class="slm-empty">Loading authoritative section metrics…</div>';
+      return;
+    }
+    const velocity = new Map(snapshot.velocity.bySection.map((row) => [row.sectionId, row]));
+    const rows = [...snapshot.revenue.bySection].sort((a, b) => {
+      const av = velocity.get(a.sectionId)?.netBooked ?? 0;
+      const bv = velocity.get(b.sectionId)?.netBooked ?? 0;
+      return bv - av || b.bookedRevenue - a.bookedRevenue;
+    });
+    this.els.sections.innerHTML = rows.length ? rows.map((row) => {
+      const speed = velocity.get(row.sectionId);
+      const net = speed?.netBooked ?? 0;
+      const netLabel = `${net > 0 ? '+' : ''}${net}`;
+      const trend = speed?.trend === 'rising' || speed?.trend === 'cooling' ? speed.trend : 'steady';
+      return `<div class="slm-sectionrow">
+        <div class="slm-sectiontop"><span>${esc(row.sectionLabel)}</span><span>${fmtMoney(row.bookedRevenue, snapshot.currency)}</span></div>
+        <div class="slm-sectionmeta"><span>${row.booked.toLocaleString()}/${row.total.toLocaleString()} sold · ${netLabel} in ${snapshot.velocity.windowMinutes}m</span><span class="slm-trend ${trend}">${trend}</span></div>
+      </div>`;
+    }).join('') : '<div class="slm-empty">No section metrics are available for this chart.</div>';
+    this.paintTrendWindow();
+  }
+
+  private applyHeatOverlay(): void {
+    const snapshot = this.controlRoomSnapshot;
+    if (!this.heatEnabled || !snapshot) {
+      this.renderer?.setSectionHeat(null);
+      return;
+    }
+    const capacity = new Map(snapshot.revenue.bySection.map((row) => [row.sectionId, Math.max(1, row.total)]));
+    const rates = snapshot.velocity.bySection.map((row) => ({
+      sectionId: row.sectionId,
+      rate: Math.max(0, row.netBooked) / (capacity.get(row.sectionId) ?? 1) / snapshot.velocity.windowMinutes,
+    }));
+    const max = Math.max(0, ...rates.map((row) => row.rate));
+    const scores: Record<string, number> = {};
+    for (const row of rates) scores[row.sectionId] = max > 0 ? Math.sqrt(row.rate / max) : 0;
+    this.renderer?.setSectionHeat(scores);
+  }
+
+  private renderInspectRail(seats: ExpandedSeat[]): void {
+    const seat = seats[seats.length - 1];
+    if (!seat) {
+      this.els.rail.innerHTML = `
+        <p class="slm-eyebrow">Inspect</p>
+        <p class="slm-hint">Select any seat to see its live inventory context. Inspect is read-only and never changes availability.</p>
+        <div class="slm-empty">Choose a seat on the map.</div>`;
+      return;
+    }
+    const status = this.status.get(seat.label) ?? 'free';
+    const statusLabel: Record<DoStatus, string> = { free: 'Free', held: 'Held', booked: 'Booked', blocked: 'Blocked' };
+    const sectionId = this.sectionByObject.get(seat.rowId) ?? UNGROUPED_ID;
+    const sectionLabel = this.sectionLabelById.get(sectionId) ?? 'Other seats';
+    const category = this.doc?.categories.find((item) => item.key === seat.categoryKey);
+    const sectionMetric = this.controlRoomSnapshot?.revenue.bySection.find((row) => row.sectionId === sectionId);
+    this.els.rail.innerHTML = `
+      <p class="slm-eyebrow">Inspect</p>
+      <p class="slm-hint">Live inventory context. Booked seats remain read-only; order and payment actions belong to the host commerce system.</p>
+      <div class="slm-inspect-card">
+        <div class="slm-inspect-label">${esc(seat.label)}</div>
+        <div class="slm-inspect-grid">
+          <div><span>Status</span><b>${statusLabel[status]}</b></div>
+          <div><span>Section</span><b>${esc(sectionLabel)}</b></div>
+          <div><span>Row</span><b>${esc(seat.rowId)}</b></div>
+          <div><span>Category</span><b>${esc(category?.label ?? seat.categoryKey)}</b></div>
+          <div><span>Section sold</span><b>${sectionMetric ? `${sectionMetric.booked}/${sectionMetric.total}` : '—'}</b></div>
+          <div><span>Section revenue</span><b>${sectionMetric && this.controlRoomSnapshot ? fmtMoney(sectionMetric.bookedRevenue, this.controlRoomSnapshot.currency) : '—'}</b></div>
+        </div>
+      </div>`;
   }
 
   private paintLegend(t: SeatManagerTallies): void {
@@ -824,24 +1287,26 @@ export class SeatManager {
     if (!this.feed.length) { this.els.feed.innerHTML = `<div class="slm-empty">No activity yet — it'll stream in live.</div>`; return; }
     const now = Date.now();
     const color: Record<DoStatus, string> = { free: '#6e7bff', held: '#f4b740', booked: '#22a06b', blocked: '#8b94ac' };
-    this.els.feed.innerHTML = this.feed.map((a) =>
-      `<div class="slm-feedrow"><span class="slm-feeddot" style="background:${color[a.status]}"></span>
-        <span class="slm-feedtext">Seat <b>${a.label}</b> ${a.verb}</span>
-        <span class="slm-feedtime">${relTime(a.at, now)}</span></div>`).join('');
+    this.els.feed.innerHTML = this.feed.map((a) => {
+      const extra = a.count > 1 ? ` +${a.count - 1}` : '';
+      return `<div class="slm-feedrow"><span class="slm-feeddot" style="background:${color[a.status]}"></span>
+        <span class="slm-feedtext">${a.count === 1 ? 'Seat' : 'Seats'} <b>${esc(a.label)}${extra}</b> ${esc(a.verb)}</span>
+        <span class="slm-feedtime">${relTime(a.at, now)}</span></div>`;
+    }).join('');
   }
 
   private renderBlockRail(): void {
     const cats = this.doc?.categories ?? [];
     const catChips = cats.map((c) =>
-      `<button class="slm-chip" data-cat="${c.key}"><span class="dot" style="background:${c.color ?? '#6e7bff'}"></span>${c.label ?? c.key}</button>`).join('');
+      `<button class="slm-chip" data-cat="${esc(c.key)}"><span class="dot" style="background:${esc(c.color ?? '#6e7bff')}"></span>${esc(c.label ?? c.key)}</button>`).join('');
     const sectionField = this.sectionOptions.length
       ? `<div class="slm-field"><label>Select a whole section</label>
           <select class="slm-select" data-ref="section"><option value="">Choose a section…</option>
-          ${this.sectionOptions.map((s) => `<option value="${s.id}">${s.label}</option>`).join('')}</select></div>`
+          ${this.sectionOptions.map((s) => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('')}</select></div>`
       : '';
     this.els.rail.innerHTML = `
-      <p class="slm-eyebrow">Block &amp; cancel</p>
-      <p class="slm-hint">Drag a box on the map to marquee-select, ⌘A for all, or pick a category/section — then block, unblock, or cancel bookings in one action.</p>
+      <p class="slm-eyebrow">Block &amp; unblock</p>
+      <p class="slm-hint">Drag a box on the map to marquee-select, ⌘A for all, or pick a category/section. Booked and held inventory is never actionable here.</p>
       <div class="slm-selbar"><span class="slm-selnum" data-ref="selnum">0</span><span class="slm-sellabel">selected</span></div>
       <div class="slm-row">
         <button class="slm-btn" data-ref="doblock" disabled>Block</button>
@@ -850,7 +1315,6 @@ export class SeatManager {
       <div class="slm-row">
         <button class="slm-btn ghost" data-ref="selall">Select all</button>
         <button class="slm-btn ghost" data-ref="clearsel">Clear</button>
-        <button class="slm-btn danger" data-ref="docancel" disabled>Cancel booking</button>
       </div>
       <p class="slm-eyebrow" style="margin-top:8px">By category</p>
       <div class="slm-chiprow">${catChips || '<span class="slm-empty">No categories.</span>'}</div>
@@ -864,10 +1328,8 @@ export class SeatManager {
     `;
     const r = (n: string) => this.els.rail.querySelector(`[data-ref="${n}"]`) as HTMLElement;
     this.els.selnum = r('selnum'); this.els.doblock = r('doblock'); this.els.dounblock = r('dounblock');
-    this.els.docancel = r('docancel');
     r('doblock').addEventListener('click', () => void this.block());
     r('dounblock').addEventListener('click', () => void this.unblock());
-    r('docancel').addEventListener('click', () => this.promptCancel());
     r('selall').addEventListener('click', () => this.selectAll());
     r('clearsel').addEventListener('click', () => this.clearSelection());
     r('markall').addEventListener('click', () => void this.unblockAll());
@@ -893,31 +1355,20 @@ export class SeatManager {
     this.selectByLabels(labels);
   }
 
-  private promptCancel(): void {
-    const booked = this.getSelection().filter((s) => this.status.get(s.label) === 'booked');
-    if (!booked.length) return;
-    if (typeof window === 'undefined') return;
-    if (!window.confirm(`Cancel ${booked.length} booking${booked.length === 1 ? '' : 's'}? Seats return to sale (credit not refunded).`)) return;
-    const ref = window.prompt('Enter the original booking reference to cancel safely:')?.trim();
-    if (!ref) return;
-    void this.cancelBooking(booked.map((s) => s.label), ref);
-  }
-
   private paintSelBar(seats: ExpandedSeat[]): void {
     if (!this.els.selnum) return;
     this.els.selnum.textContent = seats.length.toLocaleString();
     const hasFree = seats.some((s) => this.status.get(s.label) === 'free');
     const hasBlocked = seats.some((s) => this.status.get(s.label) === 'blocked');
-    const hasBooked = seats.some((s) => this.status.get(s.label) === 'booked');
     (this.els.doblock as HTMLButtonElement).disabled = !hasFree;
     (this.els.dounblock as HTMLButtonElement).disabled = !hasBlocked;
-    (this.els.docancel as HTMLButtonElement).disabled = !hasBooked;
   }
 
   // ---- toast / done / fail --------------------------------------------------
 
   private done(action: SeatManagerActionResult['action'], labels: string[], msg: string): void {
     this.toastOk(msg);
+    if (action !== 'setHoldTtl') this.scheduleRevenueRefresh(0);
     this.opts.onActionComplete?.({ action, labels, count: labels.length });
   }
 

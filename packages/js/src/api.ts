@@ -102,6 +102,10 @@ async function request<T>(
 
 /** Public-surface client bound to one apiBase (e.g. https://api.seatlayer.io). */
 export class PubApi {
+  private readonly viewerId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `viewer_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+
   constructor(private readonly base: string) {}
 
   chart(key: string): Promise<PubChartResult> {
@@ -144,6 +148,7 @@ export class PubApi {
 
   socketUrl(key: string): string {
     const wsBase = this.base.replace(/^http/, 'ws');
-    return `${wsBase}/pub/events/${encodeURIComponent(key)}/subscribe`;
+    const params = new URLSearchParams({ surface: 'picker', viewerId: this.viewerId });
+    return `${wsBase}/pub/events/${encodeURIComponent(key)}/subscribe?${params}`;
   }
 }

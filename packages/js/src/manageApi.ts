@@ -49,6 +49,8 @@ export interface ReportCategoryRow {
   held: number;
   booked: number;
   not_for_sale: number;
+  /** Exact sum of booked unit_price snapshots, in major currency units. */
+  bookedRevenue: number;
 }
 
 export interface ReportCategoryMeta {
@@ -59,9 +61,40 @@ export interface ReportCategoryMeta {
 }
 
 export interface ReportResult {
-  report: { byStatus: ReportByStatus; byCategory: ReportCategoryRow[] };
+  report: { byStatus: ReportByStatus; byCategory: ReportCategoryRow[]; bySection?: ControlRoomSectionMetric[] };
   event: { key: string; name: string; seatTotal: number; currency?: string };
   categories: ReportCategoryMeta[];
+}
+
+export interface ControlRoomSectionMetric {
+  sectionId: string;
+  sectionLabel: string;
+  zoneId: string | null;
+  total: number;
+  free: number;
+  held: number;
+  booked: number;
+  not_for_sale: number;
+  bookedRevenue: number;
+}
+
+export interface ControlRoomSnapshot {
+  version: number;
+  currency: string;
+  totals: { free: number; held: number; booked: number; blocked: number };
+  revenue: { gross: number; bySection: ControlRoomSectionMetric[] };
+  velocity: {
+    windowMinutes: number;
+    bySection: Array<{
+      sectionId: string;
+      netBooked: number;
+      grossRevenue: number;
+      previousNetBooked: number;
+      trend: 'rising' | 'steady' | 'cooling';
+    }>;
+  };
+  presence: { shoppingSessions: number; activeHolds: number };
+  event: { key: string; name: string; seatTotal: number; currency?: string };
 }
 
 export interface LogEntry {
@@ -152,7 +185,7 @@ export class ManageApi {
   }
 
   socketUrl(key: string): string {
-    return `${this.base.replace(/^http/, 'ws')}/pub/events/${encodeURIComponent(key)}/subscribe`;
+    return `${this.base.replace(/^http/, 'ws')}/pub/events/${encodeURIComponent(key)}/subscribe?surface=manager`;
   }
 
   // ---- inventory writes (token) ----
@@ -196,6 +229,10 @@ export class ManageApi {
 
   report(key: string): Promise<ReportResult> {
     return this.auth(`/v1/events/${encodeURIComponent(key)}/report`);
+  }
+
+  controlRoom(key: string, windowMinutes = 15): Promise<ControlRoomSnapshot> {
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/control-room?window=${windowMinutes}`);
   }
 
   log(key: string, opts: { limit?: number; before?: number } = {}): Promise<LogPage> {

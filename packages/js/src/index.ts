@@ -22,7 +22,7 @@ export type {
   CheckoutHandoff,
   CheckoutLineItem,
 } from './SeatPicker';
-// Organizer manage surface (M1: live View board + bulk Block/unblock).
+// Organizer control room: Monitor + Inspect + bulk Block/unblock on one renderer.
 export { SeatManager } from './SeatManager';
 export type {
   SeatManagerOptions,
@@ -37,6 +37,8 @@ export type {
   ReportByStatus,
   ReportCategoryRow,
   ReportCategoryMeta,
+  ControlRoomSectionMetric,
+  ControlRoomSnapshot,
   LogEntry,
   LogPage,
 } from './manageApi';

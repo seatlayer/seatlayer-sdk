@@ -25,7 +25,7 @@ export type {
 // The framework-agnostic widget class — for the one-call modal (SeatPickerWidget.open()).
 export { SeatPicker as SeatPickerWidget } from '@seatlayer/js';
 
-// Organizer manage surface (M1: live View board + bulk Block/unblock).
+// Organizer control room: Monitor + Inspect + bulk Block/unblock on one renderer.
 export { SeatManager } from './SeatManager';
 export type {
   SeatManagerHandle,
@@ -36,3 +36,4 @@ export type {
   SeatManagerActivity,
   SeatManagerActionResult,
 } from './SeatManager';
+export type { ControlRoomSectionMetric, ControlRoomSnapshot } from '@seatlayer/js';

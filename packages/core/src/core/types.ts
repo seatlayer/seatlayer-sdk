@@ -525,6 +525,19 @@ export interface ISeatmapRenderer {
   getSelection(): ExpandedSeat[];
   clearSelection(): void;
   /**
+   * Dynamically update organizer-only interaction without rebuilding the
+   * renderer. No buyer surface calls this; every behavior remains gated by
+   * `manageMode` exactly as it is at construction time.
+   */
+  setManageInteraction?(options: {
+    manageMode: boolean;
+    marqueeSelect: boolean;
+    selectableStatuses: SeatStatus[];
+    maxSelection?: number;
+  }): void;
+  /** Organizer-only section heat overlay. Values are normalized 0..1. */
+  setSectionHeat?(scores: Record<string, number> | null): void;
+  /**
    * Manage-mode bulk selection helpers (no-op / empty unless `manageMode`).
    * They select the matching SELECTABLE seats (respecting `selectableStatuses`
    * + closed sections), union with the current selection, and return the seats

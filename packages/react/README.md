@@ -61,6 +61,28 @@ books directly. See the [integration guide](https://docs.seatlayer.io/getting-st
 
 Built on [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js).
 
+## Embed the live control room
+
+Use `SeatManager` with a short-lived, event-scoped manage token minted by your
+backend. Monitor, Inspect, Block/unblock, fullscreen, presence, exact section
+revenue, velocity, and heat are one shared package surface—not host-owned tabs.
+
+```tsx
+<SeatManager
+  ref={manager}
+  apiBase="https://api.seatlayer.io"
+  eventKey="ev_9f3a"
+  token={session.token}
+  tokenExpiresAt={session.expiresAt}
+  onTokenRefresh={() => mintManageSession()}
+  style={{ width: '100%', height: 'calc(100vh - 96px)' }}
+/>
+```
+
+Token rotation and tool changes preserve the live renderer, camera, selection,
+WebSocket, and DOM. The component responds to its own container, including
+compact embeds, and the buyer SDK remains unchanged when manager options are off.
+
 ## Embed the chart Designer
 
 `EmbeddedDesigner` gives an organizer a native-feeling Designer inside your React
