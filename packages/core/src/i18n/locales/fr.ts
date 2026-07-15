@@ -39,7 +39,7 @@ export const fr: Dict = {
   'picker.viewMode': 'Mode d\'affichage',
   'picker.floor': 'Étage',
   'picker.zoomLevel': 'Niveau de zoom',
-  'picker.rungTip.zones': 'Vue la plus large — blocs de zones (Étage / Parquet inférieur / Parquet supérieur)',
+  'picker.rungTip.zones': 'Vue générale — groupes de sections comme Tribune nord ou VIP',
   'picker.rungTip.sections': 'Blocs de sections — mélange de catégories + teinte de disponibilité',
   'picker.rungTip.seats': 'Sièges individuels — les blocs se transforment en points',
   'picker.rungLabel.zones': 'ZONES',

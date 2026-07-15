@@ -39,7 +39,7 @@ export const es: Dict = {
   'picker.viewMode': 'Modo de vista',
   'picker.floor': 'Piso',
   'picker.zoomLevel': 'Nivel de zoom',
-  'picker.rungTip.zones': 'Nivel más lejano — bloques de zona (Piso / Patio Bajo / Patio Alto)',
+  'picker.rungTip.zones': 'Vista general — grupos de secciones como Grada norte o VIP',
   'picker.rungTip.sections': 'Bloques de sección — mezcla de categorías + matiz de disponibilidad',
   'picker.rungTip.seats': 'Asientos individuales — los bloques se convierten en puntos',
   'picker.rungLabel.zones': 'ZONAS',

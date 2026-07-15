@@ -161,7 +161,8 @@ const CSS = `
 .slm input{font:inherit}
 
 /* top bar */
-.slm-bar{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--slm-line);flex:none;flex-wrap:wrap}
+.slm-bar{display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:center;column-gap:14px;row-gap:10px;
+  padding:10px 16px;border-bottom:1px solid var(--slm-line);flex:none}
 .slm-modes{display:inline-flex;background:var(--slm-surface);border:1px solid var(--slm-line);border-radius:999px;padding:3px}
 .slm-mode{padding:6px 16px;border-radius:999px;font-weight:700;font-size:13px;color:var(--slm-muted)}
 .slm-mode.on{background:var(--slm-accent);color:var(--slm-accent-ink)}
@@ -169,9 +170,11 @@ const CSS = `
 .slm-live-dot{width:8px;height:8px;border-radius:50%;background:#8b94ac}
 .slm.live .slm-live-dot{background:#22a06b;box-shadow:0 0 0 0 rgba(34,160,107,.55);animation:slm-pulse 2s infinite}
 @keyframes slm-pulse{0%{box-shadow:0 0 0 0 rgba(34,160,107,.5)}70%{box-shadow:0 0 0 7px rgba(34,160,107,0)}100%{box-shadow:0 0 0 0 rgba(34,160,107,0)}}
-.slm-kpis{display:flex;align-items:center;gap:16px;margin-left:auto;flex-wrap:wrap}
-.slm-kpi{display:flex;flex-direction:column;line-height:1.15}
-.slm-kpi b{font-size:17px;font-weight:800;font-variant-numeric:tabular-nums}
+.slm-kpis{grid-column:1/-1;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));width:100%;padding-top:10px;
+  border-top:1px solid var(--slm-line)}
+.slm-kpi{display:flex;min-width:0;flex-direction:column;align-items:center;padding:0 5px;line-height:1.15;text-align:center}
+.slm-kpi b{display:flex;min-width:0;align-items:baseline;justify-content:center;font-size:17px;font-weight:800;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
 .slm-kpi span{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--slm-muted);font-weight:700}
 .slm-kpi .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:baseline}
 .slm-barbtn{padding:7px 13px;border-radius:9px;border:1px solid var(--slm-line);color:var(--slm-text);font-weight:700;font-size:12.5px}
@@ -240,7 +243,7 @@ const CSS = `
 .slm-toast.ok{background:#1f7a4d;color:#fff;border-color:#1f7a4d}
 
 /* control-room actions + insights */
-.slm-bar-actions{display:flex;align-items:center;gap:7px}
+.slm-bar-actions{display:flex;align-items:center;justify-self:end;gap:7px}
 .slm-barbtn.on{background:rgba(244,183,64,.13);border-color:#f4b740;color:#f7ca6b}
 .slm-sectionlist{display:flex;flex-direction:column;gap:8px;margin-top:4px}
 .slm-sectionlist + .slm-eyebrow{margin-top:18px}
@@ -258,16 +261,22 @@ const CSS = `
 .slm-momentumhelp[hidden]{display:none}.slm-momentumscale{display:flex;align-items:center;gap:7px;color:var(--slm-muted);font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.07em}
 .slm-momentumgradient{height:6px;min-width:64px;flex:1;border-radius:999px;background:linear-gradient(90deg,#f4b740,#ef4444)}
 .slm-momentumcopy{margin-top:7px;color:var(--slm-muted);font-size:11px;line-height:1.45}
-.slm-inspect-card{padding:12px;border:1px solid var(--slm-line);border-radius:12px;background:var(--slm-surface)}
-.slm-inspect-label{font-size:24px;font-weight:850;letter-spacing:-.02em}.slm-inspect-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
-.slm-inspect-grid span{display:block;color:var(--slm-muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}.slm-inspect-grid b{display:block;margin-top:3px;font-size:12.5px}
+.slm-inspect-card{padding:16px;border:1px solid var(--slm-line);border-radius:12px;background:var(--slm-surface)}
+.slm-inspect-label{font-size:24px;font-weight:850;letter-spacing:-.02em;line-height:1.1}
+.slm-inspect-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px;margin-top:18px}
+.slm-inspect-grid>div{min-width:0}.slm-inspect-grid span{display:block;color:var(--slm-muted);font-size:10px;
+  text-transform:uppercase;letter-spacing:.08em}.slm-inspect-grid b{display:block;margin-top:4px;font-size:13px;line-height:1.35;overflow-wrap:anywhere}
 .slm:fullscreen{border-radius:0;min-height:100vh;background:var(--slm-bg)}
 .slm:fullscreen .slm-bar{padding:14px 22px}.slm:fullscreen .slm-kpi b{font-size:21px}.slm:fullscreen .slm-rail{width:360px}
 
 .slm.compact .slm-rail{width:100%;border-left:0;border-top:1px solid var(--slm-line);height:44%}
 .slm.compact .slm-body{flex-direction:column}
-.slm.compact .slm-bar{gap:8px;padding:8px}.slm.compact .slm-barbtn{padding:6px 9px}
-.slm.compact .slm-kpis{gap:9px}.slm.compact .slm-kpi:nth-child(n+5){display:none}
+.slm.compact .slm-bar{grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:8px}
+.slm.compact .slm-modes{min-width:0}.slm.compact .slm-mode{padding-inline:11px}
+.slm.compact .slm-live{justify-self:end}.slm.compact .slm-bar-actions{grid-column:1/-1;justify-self:stretch}
+.slm.compact .slm-barbtn{flex:1;padding:6px 9px}.slm.compact .slm-kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.slm.compact .slm-kpi[data-kpi="buyers"],.slm.compact .slm-kpi[data-kpi="active-holds"],
+.slm.compact .slm-kpi[data-kpi="sold-pct"],.slm.compact .slm-kpi[data-kpi="gross-sales"]{display:none}
 `;
 
 function injectStyle(): void {
@@ -1167,15 +1176,15 @@ export class SeatManager {
     const rev = t.revenueStatus === 'current' ? fmtMoney(t.grossRevenue, t.currency) : '—';
     const presence = this.controlRoomSnapshot?.presence;
     this.els.kpis.innerHTML = [
-      { n: t.booked.toLocaleString(), l: 'Sold', dot: '#22a06b' },
-      { n: t.held.toLocaleString(), l: 'Held', dot: '#f4b740' },
-      { n: presence ? presence.shoppingSessions.toLocaleString() : '—', l: 'Shopping' },
-      { n: presence ? presence.activeHolds.toLocaleString() : '—', l: 'Live holds' },
-      { n: t.free.toLocaleString(), l: 'Free', dot: '#6e7bff' },
-      { n: t.blocked.toLocaleString(), l: 'Blocked', dot: '#8b94ac' },
-      { n: `${t.capacityPct}%`, l: 'Capacity' },
-      { n: rev, l: 'Gross' },
-    ].map((k) => `<div class="slm-kpi"><b>${k.dot ? `<span class="dot" style="background:${k.dot}"></span>` : ''}${k.n}</b><span>${k.l}</span></div>`).join('');
+      { key: 'sold-seats', n: t.booked.toLocaleString(), l: 'Sold seats', dot: '#22a06b' },
+      { key: 'held-seats', n: t.held.toLocaleString(), l: 'Held seats', dot: '#f4b740' },
+      { key: 'buyers', n: presence ? presence.shoppingSessions.toLocaleString() : '—', l: 'Buyers' },
+      { key: 'active-holds', n: presence ? presence.activeHolds.toLocaleString() : '—', l: 'Active holds' },
+      { key: 'free-seats', n: t.free.toLocaleString(), l: 'Free seats', dot: '#6e7bff' },
+      { key: 'blocked', n: t.blocked.toLocaleString(), l: 'Blocked', dot: '#8b94ac' },
+      { key: 'sold-pct', n: `${t.capacityPct}%`, l: 'Sold' },
+      { key: 'gross-sales', n: rev, l: 'Gross sales' },
+    ].map((k) => `<div class="slm-kpi" data-kpi="${k.key}"><b>${k.dot ? `<span class="dot" style="background:${k.dot}"></span>` : ''}${k.n}</b><span>${k.l}</span></div>`).join('');
   }
 
   // ---- DOM: rails -----------------------------------------------------------
@@ -1280,9 +1289,9 @@ export class SeatManager {
     const seat = seats[seats.length - 1];
     if (!seat) {
       this.els.rail.innerHTML = `
-        <p class="slm-eyebrow">Inspect</p>
-        <p class="slm-hint">Select any seat to see its live inventory context. Inspect is read-only and never changes availability.</p>
-        <div class="slm-empty">Choose a seat on the map.</div>`;
+        <p class="slm-eyebrow">Inspect seats</p>
+        <p class="slm-hint">Select a seat to see its availability and sales context. Nothing changes in this view.</p>
+        <div class="slm-empty">Select a seat on the map.</div>`;
       return;
     }
     const status = this.status.get(seat.label) ?? 'free';
@@ -1291,17 +1300,26 @@ export class SeatManager {
     const sectionLabel = this.sectionLabelById.get(sectionId) ?? 'Other seats';
     const category = this.doc?.categories.find((item) => item.key === seat.categoryKey);
     const sectionMetric = this.controlRoomSnapshot?.revenue.bySection.find((row) => row.sectionId === sectionId);
+    const object = this.doc?.objects.find((item) => item.id === seat.rowId);
+    const location = object?.type === 'row'
+      ? { label: 'Row', value: object.label }
+      : object?.type === 'table'
+        ? { label: 'Table', value: object.label }
+        : seat.kind === 'booth'
+          ? { label: 'Type', value: 'Booth' }
+          : null;
+    const itemKind = seat.kind === 'booth' ? 'Booth' : 'Seat';
     this.els.rail.innerHTML = `
-      <p class="slm-eyebrow">Inspect</p>
-      <p class="slm-hint">Live inventory context. Booked seats remain read-only; order and payment actions belong to the host commerce system.</p>
+      <p class="slm-eyebrow">${itemKind} details</p>
+      <p class="slm-hint">Live availability and section performance.</p>
       <div class="slm-inspect-card">
         <div class="slm-inspect-label">${esc(seat.label)}</div>
         <div class="slm-inspect-grid">
           <div><span>Status</span><b>${statusLabel[status]}</b></div>
           <div><span>Section</span><b>${esc(sectionLabel)}</b></div>
-          <div><span>Row</span><b>${esc(seat.rowId)}</b></div>
+          ${location ? `<div><span>${location.label}</span><b>${esc(location.value)}</b></div>` : ''}
           <div><span>Category</span><b>${esc(category?.label ?? seat.categoryKey)}</b></div>
-          <div><span>Section sold</span><b>${sectionMetric ? `${sectionMetric.booked}/${sectionMetric.total}` : '—'}</b></div>
+          <div><span>Sold in section</span><b>${sectionMetric ? `${sectionMetric.booked} of ${sectionMetric.total}` : '—'}</b></div>
           <div><span>Section revenue</span><b>${sectionMetric && this.controlRoomSnapshot ? fmtMoney(sectionMetric.bookedRevenue, this.controlRoomSnapshot.currency) : '—'}</b></div>
         </div>
       </div>`;

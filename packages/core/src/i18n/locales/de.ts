@@ -43,7 +43,7 @@ export const de: Dict = {
   'picker.viewMode': 'Ansichtsmodus',
   'picker.floor': 'Etage',
   'picker.zoomLevel': 'Zoomstufe',
-  'picker.rungTip.zones': 'Fernste Stufe — Zonen-Blöcke (Etage / Unteres Parterre / Oberes Parterre)',
+  'picker.rungTip.zones': 'Übersicht — Bereichsgruppen wie Nordtribüne oder VIP',
   'picker.rungTip.sections': 'Bereichs-Blöcke — Kategoriesortierung + Verfügbarkeitstönung',
   'picker.rungTip.seats': 'Einzelne Plätze — Blöcke lösen sich zu Punkten auf',
   'picker.rungLabel.zones': 'ZONEN',

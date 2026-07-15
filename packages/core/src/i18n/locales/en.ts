@@ -44,7 +44,7 @@ export const en: Dict = {
   'picker.viewMode': 'View mode',
   'picker.floor': 'Floor',
   'picker.zoomLevel': 'Zoom level',
-  'picker.rungTip.zones': 'Farthest rung — zone blocks (Floor / Lower Bowl / Upper Bowl)',
+  'picker.rungTip.zones': 'Venue overview — groups of sections such as North Stand or VIP',
   'picker.rungTip.sections': 'Section blocks — category-mix fill + availability tint',
   'picker.rungTip.seats': 'Individual seats — blocks melt into dots',
   'picker.rungLabel.zones': 'ZONES',
