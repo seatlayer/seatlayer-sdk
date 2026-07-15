@@ -47,6 +47,9 @@ realtime organizer cockpit. Mint a short-lived, event-scoped `mse_` token from
 your backend, bound to the browser's exact origin and only the capabilities it
 needs. The shared surface owns Monitor, Inspect, Block/unblock, fullscreen,
 presence, exact section revenue, sales velocity, and a clearly explained **Sales momentum** overlay.
+Block mode exposes explicit multi-select category state and a searchable,
+section-filtered blocked-inventory list, so an organizer can put specific seats
+back on sale without resetting the entire event.
 
 ```js
 import { SeatManager } from '@seatlayer/js';

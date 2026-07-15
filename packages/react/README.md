@@ -66,6 +66,8 @@ Built on [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js).
 Use `SeatManager` with a short-lived, event-scoped manage token minted by your
 backend. Monitor, Inspect, Block/unblock, fullscreen, presence, exact section
 revenue, velocity, and the **Sales momentum** overlay are one shared package surface—not host-owned tabs.
+Block mode includes explicit multi-select category controls plus a searchable,
+section-filtered blocked-inventory list for restoring specific seats to sale.
 
 ```tsx
 <SeatManager

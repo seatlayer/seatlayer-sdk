@@ -228,11 +228,44 @@ const CSS = `
   font-size:12px;font-weight:700;color:var(--slm-text);display:inline-flex;align-items:center;gap:6px}
 .slm-chip:hover{border-color:var(--slm-muted)}
 .slm-chip .dot{width:8px;height:8px;border-radius:50%}
+.slm-chip .slm-chipcount{min-width:18px;padding:1px 5px;border-radius:999px;background:rgba(255,255,255,.07);
+  color:var(--slm-muted);font-size:10px;font-variant-numeric:tabular-nums;text-align:center}
+.slm-chip .slm-chipcheck{display:none;font-size:11px;line-height:1}
+.slm-chip.on{border-color:var(--slm-accent);background:color-mix(in srgb,var(--slm-accent) 20%,var(--slm-surface));
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--slm-accent) 45%,transparent)}
+.slm-chip.on .slm-chipcount{background:var(--slm-accent);color:var(--slm-accent-ink)}
+.slm-chip.on .slm-chipcheck{display:inline}
+.slm-chip.partial{border-style:dashed;border-color:var(--slm-accent)}
+.slm-chip:disabled{opacity:.42;cursor:not-allowed}
+.slm-selecthelp{margin:-1px 0 9px;color:var(--slm-muted);font-size:11px;line-height:1.4}
 .slm-field{margin:14px 0}
 .slm-field label{display:block;font-size:11px;font-weight:700;color:var(--slm-muted);margin-bottom:5px}
 .slm-input,.slm-select{width:100%;padding:8px 10px;border-radius:9px;border:1px solid var(--slm-line);
   background:var(--slm-surface);color:var(--slm-text)}
 .slm-note{font-size:11.5px;color:var(--slm-muted);margin-top:5px}
+.slm-blocked{margin-top:17px;padding-top:15px;border-top:1px solid var(--slm-line)}
+.slm-blockedhead{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:8px}
+.slm-blockedhead .slm-eyebrow{margin-bottom:0}.slm-blockedtotal{font-size:11px;color:var(--slm-muted)}
+.slm-blockedtotal b{color:var(--slm-text);font-variant-numeric:tabular-nums}
+.slm-blockedtools{display:grid;grid-template-columns:minmax(0,1fr);gap:7px}
+.slm-blockedsummary{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:9px 0 6px;
+  color:var(--slm-muted);font-size:10.5px}
+.slm-linkbtn{font-size:11px!important;font-weight:800!important;color:var(--slm-accent)!important;text-align:right}
+.slm-linkbtn:disabled{opacity:.45;cursor:not-allowed}
+.slm-blockedlist{max-height:246px;overflow:auto;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface)}
+.slm-blockeditem{display:grid!important;grid-template-columns:18px minmax(0,1fr);width:100%;gap:8px;padding:8px 9px!important;
+  border-bottom:1px solid var(--slm-line)!important;text-align:left!important}
+.slm-blockeditem:last-child{border-bottom:0!important}.slm-blockeditem:hover{background:rgba(255,255,255,.035)!important}
+.slm-blockeditem.on{background:color-mix(in srgb,var(--slm-accent) 13%,var(--slm-surface))!important}
+.slm-blockedcheck{display:flex;align-items:center;justify-content:center;width:16px;height:16px;margin-top:1px;border-radius:4px;
+  border:1px solid var(--slm-muted);color:transparent;font-size:10px;font-weight:900}
+.slm-blockeditem.on .slm-blockedcheck{border-color:var(--slm-accent);background:var(--slm-accent);color:var(--slm-accent-ink)}
+.slm-blockedcopy{min-width:0}.slm-blockedlabel{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:12px;font-weight:800}.slm-blockedmeta{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  margin-top:2px;color:var(--slm-muted);font-size:10px}
+.slm-blockedmore{width:100%;padding:9px!important;color:var(--slm-accent)!important;font-size:11px!important;font-weight:800!important}
+.slm-blockedempty{padding:12px;color:var(--slm-muted);font-size:11.5px;line-height:1.45}
+.slm-allnote{margin-top:-4px;margin-bottom:10px}
 
 /* toast */
 .slm-toast{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);padding:10px 16px;border-radius:10px;
@@ -376,6 +409,10 @@ export class SeatManager {
   private sectionByObject = new Map<string, string>();
   private sectionLabelById = new Map<string, string>();
   private lastSyncedAt: number | null = null;
+  private blockedQuery = '';
+  private blockedSection = '';
+  private blockedResultLimit = 100;
+  private unblockAllConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly onFullscreenChange = (): void => {
     this.paintFullscreenButton();
@@ -540,7 +577,7 @@ export class SeatManager {
     if (!targets.length) return;
     const releaseAt = opts.releaseAt ?? this.releaseAt ?? undefined;
     // optimistic
-    for (const l of targets) this.setSeatLocal(l, 'blocked');
+    this.setSeatsLocal(targets, 'blocked');
     try {
       await this.api.block(this.key, targets, { ...opts, releaseAt });
       this.clearSelection();
@@ -548,7 +585,7 @@ export class SeatManager {
         ? `Blocked ${targets.length} — auto-release ${new Date(releaseAt).toLocaleString()}.`
         : `Blocked ${targets.length} seat${targets.length === 1 ? '' : 's'}.`);
     } catch (err) {
-      for (const l of targets) this.setSeatLocal(l, 'free'); // revert
+      this.setSeatsLocal(targets, 'free'); // revert
       this.toastErr(err instanceof ManageApiError && err.status === 409
         ? 'Some seats were just taken. Try again.'
         : "Couldn't block those seats.");
@@ -559,13 +596,13 @@ export class SeatManager {
   async unblock(labels?: string[]): Promise<void> {
     const targets = (labels ?? this.selectionLabels()).filter((l) => this.status.get(l) === 'blocked');
     if (!targets.length) return;
-    for (const l of targets) this.setSeatLocal(l, 'free');
+    this.setSeatsLocal(targets, 'free');
     try {
       await this.api.unblock(this.key, targets);
       this.clearSelection();
       this.done('unblock', targets, `Unblocked ${targets.length} seat${targets.length === 1 ? '' : 's'}.`);
     } catch (err) {
-      for (const l of targets) this.setSeatLocal(l, 'blocked');
+      this.setSeatsLocal(targets, 'blocked');
       this.toastErr("Couldn't unblock those seats.");
       this.opts.onError?.(err);
     }
@@ -574,9 +611,10 @@ export class SeatManager {
   async unblockAll(): Promise<void> {
     const blocked = [...this.status.entries()].filter(([, s]) => s === 'blocked').map(([l]) => l);
     if (!blocked.length) return;
-    for (const l of blocked) this.setSeatLocal(l, 'free');
+    this.setSeatsLocal(blocked, 'free');
     try {
       const res = await this.api.unblockAll(this.key);
+      this.clearSelection();
       this.done('unblockAll', blocked, `Unblocked ${res.freed} seat${res.freed === 1 ? '' : 's'}.`);
     } catch (err) {
       await this.resnapshot();
@@ -589,13 +627,13 @@ export class SeatManager {
   async cancelBooking(labels: string[], bookingRef: string): Promise<void> {
     const targets = labels.filter((l) => this.status.get(l) === 'booked');
     if (!targets.length || !bookingRef) return;
-    for (const l of targets) this.setSeatLocal(l, 'free');
+    this.setSeatsLocal(targets, 'free');
     try {
       await this.api.unbook(this.key, targets, bookingRef);
       this.clearSelection();
       this.done('cancelBooking', targets, `Cancelled ${targets.length} booking${targets.length === 1 ? '' : 's'}.`);
     } catch (err) {
-      for (const l of targets) this.setSeatLocal(l, 'booked');
+      this.setSeatsLocal(targets, 'booked');
       this.toastErr("Couldn't cancel that booking. Check the reference.");
       this.opts.onError?.(err);
     }
@@ -670,6 +708,7 @@ export class SeatManager {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.feedTimer) clearInterval(this.feedTimer);
     if (this.toastTimer) clearTimeout(this.toastTimer);
+    if (this.unblockAllConfirmTimer) clearTimeout(this.unblockAllConfirmTimer);
     if (this.revenueRefreshTimer) clearTimeout(this.revenueRefreshTimer);
     if (this.tokenRefreshTimer) clearTimeout(this.tokenRefreshTimer);
     this.layoutObserver?.disconnect();
@@ -859,11 +898,16 @@ export class SeatManager {
     this.recomputeTallies();
   }
 
-  /** Optimistic local write shared by delta stream + organizer actions. */
-  private setSeatLocal(label: string, st: DoStatus): void {
-    this.status.set(label, st);
-    const id = this.labelToId.get(label);
-    if (id) this.renderer?.setStatus([id], toRenderStatus(st));
+  /** Optimistic local write shared by organizer actions. Paint and tally once,
+   * even when an arena-sized operation changes hundreds of seats. */
+  private setSeatsLocal(labels: string[], st: DoStatus): void {
+    const ids: string[] = [];
+    for (const label of labels) {
+      this.status.set(label, st);
+      const id = this.labelToId.get(label);
+      if (id) ids.push(id);
+    }
+    if (ids.length) this.renderer?.setStatus(ids, toRenderStatus(st));
     this.afterPaint();
     this.recomputeTallies();
   }
@@ -949,6 +993,7 @@ export class SeatManager {
       this.paintLegend(t);
       this.paintMonitorInsights();
     } else if (this.mode === 'inspect') this.renderInspectRail(this.getSelection());
+    else if (this.mode === 'block') this.paintSelBar(this.getSelection());
     this.opts.onTallies?.(t);
   }
 
@@ -1348,25 +1393,33 @@ export class SeatManager {
   private renderBlockRail(): void {
     const cats = this.doc?.categories ?? [];
     const catChips = cats.map((c) =>
-      `<button class="slm-chip" data-cat="${esc(c.key)}"><span class="dot" style="background:${esc(c.color ?? '#6e7bff')}"></span>${esc(c.label ?? c.key)}</button>`).join('');
+      `<button class="slm-chip" type="button" data-cat="${esc(c.key)}" aria-pressed="false">
+        <span class="dot" style="background:${esc(c.color ?? '#6e7bff')}"></span>
+        <span>${esc(c.label ?? c.key)}</span>
+        <span class="slm-chipcount" data-cat-count>0</span>
+        <span class="slm-chipcheck" aria-hidden="true">✓</span>
+      </button>`).join('');
     const sectionField = this.sectionOptions.length
       ? `<div class="slm-field"><label>Select a whole section</label>
           <select class="slm-select" data-ref="section"><option value="">Choose a section…</option>
           ${this.sectionOptions.map((s) => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('')}</select></div>`
       : '';
+    const blockedSectionOptions = this.sectionOptions.map((s) =>
+      `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
     this.els.rail.innerHTML = `
       <p class="slm-eyebrow">Block &amp; unblock</p>
       <p class="slm-hint">Drag a box on the map to marquee-select, ⌘A for all, or pick a category/section. Booked and held inventory is never actionable here.</p>
-      <div class="slm-selbar"><span class="slm-selnum" data-ref="selnum">0</span><span class="slm-sellabel">selected</span></div>
+      <div class="slm-selbar" aria-live="polite"><span class="slm-selnum" data-ref="selnum">0</span><span class="slm-sellabel" data-ref="selmeta">selected</span></div>
       <div class="slm-row">
         <button class="slm-btn" data-ref="doblock" disabled>Block</button>
-        <button class="slm-btn ghost" data-ref="dounblock" disabled>Unblock</button>
+        <button class="slm-btn ghost" data-ref="dounblock" disabled>Put back on sale</button>
       </div>
       <div class="slm-row">
         <button class="slm-btn ghost" data-ref="selall">Select all</button>
         <button class="slm-btn ghost" data-ref="clearsel">Clear</button>
       </div>
-      <p class="slm-eyebrow" style="margin-top:8px">By category</p>
+      <p class="slm-eyebrow" style="margin-top:8px">Select by category</p>
+      <p class="slm-selecthelp">Choose one or more. A checked category is selected; click it again to remove it.</p>
       <div class="slm-chiprow">${catChips || '<span class="slm-empty">No categories.</span>'}</div>
       ${sectionField}
       <div class="slm-field">
@@ -1374,19 +1427,69 @@ export class SeatManager {
         <input type="datetime-local" class="slm-input" data-ref="release" />
         <p class="slm-note" data-ref="releasenote">Leave empty to block permanently.</p>
       </div>
-      <div class="slm-row"><button class="slm-btn ghost" data-ref="markall" style="flex:1">Mark everything for sale</button></div>
+      <section class="slm-blocked" aria-labelledby="slm-blocked-title">
+        <div class="slm-blockedhead">
+          <p class="slm-eyebrow" id="slm-blocked-title">Blocked inventory</p>
+          <span class="slm-blockedtotal"><b data-ref="blockedcount">0</b> out of sale</span>
+        </div>
+        <p class="slm-selecthelp">Find blocked seats, select only the ones you need, then use “Put back on sale”.</p>
+        <div class="slm-blockedtools">
+          <input type="search" class="slm-input" data-ref="blockedsearch" placeholder="Find seat, row or category" aria-label="Search blocked seats" />
+          <select class="slm-select" data-ref="blockedsection" aria-label="Filter blocked seats by section">
+            <option value="">All sections</option>${blockedSectionOptions}
+          </select>
+        </div>
+        <div class="slm-blockedsummary">
+          <span data-ref="blockedshowing">No blocked seats</span>
+          <button type="button" class="slm-linkbtn" data-ref="selblocked" disabled>Select results</button>
+        </div>
+        <div class="slm-blockedlist" data-ref="blockedlist"></div>
+      </section>
+      <div class="slm-field">
+        <button class="slm-btn ghost" data-ref="markall" style="width:100%" disabled>Put all blocked seats on sale</button>
+        <p class="slm-note slm-allnote" data-ref="markallnote">For a full reset only. You will be asked to confirm.</p>
+      </div>
     `;
     const r = (n: string) => this.els.rail.querySelector(`[data-ref="${n}"]`) as HTMLElement;
     this.els.selnum = r('selnum'); this.els.doblock = r('doblock'); this.els.dounblock = r('dounblock');
+    this.els.selmeta = r('selmeta'); this.els.blockedcount = r('blockedcount');
+    this.els.blockedshowing = r('blockedshowing'); this.els.blockedlist = r('blockedlist');
+    this.els.selblocked = r('selblocked'); this.els.markall = r('markall'); this.els.markallnote = r('markallnote');
     r('doblock').addEventListener('click', () => void this.block());
     r('dounblock').addEventListener('click', () => void this.unblock());
     r('selall').addEventListener('click', () => this.selectAll());
     r('clearsel').addEventListener('click', () => this.clearSelection());
-    r('markall').addEventListener('click', () => void this.unblockAll());
+    r('markall').addEventListener('click', () => this.confirmUnblockAll());
     this.els.rail.querySelectorAll('[data-cat]').forEach((b) =>
-      b.addEventListener('click', () => this.selectCategory((b as HTMLElement).dataset.cat!)));
+      b.addEventListener('click', () => this.toggleCategory((b as HTMLElement).dataset.cat!)));
     const sectionSel = this.els.rail.querySelector('[data-ref="section"]') as HTMLSelectElement | null;
     sectionSel?.addEventListener('change', () => { if (sectionSel.value) { this.selectSection(sectionSel.value); sectionSel.value = ''; } });
+    const blockedSearch = r('blockedsearch') as HTMLInputElement;
+    const blockedSection = r('blockedsection') as HTMLSelectElement;
+    blockedSearch.value = this.blockedQuery;
+    blockedSection.value = this.blockedSection;
+    blockedSearch.addEventListener('input', () => {
+      this.blockedQuery = blockedSearch.value;
+      this.blockedResultLimit = 100;
+      this.paintBlockedInventory();
+    });
+    blockedSection.addEventListener('change', () => {
+      this.blockedSection = blockedSection.value;
+      this.blockedResultLimit = 100;
+      this.paintBlockedInventory();
+    });
+    r('selblocked').addEventListener('click', () => {
+      this.toggleLabels(this.filteredBlockedSeats().map((seat) => seat.label));
+    });
+    r('blockedlist').addEventListener('click', (event) => {
+      const target = event.target as HTMLElement;
+      const seatButton = target.closest<HTMLElement>('[data-blocked-label]');
+      if (seatButton?.dataset.blockedLabel) this.toggleLabels([seatButton.dataset.blockedLabel]);
+      else if (target.closest('[data-blocked-more]')) {
+        this.blockedResultLimit += 100;
+        this.paintBlockedInventory();
+      }
+    });
     const rel = r('release') as HTMLInputElement;
     rel.addEventListener('change', () => {
       const ms = rel.value ? new Date(rel.value).getTime() : NaN;
@@ -1399,19 +1502,166 @@ export class SeatManager {
     this.paintSelBar(this.getSelection());
   }
 
-  private selectCategory(catKey: string): void {
+  private toggleCategory(catKey: string): void {
     const labels: string[] = [];
-    for (const [label, seat] of this.labelToSeat.entries()) if (seat.categoryKey === catKey) labels.push(label);
-    this.selectByLabels(labels);
+    for (const [label, seat] of this.labelToSeat.entries()) {
+      if (seat.categoryKey === catKey && this.isBlockSelectable(label)) labels.push(label);
+    }
+    this.toggleLabels(labels);
+  }
+
+  /** A category/filter is a real toggle: add the missing seats, or remove the
+   * whole group when every eligible seat in it is already selected. */
+  private toggleLabels(labels: string[]): void {
+    if (!this.renderer) return;
+    const eligible = labels.filter((label) => this.labelToSeat.has(label) && this.isBlockSelectable(label));
+    if (!eligible.length) return;
+    const selected = new Set(this.selectionLabels());
+    const allSelected = eligible.every((label) => selected.has(label));
+    if (allSelected) {
+      const ids = eligible.map((label) => this.labelToId.get(label)).filter((id): id is string => Boolean(id));
+      this.renderer.deselect(ids);
+    } else {
+      this.renderer.selectByLabels(eligible);
+    }
+    this.syncSelection();
+  }
+
+  private isBlockSelectable(label: string): boolean {
+    const status = this.status.get(label) ?? 'free';
+    return status === 'free' || status === 'blocked';
   }
 
   private paintSelBar(seats: ExpandedSeat[]): void {
     if (!this.els.selnum) return;
     this.els.selnum.textContent = seats.length.toLocaleString();
-    const hasFree = seats.some((s) => this.status.get(s.label) === 'free');
-    const hasBlocked = seats.some((s) => this.status.get(s.label) === 'blocked');
-    (this.els.doblock as HTMLButtonElement).disabled = !hasFree;
-    (this.els.dounblock as HTMLButtonElement).disabled = !hasBlocked;
+    const freeCount = seats.filter((s) => (this.status.get(s.label) ?? 'free') === 'free').length;
+    const blockedCount = seats.filter((s) => this.status.get(s.label) === 'blocked').length;
+    this.els.selmeta.textContent = seats.length
+      ? `${freeCount.toLocaleString()} available · ${blockedCount.toLocaleString()} blocked`
+      : 'selected';
+    const blockButton = this.els.doblock as HTMLButtonElement;
+    const unblockButton = this.els.dounblock as HTMLButtonElement;
+    blockButton.disabled = freeCount === 0;
+    unblockButton.disabled = blockedCount === 0;
+    blockButton.textContent = freeCount ? `Block ${freeCount.toLocaleString()}` : 'Block selected';
+    unblockButton.textContent = blockedCount ? `Put ${blockedCount.toLocaleString()} on sale` : 'Put back on sale';
+    this.paintCategoryControls(seats);
+    this.paintBlockedInventory();
+  }
+
+  private paintCategoryControls(seats: ExpandedSeat[]): void {
+    const selected = new Set(seats.map((seat) => seat.label));
+    this.els.rail?.querySelectorAll<HTMLButtonElement>('[data-cat]').forEach((button) => {
+      const catKey = button.dataset.cat;
+      const labels: string[] = [];
+      for (const [label, seat] of this.labelToSeat.entries()) {
+        if (seat.categoryKey === catKey && this.isBlockSelectable(label)) labels.push(label);
+      }
+      const picked = labels.filter((label) => selected.has(label)).length;
+      const full = labels.length > 0 && picked === labels.length;
+      const partial = picked > 0 && !full;
+      button.disabled = labels.length === 0;
+      button.classList.toggle('on', full);
+      button.classList.toggle('partial', partial);
+      button.setAttribute('aria-pressed', full ? 'true' : partial ? 'mixed' : 'false');
+      button.setAttribute('title', full
+        ? `Remove all ${labels.length.toLocaleString()} seats in this category from the selection`
+        : partial
+          ? `Select the remaining ${(labels.length - picked).toLocaleString()} seats in this category`
+          : `Select all ${labels.length.toLocaleString()} seats in this category`);
+      const count = button.querySelector<HTMLElement>('[data-cat-count]');
+      if (count) count.textContent = picked ? `${picked.toLocaleString()}/${labels.length.toLocaleString()}` : labels.length.toLocaleString();
+    });
+  }
+
+  private filteredBlockedSeats(): ExpandedSeat[] {
+    const query = this.blockedQuery.trim().toLocaleLowerCase();
+    const seats: ExpandedSeat[] = [];
+    for (const [label, seat] of this.labelToSeat.entries()) {
+      if (this.status.get(label) !== 'blocked') continue;
+      const sectionId = this.sectionByObject.get(seat.rowId) ?? UNGROUPED_ID;
+      if (this.blockedSection && sectionId !== this.blockedSection) continue;
+      if (query) {
+        const category = this.doc?.categories.find((item) => item.key === seat.categoryKey)?.label ?? seat.categoryKey;
+        const section = this.sectionLabelById.get(sectionId) ?? 'Other seats';
+        const object = this.doc?.objects.find((item) => item.id === seat.rowId);
+        const objectLabel = object?.type === 'row' || object?.type === 'table' ? object.label : '';
+        const haystack = `${label} ${category} ${section} ${objectLabel}`.toLocaleLowerCase();
+        if (!haystack.includes(query)) continue;
+      }
+      seats.push(seat);
+    }
+    return seats.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }));
+  }
+
+  private paintBlockedInventory(): void {
+    if (!this.els.blockedlist) return;
+    const allBlocked = [...this.status.entries()].filter(([, status]) => status === 'blocked').length;
+    const filtered = this.filteredBlockedSeats();
+    const visible = filtered.slice(0, this.blockedResultLimit);
+    const selected = new Set(this.selectionLabels());
+    const selectedResults = filtered.filter((seat) => selected.has(seat.label)).length;
+    const allResultsSelected = filtered.length > 0 && selectedResults === filtered.length;
+    this.els.blockedcount.textContent = allBlocked.toLocaleString();
+    this.els.blockedshowing.textContent = filtered.length
+      ? `Showing ${visible.length.toLocaleString()} of ${filtered.length.toLocaleString()}`
+      : allBlocked ? 'No matches' : 'No blocked seats';
+    const selectResults = this.els.selblocked as HTMLButtonElement;
+    selectResults.disabled = filtered.length === 0;
+    selectResults.textContent = allResultsSelected
+      ? `Remove ${filtered.length.toLocaleString()} results`
+      : `Select ${filtered.length.toLocaleString()} results`;
+
+    this.els.blockedlist.innerHTML = visible.length ? visible.map((seat) => {
+      const sectionId = this.sectionByObject.get(seat.rowId) ?? UNGROUPED_ID;
+      const section = this.sectionLabelById.get(sectionId) ?? 'Other seats';
+      const category = this.doc?.categories.find((item) => item.key === seat.categoryKey)?.label ?? seat.categoryKey;
+      const isSelected = selected.has(seat.label);
+      return `<button type="button" class="slm-blockeditem${isSelected ? ' on' : ''}" data-blocked-label="${esc(seat.label)}" aria-pressed="${isSelected}">
+        <span class="slm-blockedcheck" aria-hidden="true">✓</span>
+        <span class="slm-blockedcopy"><span class="slm-blockedlabel">${esc(seat.label)}</span>
+          <span class="slm-blockedmeta">${esc(section)} · ${esc(category)}</span></span>
+      </button>`;
+    }).join('') + (filtered.length > visible.length
+      ? `<button type="button" class="slm-blockedmore" data-blocked-more>Show 100 more</button>` : '')
+      : `<div class="slm-blockedempty">${allBlocked
+        ? 'No blocked seats match this search or section.'
+        : 'No seats are blocked. Newly blocked seats will appear here.'}</div>`;
+
+    const markAll = this.els.markall as HTMLButtonElement;
+    const armed = markAll.dataset.confirm === 'true';
+    markAll.disabled = allBlocked === 0;
+    markAll.textContent = armed
+      ? `Confirm: put all ${allBlocked.toLocaleString()} on sale`
+      : `Put all ${allBlocked.toLocaleString()} blocked seats on sale`;
+  }
+
+  private confirmUnblockAll(): void {
+    const button = this.els.markall as HTMLButtonElement;
+    if (!button || button.disabled) return;
+    if (button.dataset.confirm === 'true') {
+      this.resetUnblockAllConfirm();
+      void this.unblockAll();
+      return;
+    }
+    button.dataset.confirm = 'true';
+    button.classList.add('danger');
+    this.els.markallnote.textContent = 'This changes every blocked seat. Click the red button again to confirm.';
+    this.paintBlockedInventory();
+    if (this.unblockAllConfirmTimer) clearTimeout(this.unblockAllConfirmTimer);
+    this.unblockAllConfirmTimer = setTimeout(() => this.resetUnblockAllConfirm(), 6000);
+  }
+
+  private resetUnblockAllConfirm(): void {
+    if (this.unblockAllConfirmTimer) clearTimeout(this.unblockAllConfirmTimer);
+    this.unblockAllConfirmTimer = null;
+    const button = this.els.markall as HTMLButtonElement | undefined;
+    if (!button) return;
+    delete button.dataset.confirm;
+    button.classList.remove('danger');
+    if (this.els.markallnote) this.els.markallnote.textContent = 'For a full reset only. You will be asked to confirm.';
+    this.paintBlockedInventory();
   }
 
   // ---- toast / done / fail --------------------------------------------------

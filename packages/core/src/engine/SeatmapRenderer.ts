@@ -3016,6 +3016,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
     let count = 0;
     for (const seat of this.seats) {
+      // Booth labels already live beside their rectangular shape in seatLayer
+      // (renderBoothUnit). Adding them again to the zoom-only overlay produces
+      // the offset/doubled numbers visible at close zoom levels.
+      if (seat.kind === 'booth') continue;
       if (seat.x < x0 || seat.x > x1 || seat.y < y0 || seat.y > y1) continue;
       const t = new Text({
         x: seat.x,
