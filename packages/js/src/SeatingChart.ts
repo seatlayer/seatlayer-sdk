@@ -64,6 +64,8 @@ export interface SeatingChartOptions {
   onSeatHover?: (details: SeatHoverDetails | null) => void;
   onSelectionChange?: (seats: SelectedSeat[]) => void;
   onHold?: (result: HoldResult) => void;
+  /** A prior active hold was restored with resumeHold(). */
+  onHoldRestored?: (result: HoldResult) => void;
   onHoldExpired?: () => void;
   onGAClick?: (area: GAAreaAvailability) => void;
   onError?: (err: unknown) => void;
@@ -121,6 +123,7 @@ export class SeatingChart {
       currency: options.currency,
       onSelectionChange: (seats) => this.opts.onSelectionChange?.(seats),
       onHold: (h) => this.opts.onHold?.({ holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items }),
+      onHoldRestored: (h) => this.opts.onHoldRestored?.({ holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items }),
       onHoldExpired: () => this.opts.onHoldExpired?.(),
       onGAClick: (areaId) => {
         const area = this.controller.getGAAreas().find((candidate) => candidate.id === areaId);
@@ -262,6 +265,23 @@ export class SeatingChart {
     }
   }
 
+  /** Restore an active hold by its opaque id without extending its expiry. */
+  async resumeHold(holdId: string): Promise<HoldResult | null> {
+    try {
+      const h = await this.controller.resumeHold(holdId);
+      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
+    } catch (err) {
+      this.opts.onError?.(err);
+      return null;
+    }
+  }
+
+  /** Current active hold known to this chart, if any. */
+  getCurrentHold(): HoldResult | null {
+    const h = this.controller.currentHold();
+    return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
+  }
+
   getGAAreas(): GAAreaAvailability[] {
     return this.controller.getGAAreas();
   }
@@ -343,6 +363,11 @@ export class SeatingChart {
   /** Release the current hold (if any). No-op when nothing is held. */
   async release(): Promise<void> {
     await this.controller.release();
+  }
+
+  /** Release selected labels from the current hold while keeping the remainder. */
+  async releaseLabels(labels: string[]): Promise<boolean> {
+    return this.controller.releaseLabels(labels);
   }
 
   /** Tear everything down: close the socket, stop timers, drop the canvas. */

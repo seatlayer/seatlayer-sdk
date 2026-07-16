@@ -21,6 +21,12 @@ export interface SeatPickerHandle {
   getSelection(): SelectedSeat[];
   /** Server-side best seats + hold, reflected in the widget tray. */
   bestAvailable(qty: number, categoryKey?: string): Promise<HoldResult | null>;
+  /** Current active/restored hold reflected in the tray. */
+  getCurrentHold(): HoldResult | null;
+  /** Restore an active hold by its opaque id. */
+  resumeHold(holdId: string): Promise<HoldResult | null>;
+  /** Remove one held ticket while preserving the remainder. */
+  removeHeldTicket(label: string): Promise<boolean>;
   /** Release the current hold (if any) and reset the tray. */
   release(): Promise<void>;
 }
@@ -39,7 +45,7 @@ export interface SeatPickerProps extends Omit<SeatPickerOptions, 'container'> {
  */
 export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
   function SeatPicker(props, ref) {
-    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, holdTtlMs, confirmSelection, seatView } = props;
+    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const pickerRef = useRef<CoreSeatPicker | null>(null);
@@ -62,6 +68,8 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         currency,
         colorblindSafe,
         holdTtlMs,
+        initialHoldId,
+        restoreHold,
         confirmSelection,
         seatView,
         theme: callbacks.current.theme,
@@ -69,7 +77,9 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         onCheckout: (hold, seats, handoff) => callbacks.current.onCheckout?.(hold, seats, handoff),
         onBooked: (handoff) => callbacks.current.onBooked?.(handoff),
         onSelectionChange: (seats) => callbacks.current.onSelectionChange?.(seats),
+        onHoldChange: (hold, seats, handoff) => callbacks.current.onHoldChange?.(hold, seats, handoff),
         onHoldExpired: () => callbacks.current.onHoldExpired?.(),
+        onHoldRestored: (hold, seats, handoff) => callbacks.current.onHoldRestored?.(hold, seats, handoff),
         onError: (err) => callbacks.current.onError?.(err),
       });
       pickerRef.current = picker;
@@ -81,13 +91,16 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
       };
       // Rebuild only when the identity of the event/config changes.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, holdTtlMs, confirmSelection, seatView]);
+    }, [event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView]);
 
     useImperativeHandle(
       ref,
       (): SeatPickerHandle => ({
         getSelection: () => pickerRef.current?.getSelection() ?? [],
         bestAvailable: (qty, categoryKey) => pickerRef.current?.bestAvailable(qty, categoryKey) ?? Promise.resolve(null),
+        getCurrentHold: () => pickerRef.current?.getCurrentHold() ?? null,
+        resumeHold: (holdId) => pickerRef.current?.resumeHold(holdId) ?? Promise.resolve(null),
+        removeHeldTicket: (label) => pickerRef.current?.removeHeldTicket(label) ?? Promise.resolve(false),
         release: () => pickerRef.current?.release() ?? Promise.resolve(),
       }),
       [],

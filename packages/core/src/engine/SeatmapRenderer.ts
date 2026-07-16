@@ -336,6 +336,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private circleById = new Map<string, Shape>();
   /** Booth block geometry, keyed by booth id (= the unit's rowId). */
   private boothDims = new Map<string, { width: number; height: number; rotation: number }>();
+  /** Booth label node so status changes can say HELD/SOLD on the full block. */
+  private boothLabelById = new Map<string, Text>();
   private statusById = new Map<string, SeatStatus>();
   private catColor = new Map<string, string>();
   private theme: ChartTheme = {};
@@ -347,7 +349,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private catOrder: string[] = [];
 
   private selection = new Set<string>();
-  private selectionRings = new Map<string, Circle>();
+  /** Whole-seat/block selection markers: outline + non-colour check cue. */
+  private selectionMarkers = new Map<string, Group>();
+  /** Held by this picker instance, not by another buyer. */
+  private ownedHold = new Set<string>();
+  /** One selected seat being inspected before it is committed to the cart. */
+  private selectionFocusId: string | null = null;
   private hoverRing: Circle;
   /** Keyboard-navigation focus ring + the currently focused seat id. */
   private focusRing: Circle;
@@ -538,7 +545,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.labelGroup.destroyChildren();
     this.circleById.clear();
     this.boothDims.clear();
-    this.selectionRings.clear();
+    this.boothLabelById.clear();
+    this.selectionMarkers.clear();
+    this.ownedHold.clear();
+    this.selectionFocusId = null;
     this.statusById.clear();
     this.selection.clear();
     this.seatById.clear();
@@ -675,6 +685,51 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     } else {
       this.seatLayer.batchDraw();
     }
+    if (this.effScale() > LABEL_SCALE) this.updateLabels();
+  }
+
+  setOwnedHold(seatIds: string[] | null): void {
+    const next = new Set((seatIds ?? []).filter((id) => this.statusById.has(id)));
+    const touched = new Set([...this.ownedHold, ...next]);
+    this.ownedHold = next;
+    for (const id of touched) {
+      const shape = this.circleById.get(id);
+      if (shape) this.paintSeat(shape, id);
+      this.syncSelectionMarker(id);
+    }
+    if (!touched.size) return;
+    if (this.cached) {
+      if (this.recacheTimer) clearTimeout(this.recacheTimer);
+      this.recacheTimer = setTimeout(() => this.cacheSeatLayer(), 150);
+    } else {
+      this.seatLayer.batchDraw();
+    }
+    if (this.effScale() > LABEL_SCALE) this.updateLabels();
+    this.overlayLayer.batchDraw();
+  }
+
+  setSelectionFocus(seatId: string | null): void {
+    const next = seatId && this.selection.has(seatId) ? seatId : null;
+    if (next === this.selectionFocusId) return;
+    const previous = this.selectionFocusId;
+    this.selectionFocusId = next;
+
+    for (const seat of this.seats) {
+      const shape = this.circleById.get(seat.id);
+      if (shape) this.paintSeat(shape, seat.id);
+    }
+    if (previous) this.syncSelectionMarker(previous);
+    if (next) this.syncSelectionMarker(next);
+    for (const [id, marker] of this.selectionMarkers) {
+      marker.opacity(!next || id === next ? 1 : 0.2);
+    }
+    if (this.cached) {
+      this.seatLayer.clearCache();
+      this.cacheSeatLayer();
+    } else {
+      this.seatLayer.batchDraw();
+    }
+    this.overlayLayer.batchDraw();
   }
 
   getStatus(seatId: string): SeatStatus {
@@ -1405,6 +1460,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     t.offsetX(t.width() / 2);
     t.offsetY(t.height() / 2);
     this.hasBoothText = true; // gate the upright-label scan of the seat layer
+    this.boothLabelById.set(seat.id, t);
     target.add(t);
   }
 
@@ -1421,6 +1477,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const status = this.statusById.get(id) ?? 'free';
     const selected = this.selection.has(id);
     const base = this.seatBaseColor(seat.categoryKey);
+    const boothLabel = this.boothLabelById.get(id);
 
     c.dash([]);
     c.strokeWidth(0);
@@ -1437,7 +1494,17 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         );
         break;
       case 'held':
-        c.fill(HELD_FILL);
+        if (this.ownedHold.has(id)) {
+          // A buyer returning from checkout must be able to distinguish their
+          // own inventory from somebody else's hold. Preserve the category
+          // identity and outline the actual seat/booth shape (full rectangle
+          // for a booth), rather than painting it generic unavailable grey.
+          c.fill(lighten(base, this.effSelection === DEF_SELECTION ? 0.24 : 0.1));
+          c.stroke(this.effSelection);
+          c.strokeWidth(3);
+        } else {
+          c.fill(HELD_FILL);
+        }
         break;
       case 'booked':
         if (this.colorblind) {
@@ -1457,6 +1524,16 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         c.strokeWidth(1);
         c.dash([2, 2]);
         break;
+    }
+
+    if (boothLabel) {
+      const owned = status === 'held' && this.ownedHold.has(id);
+      boothLabel.text(status === 'booked' ? 'SOLD' : status === 'held' ? (owned ? 'HELD BY YOU' : 'HELD') : seat.label);
+      boothLabel.fontSize(status === 'free' ? 10 : Math.min(10, Math.max(6, this.boothDims.get(seat.rowId)?.width ?? 40) / 6));
+      boothLabel.fontStyle(status === 'free' ? '600' : '800');
+      boothLabel.fill(status === 'free' ? (this.theme.seatLabelColor ?? DEF_SEAT_LABEL) : '#ffffff');
+      boothLabel.offsetX(boothLabel.width() / 2);
+      boothLabel.offsetY(boothLabel.height() / 2);
     }
 
     // Accessibility filter dims free, unselected seats that don't match.
@@ -1495,6 +1572,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const inFocus = !!sec && (sec.id === this.focusedSectionId || sec.zone === this.focusedSectionId);
       if (!inFocus) c.opacity(FOCUS_DIM_OPACITY);
     }
+    // Buyer confirmation focus: retain the candidate at full strength while
+    // every unrelated seat recedes. The candidate/selected markers live on the
+    // overlay layer and are dimmed separately so state remains readable.
+    if (this.selectionFocusId && id !== this.selectionFocusId) c.opacity(Math.min(c.opacity(), 0.16));
   }
 
   /** True when a seat sits in a section/zone currently marked `closed`. */
@@ -2478,29 +2559,104 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const c = this.circleById.get(id);
     if (on) {
       this.selection.add(id);
-      const seat = this.seatById.get(id)!;
-      const ring = new Circle({
-        x: seat.x,
-        y: seat.y,
-        radius: this.seatR,
-        stroke: this.effSelection,
-        strokeWidth: 3,
-        listening: false,
-        perfectDrawEnabled: false,
-        shadowForStrokeEnabled: false,
-      });
-      this.selectionRings.set(id, ring);
-      this.overlayLayer.add(ring);
     } else {
+      if (this.selectionFocusId === id) this.setSelectionFocus(null);
       this.selection.delete(id);
-      const ring = this.selectionRings.get(id);
-      ring?.destroy();
-      this.selectionRings.delete(id);
     }
+    this.syncSelectionMarker(id);
     if (c) {
       this.paintSeat(c, id);
       if (!silent && !this.cached) this.seatLayer.batchDraw();
     }
+  }
+
+  /** Rebuild one marker after selected/held/candidate state changes. */
+  private syncSelectionMarker(id: string): void {
+    this.selectionMarkers.get(id)?.destroy();
+    this.selectionMarkers.delete(id);
+    if (!this.selection.has(id) && !this.ownedHold.has(id)) return;
+
+    const seat = this.seatById.get(id);
+    if (!seat) return;
+    const candidate = this.selectionFocusId === id;
+    const dims = this.boothDims.get(seat.rowId);
+    const marker = new Group({
+      x: seat.x,
+      y: seat.y,
+      rotation: dims?.rotation ?? 0,
+      listening: false,
+      perfectDrawEnabled: false,
+      opacity: this.selectionFocusId && !candidate ? 0.2 : 1,
+    });
+    const common = {
+      stroke: this.effSelection,
+      listening: false,
+      perfectDrawEnabled: false,
+      shadowForStrokeEnabled: false,
+    };
+
+    if (dims) {
+      marker.add(new Rect({
+        ...common,
+        width: dims.width,
+        height: dims.height,
+        offsetX: dims.width / 2,
+        offsetY: dims.height / 2,
+        cornerRadius: 4,
+        strokeWidth: candidate ? 4 : 3,
+      }));
+      if (candidate) {
+        marker.add(new Rect({
+          ...common,
+          width: dims.width + 10,
+          height: dims.height + 10,
+          offsetX: (dims.width + 10) / 2,
+          offsetY: (dims.height + 10) / 2,
+          cornerRadius: 7,
+          strokeWidth: 2,
+          opacity: 0.55,
+        }));
+      } else {
+        const badgeX = Math.max(0, dims.width / 2 - 14);
+        const badgeY = -Math.max(0, dims.height / 2 - 14);
+        marker.add(new Circle({ x: badgeX, y: badgeY, radius: 10, fill: this.effSelection, listening: false }));
+        marker.add(new Line({
+          x: badgeX,
+          y: badgeY,
+          points: [-4.5, 0, -1, 3.5, 5.5, -4.5],
+          stroke: isLightColor(this.effSelection) ? '#0b1220' : '#ffffff',
+          strokeWidth: 2.4,
+          lineCap: 'round',
+          lineJoin: 'round',
+          listening: false,
+        }));
+      }
+    } else {
+      marker.add(new Circle({ ...common, radius: this.seatR + (candidate ? 4.5 : 2.5), strokeWidth: candidate ? 3.5 : 2.5 }));
+      if (candidate) {
+        marker.add(new Circle({
+          ...common,
+          radius: this.seatR + 8,
+          strokeWidth: 2,
+          opacity: 0.55,
+        }));
+      } else {
+        marker.add(new Line({
+          points: [-this.seatR * 0.52, 0, -this.seatR * 0.12, this.seatR * 0.4, this.seatR * 0.6, -this.seatR * 0.46],
+          stroke: '#ffffff',
+          strokeWidth: Math.max(2.6, this.seatR * 0.34),
+          lineCap: 'round',
+          lineJoin: 'round',
+          shadowColor: '#0b1220',
+          shadowBlur: 1.5,
+          shadowOpacity: 0.55,
+          listening: false,
+        }));
+      }
+    }
+
+    this.selectionMarkers.set(id, marker);
+    this.overlayLayer.add(marker);
   }
 
   // ---- interaction ----------------------------------------------------------
@@ -3057,14 +3213,16 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // the offset/doubled numbers visible at close zoom levels.
       if (seat.kind === 'booth') continue;
       if (seat.x < x0 || seat.x > x1 || seat.y < y0 || seat.y > y1) continue;
+      const status = this.statusById.get(seat.id) ?? 'free';
+      const statusCue = status === 'booked' ? '×' : status === 'held' && !this.ownedHold.has(seat.id) ? 'H' : null;
       const t = new Text({
         x: seat.x,
         y: seat.y,
-        text: seat.label,
-        fontSize: 7,
-        fontStyle: '600',
+        text: statusCue ?? seat.label,
+        fontSize: statusCue ? (status === 'booked' ? 13 : 8) : 7,
+        fontStyle: statusCue ? '800' : '600',
         fontFamily: this.labelFont(),
-        fill: this.theme.seatLabelColor ?? DEF_SEAT_LABEL,
+        fill: statusCue ? '#ffffff' : (this.theme.seatLabelColor ?? DEF_SEAT_LABEL),
         listening: false,
         perfectDrawEnabled: false,
       });
@@ -3072,7 +3230,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // the seat circle. Down to a legibility floor; below that the label is
       // dropped rather than rendered as an unreadable speck.
       const maxW = this.seatR * 2 - 3;
-      if (t.width() > maxW) t.fontSize(Math.max(4, (7 * maxW) / t.width()));
+      if (t.width() > maxW) t.fontSize(Math.max(4, (t.fontSize() * maxW) / t.width()));
       if (t.fontSize() < 4.2) { t.destroy(); continue; }
       t.offsetX(t.width() / 2);
       t.offsetY(t.height() / 2);
