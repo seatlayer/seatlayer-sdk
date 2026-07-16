@@ -230,7 +230,7 @@ export class PickerController {
   private readonly opts: PickerOptions;
   private readonly api: PickerTransport;
   private readonly key: string;
-  private readonly maxSelection: number;
+  private maxSelection: number;
 
   private renderer: ISeatmapRenderer | null = null;
   private _doc: ChartDoc | null = null;
@@ -391,6 +391,7 @@ export class PickerController {
         this.opts.onDeselect?.(seat);
         this.emitSelectionChange();
       },
+      onSelectionLimit: this.opts.onSelectionLimit,
       onHover: (seat) => {
         this.opts.onHover?.(seat);
         if (this.opts.onSeatHover) this.opts.onSeatHover(seat ? this.describeSeat(seat) : null);
@@ -466,6 +467,15 @@ export class PickerController {
   deselect(ids: string[]): void {
     this.renderer?.deselect(ids);
     this.emitSelectionChange();
+  }
+  setMaxSelection(maxSelection: number): void {
+    this.maxSelection = Math.max(0, Math.floor(maxSelection));
+    this.renderer?.setMaxSelection?.(this.maxSelection);
+  }
+  select(ids: string[]): PickerSeat[] {
+    const added = this.renderer?.select?.(ids) ?? [];
+    if (added.length) this.emitSelectionChange();
+    return added.map((seat) => this.toSeat(seat));
   }
 
   // ---- booking machine ------------------------------------------------------
