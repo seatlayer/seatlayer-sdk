@@ -516,6 +516,13 @@ export interface ISeatmapRenderer {
    */
   setOwnedHold?(seatIds: string[] | null): void;
   /**
+   * Mark one selected seat as the buyer's pending confirmation candidate.
+   * The candidate receives a strong focus halo while unrelated seats recede;
+   * pass null after Select/Cancel. This is visual only and never mutates the
+   * renderer selection.
+   */
+  setSelectionFocus?(seatId: string | null): void;
+  /**
    * SYNCHRONOUS repaint that bypasses requestAnimationFrame. Konva's batchDraw()
    * (used by setStatus and friends) schedules the actual paint on the next rAF
    * tick, which Chrome throttles/pauses on hidden, backgrounded, or occluded

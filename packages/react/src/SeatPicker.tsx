@@ -77,6 +77,7 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         onCheckout: (hold, seats, handoff) => callbacks.current.onCheckout?.(hold, seats, handoff),
         onBooked: (handoff) => callbacks.current.onBooked?.(handoff),
         onSelectionChange: (seats) => callbacks.current.onSelectionChange?.(seats),
+        onHoldChange: (hold, seats, handoff) => callbacks.current.onHoldChange?.(hold, seats, handoff),
         onHoldExpired: () => callbacks.current.onHoldExpired?.(),
         onHoldRestored: (hold, seats, handoff) => callbacks.current.onHoldRestored?.(hold, seats, handoff),
         onError: (err) => callbacks.current.onError?.(err),

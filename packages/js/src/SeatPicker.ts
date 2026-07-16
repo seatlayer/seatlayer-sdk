@@ -168,8 +168,10 @@ export interface SeatPickerOptions {
    */
   restoreHold?: boolean;
   /**
-   * Confirm mode: tapping a seat shows an anchored popover (seat · category ·
-   * price · Add/Cancel) instead of adding straight to the tray. Default false.
+   * Confirm mode: tapping a seat shows a confirmation card with section, row,
+   * seat, category, price and Select/Cancel before it enters the tray. Default
+   * true for the full buyer picker; set false only when the host supplies its
+   * own equivalent confirmation UI.
    */
   confirmSelection?: boolean;
   /**
@@ -194,6 +196,12 @@ export interface SeatPickerOptions {
   onBooked?: (handoff: CheckoutHandoff) => void;
   /** Selection changed (tap or best-available). */
   onSelectionChange?: (seats: PickerSeat[]) => void;
+  /**
+   * Active hold changed because it was created, restored, extended, partially
+   * released, or fully released. Hosts should persist this state for route
+   * navigation and clear their checkout cart when `hold` becomes null.
+   */
+  onHoldChange?: (hold: HoldResult | null, seats: PickerSeat[], handoff: CheckoutHandoff | null) => void;
   /** The open hold expired server-side (widget already reset itself). */
   onHoldExpired?: () => void;
   /** A prior active hold was verified and restored into the tray. */
@@ -266,6 +274,15 @@ const CSS = `
 .sl-picker[data-layout="narrow"][data-sheet="peek"] .sl-side > :not(.sl-sheet-head){display:none}
 .sl-picker[data-layout="narrow"] .sl-tray{flex:none}
 .sl-picker[data-layout="narrow"] .sl-foot{position:sticky;bottom:0;background:var(--sl-bg)}
+.sl-picker[data-layout="narrow"] .sl-sheet-head{order:0}
+.sl-picker[data-layout="narrow"] .sl-seats-sec{order:1}
+.sl-picker[data-layout="narrow"] .sl-tray{order:2}
+.sl-picker[data-layout="narrow"] .sl-filtersec{order:3}
+.sl-picker[data-layout="narrow"] .sl-filters{order:4}
+.sl-picker[data-layout="narrow"] .sl-prices-sec{order:5}
+.sl-picker[data-layout="narrow"] .sl-pricef{order:6}
+.sl-picker[data-layout="narrow"] .sl-prices{order:7}
+.sl-picker[data-layout="narrow"] .sl-foot{order:8}
 /* touch chrome: pinch-zoom exists — hide +/− on the sheet layout (keep fit) */
 .sl-picker[data-layout="narrow"] .sl-zoom [data-ref="zin"],
 .sl-picker[data-layout="narrow"] .sl-zoom [data-ref="zout"]{display:none}
@@ -312,6 +329,11 @@ const CSS = `
 .sl-price-label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
 .sl-price-left{font-size:11px;color:var(--sl-muted);font-variant-numeric:tabular-nums}
 .sl-price-amt{font-weight:800;font-variant-numeric:tabular-nums}
+.sl-status-key{display:flex;gap:12px;flex-wrap:wrap;padding:8px 16px 12px;border-bottom:1px solid var(--sl-line);color:var(--sl-muted);font-size:11px}
+.sl-status-item{display:inline-flex;align-items:center;gap:6px}
+.sl-status-icon{width:17px;height:17px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
+  color:#fff;background:#6b7280;font-size:9px;font-weight:900;line-height:1}
+.sl-status-icon.sold{background:#374151;font-size:14px}
 
 /* tray */
 .sl-tray{flex:1;padding:10px 16px;display:flex;flex-direction:column;gap:8px;min-height:0}
@@ -462,29 +484,47 @@ const CSS = `
 .sl-chip-f:hover{color:var(--sl-text)}
 .sl-chip-f.on{background:var(--sl-accent);color:var(--sl-accent-ink);border-color:transparent}
 
-/* confirm popover */
-.sl-confirm{position:absolute;z-index:9;min-width:190px;background:var(--sl-surface);border:1px solid var(--sl-line);
-  border-radius:12px;padding:12px;box-shadow:0 18px 50px -18px rgba(0,0,0,.7);transform:translate(-50%,calc(-100% - 14px));
+/* confirm card: a candidate is not in the tray until Select. Map gestures and
+   floating chrome pause while the card owns focus, keeping the camera stable. */
+.sl-picker[data-confirming="true"] .sl-map-host>:not(.sl-confirm){pointer-events:none}
+.sl-picker[data-confirming="true"] .sl-anchor{pointer-events:none;opacity:.28;transition:opacity .16s}
+.sl-picker[data-confirming="true"] .sl-side{pointer-events:none;opacity:.58;transition:opacity .16s}
+.sl-confirm{position:absolute;z-index:10;width:276px;max-width:calc(100% - 24px);overflow:hidden;pointer-events:auto;
+  background:var(--sl-surface);border:1px solid color-mix(in srgb,var(--sl-line) 70%,var(--sl-text));
+  border-radius:15px;box-shadow:0 24px 64px -18px rgba(0,0,0,.72);transform:translate(-50%,calc(-100% - 16px));
   animation:slConfirmIn .24s cubic-bezier(.2,.8,.2,1) both}
-.sl-confirm-label{font-weight:800;font-size:14px}
-.sl-confirm-meta{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--sl-muted);margin-top:4px}
-.sl-confirm-meta b{color:var(--sl-text);margin-left:auto}
+.sl-confirm[data-placement="below"]{transform:translate(-50%,16px);animation:slConfirmBelowIn .24s cubic-bezier(.2,.8,.2,1) both}
+.sl-confirm-grid{display:grid;grid-template-columns:1.2fr .8fr .8fr;border-bottom:1px solid var(--sl-line)}
+.sl-confirm-field{min-width:0;padding:12px 11px 10px;border-right:1px solid var(--sl-line)}
+.sl-confirm-field:last-child{border-right:0;text-align:center}
+.sl-confirm-field:nth-child(2){text-align:center}
+.sl-confirm-key{display:block;font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--sl-muted);font-weight:800}
+.sl-confirm-value{display:block;margin-top:4px;color:var(--sl-text);font-size:17px;line-height:1.1;font-weight:850;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sl-confirm-cat{display:flex;align-items:center;gap:8px;padding:10px 12px;background:color-mix(in srgb,var(--sl-cat) 76%,var(--sl-surface))}
+.sl-confirm-cat .sl-dot{border:2px solid rgba(255,255,255,.78);width:11px;height:11px}
+.sl-confirm-cat-name{font-size:13.5px;font-weight:800;color:#fff;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sl-confirm-price{font-size:17px;font-weight:850;color:#fff;font-variant-numeric:tabular-nums}
+.sl-confirm-body{padding:11px 12px 12px}
 .sl-confirm-row{display:flex;gap:8px;margin-top:10px}
-.sl-confirm-row button{flex:1;padding:8px;border-radius:8px;font-weight:700;font-size:12.5px}
-.sl-confirm-add{background:var(--sl-accent);color:var(--sl-accent-ink)}
-.sl-confirm-cancel{border:1px solid var(--sl-line);color:var(--sl-muted)}
+.sl-confirm-row button{flex:1;min-height:44px;padding:9px 12px;border-radius:9px;font-weight:800;font-size:13px}
+.sl-confirm-add{background:var(--sl-accent)!important;color:var(--sl-accent-ink)!important;display:flex;align-items:center;justify-content:center;gap:7px}
+.sl-confirm-add svg{width:16px;height:16px;stroke:currentColor;stroke-width:2.8;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.sl-confirm-cancel{background:color-mix(in srgb,var(--sl-line) 44%,transparent)!important;border:1px solid var(--sl-line)!important;color:var(--sl-muted)!important}
 .sl-confirm-cancel:hover{color:var(--sl-text)}
+.sl-picker[data-layout="narrow"] .sl-confirm{left:50%!important;top:auto!important;bottom:14px;width:min(342px,calc(100% - 24px));
+  transform:translateX(-50%);animation:slConfirmMobileIn .24s cubic-bezier(.2,.8,.2,1) both}
 
 /* best-available row */
-.sl-ba{display:flex;align-items:center;gap:8px;padding:9px 11px;border:1px solid var(--sl-line);border-radius:var(--sl-r-sm)}
+.sl-ba{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:9px 11px;border:1px solid var(--sl-line);border-radius:var(--sl-r-sm)}
 .sl-ba select{background:var(--sl-surface);color:var(--sl-text);border:1px solid var(--sl-line);border-radius:7px;
-  font:inherit;font-size:12px;padding:5px 6px;max-width:110px}
+  font:inherit;font-size:12px;padding:7px 8px;min-width:0;width:100%;max-width:none}
 .sl-ba-qty{display:flex;align-items:center;gap:7px}
 .sl-ba-qty button{width:24px;height:24px;border-radius:999px;background:var(--sl-surface);border:1px solid var(--sl-line);
   font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
 .sl-ba-qty span{min-width:14px;text-align:center;font-weight:800}
-.sl-ba-go{margin-left:auto;padding:7px 12px;border-radius:999px;border:1px solid var(--sl-line);font-weight:700;font-size:12px;
-  transition:border-color .15s,opacity .15s;display:flex;align-items:center;gap:6px}
+.sl-ba-go{grid-column:1/-1;width:100%;min-height:38px;padding:7px 12px;border-radius:9px;border:1px solid var(--sl-line);font-weight:800;font-size:12px;
+  transition:border-color .15s,opacity .15s;display:flex;align-items:center;justify-content:center;gap:6px}
 .sl-ba-go:hover{border-color:var(--sl-muted)}
 .sl-ba-go:disabled{opacity:.62;cursor:wait}
 
@@ -607,6 +647,8 @@ const CSS = `
 @keyframes slCheckDraw{to{stroke-dashoffset:0}}
 @keyframes slCopyRise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 @keyframes slConfirmIn{from{opacity:0;transform:translate(-50%,calc(-100% - 8px)) scale(.96)}to{opacity:1;transform:translate(-50%,calc(-100% - 14px)) scale(1)}}
+@keyframes slConfirmBelowIn{from{opacity:0;transform:translate(-50%,8px) scale(.96)}to{opacity:1;transform:translate(-50%,16px) scale(1)}}
+@keyframes slConfirmMobileIn{from{opacity:0;transform:translate(-50%,10px) scale(.97)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
 
 @media(prefers-reduced-motion:reduce){
   .sl-picker *,.sl-modal-scrim *{animation-duration:.001ms!important;animation-iteration-count:1!important;
@@ -717,6 +759,8 @@ export class SeatPicker {
   private lastTrayKeys = new Set<string>();
   private bestAvailableBusy = false;
   private releasingLabels = new Set<string>();
+  /** Selected labels awaiting the hold response; their own realtime echo can arrive first. */
+  private holdingLabels = new Set<string>();
   private ctaPhase: 'idle' | 'holding' | 'checkout' = 'idle';
   // narrow-layout chrome that docks into the sheet's Filters row on mobile
   private a11yChipsEl: HTMLDivElement | null = null;
@@ -777,7 +821,13 @@ export class SeatPicker {
       if (e.target === scrim) close();
     });
     picker.escHandler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
+      if (e.key !== 'Escape') return;
+      if (picker.confirmSeat) {
+        e.preventDefault();
+        picker.cancelConfirm();
+      } else {
+        close();
+      }
     };
     document.addEventListener('keydown', picker.escHandler);
     await picker.render();
@@ -790,7 +840,7 @@ export class SeatPicker {
     if (!options || typeof options !== 'object') throw new Error('seatmap: options object is required');
     if (!options.event || typeof options.event !== 'string') throw new Error('seatmap: `event` key is required');
     if (!options.container) throw new Error('seatmap: `container` is required (or use SeatPicker.open())');
-    this.opts = options;
+    this.opts = { ...options, confirmSelection: options.confirmSelection ?? true };
     this.apiBase = (options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
     this.api = new PubApi(this.apiBase);
     this.controller = new PickerController({
@@ -803,7 +853,7 @@ export class SeatPicker {
       onSelectionChange: () => {
         this.syncTray();
         // Seat-picking has begun — collapse the section card out of the way.
-        if (this.controller.getSelection().length) this.collapseSectionCard();
+        if (this.committedSelection().length) this.collapseSectionCard();
       },
       onStatusChange: () => {
         this.syncPrices();
@@ -822,12 +872,16 @@ export class SeatPicker {
         this.gaQty.clear();
         this.toast(t('picker.holdExpired', undefined) || 'Your hold expired — seats released. Pick again.', 'warning');
         this.syncTray();
+        this.emitHoldChange();
         this.opts.onHoldExpired?.();
       },
-      confirmSelection: options.confirmSelection,
+      confirmSelection: this.opts.confirmSelection,
       onSelect: (seat) => {
         this.flashPickedSeat(seat.id);
         if (this.opts.confirmSelection) this.showConfirm(seat);
+      },
+      onDeselect: (seat) => {
+        if (this.confirmSeat?.id === seat.id) this.dismissConfirm();
       },
       onViewChange: () => {
         this.reanchorConfirm();
@@ -856,8 +910,15 @@ export class SeatPicker {
     const mount = resolveContainer(this.opts.container!);
     const root = document.createElement('div');
     root.className = 'sl-picker';
+    root.tabIndex = -1;
     this.root = root;
     mount.appendChild(root);
+    root.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !this.confirmSeat) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.cancelConfirm();
+    });
 
     // skeleton first — tokens get re-applied once the chart theme arrives
     Object.entries(resolveTokens(undefined, this.opts.theme)).forEach(([k, v]) => root.style.setProperty(k, v));
@@ -898,9 +959,9 @@ export class SeatPicker {
           </div>
           <div class="sl-sec sl-filtersec" data-ref="filtersSec">Filters</div>
           <div class="sl-filters" data-ref="filters"></div>
-          <div class="sl-sec" data-ref="pricesSec">Prices</div>
+          <div class="sl-sec sl-prices-sec" data-ref="pricesSec">Prices</div>
           <div class="sl-prices" data-ref="prices"></div>
-          <div class="sl-sec">Your seats</div>
+          <div class="sl-sec sl-seats-sec">Your seats</div>
           <div class="sl-tray" data-ref="tray"></div>
           <div class="sl-foot">
             <div class="sl-hold-note" data-ref="holdNote" role="status" aria-live="polite">
@@ -1253,10 +1314,15 @@ export class SeatPicker {
   }
 
   /** Update only the action affordance; selection callbacks must not refire. */
+  private committedSelection(): PickerSeat[] {
+    const candidateId = this.confirmSeat?.id;
+    return this.controller.getSelection().filter((seat) => seat.id !== candidateId);
+  }
+
   private pendingSelectionCount(): number {
     const heldItems = this.hold?.items ?? [];
     const heldLabels = new Set(heldItems.map((item) => item.label));
-    const pendingSeats = this.controller.getSelection().filter((seat) => !heldLabels.has(seat.label)).length;
+    const pendingSeats = this.committedSelection().filter((seat) => !heldLabels.has(seat.label)).length;
     const heldGA = new Map<string, number>();
     for (const item of heldItems.filter((candidate) => candidate.objectType === 'ga')) {
       heldGA.set(item.objectId, (heldGA.get(item.objectId) ?? 0) + (item.quantity ?? 1));
@@ -1271,6 +1337,11 @@ export class SeatPicker {
   private syncCta(count = this.lastTrayCount, pending = this.pendingSelectionCount()): void {
     const cta = this.els.cta as HTMLButtonElement | undefined;
     if (!cta) return;
+    if (this.confirmSeat) {
+      cta.disabled = true;
+      cta.textContent = 'Confirm or cancel this seat';
+      return;
+    }
     if (this.ctaPhase === 'holding') {
       cta.disabled = true;
       cta.innerHTML = '<span class="sl-cta-spin" aria-hidden="true"></span>Securing seats…';
@@ -1350,12 +1421,16 @@ export class SeatPicker {
         items: h.items,
       };
       this.hold = restored;
-      this.handedOff = false;
+      // A resumed capability came from an earlier checkout handoff. Keep it
+      // alive if this picker mount is refreshed or torn down before the buyer
+      // explicitly removes/releases it.
+      this.handedOff = true;
       this.bookedShown = false;
       this.ctaPhase = 'idle';
       this.startHoldTimer(restored.expiresAt);
       this.rememberHold(restored);
       this.syncTray();
+      this.emitHoldChange();
       this.opts.onHoldRestored?.(restored, restored.seats ?? [], this.buildHandoff(restored));
       if (automatic) this.toast('Your held tickets have been restored.', 'success');
       return restored;
@@ -1875,19 +1950,39 @@ export class SeatPicker {
     }, ${statusText}`;
   }
 
-  // ---- confirm popover (opt-in confirmSelection mode) ------------------------
+  // ---- seat candidate confirmation ------------------------------------------
 
   private showConfirm(seat: ExpandedSeat): void {
-    this.closeConfirm();
+    const previousId = this.confirmSeat?.id;
+    this.confirmEl?.remove();
+    this.confirmEl = null;
+    this.confirmSeat = seat;
+    this.root?.setAttribute('data-confirming', 'true');
+    this.controller.setSelectionFocus(seat.id);
+    if (previousId && previousId !== seat.id) this.controller.deselect([previousId]);
     if (this.tipEl) this.tipEl.style.display = 'none';
+    const details = this.controller.seatDetails(seat.id);
     const cat = this.controller.doc?.categories.find((c) => c.key === seat.categoryKey);
-    const price = cat?.tiers?.length ? cat.tiers[0].price : cat?.price;
+    const price = details?.price ?? (cat?.tiers?.length ? cat.tiers[0].price : cat?.price);
+    const safe = (value: unknown): string => String(value ?? '—').replace(/[&<>"]/g, (char) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
+    })[char]!);
     const el = document.createElement('div');
     el.className = 'sl-confirm';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-label', `Confirm seat ${seat.label}`);
+    el.style.setProperty('--sl-cat', cat?.color ?? '#6e7bff');
     el.innerHTML =
-      `<div class="sl-confirm-label">${seat.label}</div>` +
-      `<div class="sl-confirm-meta"><span class="sl-dot" style="background:${cat?.color ?? '#6e7bff'}"></span>` +
-      `${cat?.label ?? seat.categoryKey}${price != null ? `<b>${this.money(price)}</b>` : ''}</div>` +
+      `<div class="sl-confirm-grid">` +
+      `<div class="sl-confirm-field"><span class="sl-confirm-key">Section</span><span class="sl-confirm-value">${safe(details?.sectionLabel)}</span></div>` +
+      `<div class="sl-confirm-field"><span class="sl-confirm-key">Row</span><span class="sl-confirm-value">${safe(details?.rowLabel)}</span></div>` +
+      `<div class="sl-confirm-field"><span class="sl-confirm-key">Seat</span><span class="sl-confirm-value">${safe(details?.seatNumber ?? seat.label)}</span></div>` +
+      `</div>` +
+      `<div class="sl-confirm-cat"><span class="sl-dot" style="background:${cat?.color ?? '#6e7bff'}"></span>` +
+      `<span class="sl-confirm-cat-name">${safe(details?.categoryLabel ?? cat?.label ?? seat.categoryKey)}</span>` +
+      (price != null ? `<span class="sl-confirm-price">${this.money(price)}</span>` : '') + `</div>` +
+      `<div class="sl-confirm-body">` +
       (this.seatViewEnabled()
         ? `<button type="button" class="sl-confirm-view">` +
           `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>` +
@@ -1895,30 +1990,58 @@ export class SeatPicker {
         : '') +
       `<div class="sl-confirm-row">` +
       `<button type="button" class="sl-confirm-cancel">Cancel</button>` +
-      `<button type="button" class="sl-confirm-add">Add seat</button></div>`;
+      `<button type="button" class="sl-confirm-add"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4 4L19 7"/></svg>Select</button></div></div>`;
     this.els.map.appendChild(el);
     this.confirmEl = el;
-    this.confirmSeat = seat;
     this.reanchorConfirm();
     el.querySelector('.sl-confirm-view')?.addEventListener('click', () => this.openSeatView(seat));
-    el.querySelector('.sl-confirm-add')!.addEventListener('click', () => this.closeConfirm());
-    el.querySelector('.sl-confirm-cancel')!.addEventListener('click', () => {
-      this.controller.deselect([seat.id]);
-      this.closeConfirm();
-    });
+    el.querySelector('.sl-confirm-add')!.addEventListener('click', () => this.commitConfirm());
+    el.querySelector('.sl-confirm-cancel')!.addEventListener('click', () => this.cancelConfirm());
+    requestAnimationFrame(() => el.querySelector<HTMLButtonElement>('.sl-confirm-add')?.focus());
   }
 
   private reanchorConfirm(): void {
     if (!this.confirmEl || !this.confirmSeat) return;
     const p = this.controller.worldToScreen({ x: this.confirmSeat.x, y: this.confirmSeat.y });
-    this.confirmEl.style.left = `${p.x}px`;
-    this.confirmEl.style.top = `${p.y}px`;
+    if (this.root?.dataset.layout === 'narrow') return;
+    const mapWidth = this.els.map.clientWidth;
+    const mapHeight = this.els.map.clientHeight;
+    const cardWidth = this.confirmEl.offsetWidth || 276;
+    const cardHeight = this.confirmEl.offsetHeight || 230;
+    const half = cardWidth / 2 + 12;
+    const x = Math.max(half, Math.min(mapWidth - half, p.x));
+    const belowFits = p.y + cardHeight + 24 <= mapHeight;
+    const placeBelow = p.y < cardHeight + 24 && belowFits;
+    this.confirmEl.dataset.placement = placeBelow ? 'below' : 'above';
+    this.confirmEl.style.left = `${x}px`;
+    this.confirmEl.style.top = `${Math.max(8, Math.min(mapHeight - 8, p.y))}px`;
   }
 
-  private closeConfirm(): void {
+  private dismissConfirm(): void {
     this.confirmEl?.remove();
     this.confirmEl = null;
     this.confirmSeat = null;
+    this.root?.removeAttribute('data-confirming');
+    this.controller.setSelectionFocus(null);
+  }
+
+  private commitConfirm(): void {
+    if (!this.confirmSeat) return;
+    this.dismissConfirm();
+    this.collapseSectionCard();
+    this.syncTray();
+  }
+
+  private cancelConfirm(): void {
+    const seat = this.confirmSeat;
+    if (!seat) return;
+    this.controller.deselect([seat.id]);
+    if (this.confirmSeat) this.dismissConfirm();
+    this.root?.focus({ preventScroll: true });
+  }
+
+  private closeConfirm(): void {
+    this.dismissConfirm();
   }
 
   // ---- 360° view-from-seat modal --------------------------------------------
@@ -1945,7 +2068,6 @@ export class SeatPicker {
   private openSeatView(seat: ExpandedSeat): void {
     if (!this.root || !this.seatViewEnabled()) return;
     this.closeSeatView();
-    this.closeConfirm();
 
     const doc = this.controller.doc;
     const activeId = this.controller.getActiveFloorId();
@@ -2086,7 +2208,11 @@ export class SeatPicker {
           `</div>`
         );
       })
-      .join('');
+      .join('') +
+      `<div class="sl-status-key" aria-label="Seat status legend">` +
+      `<span class="sl-status-item"><i class="sl-status-icon">H</i>Held by another buyer</span>` +
+      `<span class="sl-status-item"><i class="sl-status-icon sold">×</i>Sold</span>` +
+      `</div>`;
     // Legend-hover highlight: dim other categories on the map while hovering a row.
     this.els.prices.querySelectorAll<HTMLElement>('.sl-price-row').forEach((row) => {
       row.addEventListener('mouseenter', () => this.controller.getRenderer()?.setCategoryHighlight?.(row.dataset.cat ?? null));
@@ -2097,7 +2223,10 @@ export class SeatPicker {
   /** A live delta took one of OUR selected (not yet held) seats — evict + tell the buyer. */
   private evictTakenSelections(): void {
     // Our own hold's WS echo paints our seats 'held' — never treat those as sniped.
-    const ownLabels = new Set<string>(this.controller.currentHold()?.labels ?? []);
+    const ownLabels = new Set<string>([
+      ...(this.controller.currentHold()?.labels ?? []),
+      ...this.holdingLabels,
+    ]);
     const gone = this.controller
       .getSelection()
       .filter((s) => !ownLabels.has(s.label) && (this.controller.getStatus(s.id) ?? 'free') !== 'free');
@@ -2108,7 +2237,7 @@ export class SeatPicker {
 
   private syncTray(): void {
     if (!this.els.tray) return;
-    const seats = this.controller.getSelection();
+    const seats = this.committedSelection();
     const gaAreas = this.controller.getGAAreas();
     const heldItems = this.hold?.items ?? [];
     const parts: string[] = [];
@@ -2132,7 +2261,7 @@ export class SeatPicker {
       parts.push(
         `<div class="sl-chip sl-held${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-held="${encodeURIComponent(item.label)}"><b>${item.label}</b>` +
           `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>` +
-          `<span class="sl-chip-state">Held</span>` +
+          `<span class="sl-chip-state">Held by you</span>` +
           `<span class="amt">${this.money(item.unitPrice * (item.quantity ?? 1))}</span>` +
           (canView
             ? `<button type="button" class="view" data-view-label="${item.label}" aria-label="${t('picker.viewFromSeat', { label: item.label })}">` +
@@ -2309,11 +2438,9 @@ export class SeatPicker {
           `<span class="sub">· Best available</span>`;
       }
     }
-    // Auto-expand the sheet on the FIRST selection so tray + CTA surface;
-    // the buyer can swipe back down and the peek line keeps count + total.
-    if (this.root?.dataset.layout === 'narrow' && count > 0 && this.lastTrayCount === 0) {
-      this.root.dataset.sheet = 'open';
-    }
+    // Keep the mobile map stable after selection. The persistent Review pill
+    // exposes the updated count/total without covering the seat the buyer just
+    // confirmed; opening the sheet remains an explicit tap or swipe.
     this.lastTrayCount = count;
     this.lastTrayTotal = total;
 
@@ -2327,6 +2454,7 @@ export class SeatPicker {
     const button = chip?.querySelector<HTMLButtonElement>('.rm');
     if (button) button.disabled = true;
     try {
+      const preserveAcrossNavigation = this.handedOff;
       const released = await this.controller.releaseLabels([label]);
       if (!released) {
         this.toast(`Couldn't remove ${label}. Your hold is unchanged.`, 'error');
@@ -2336,7 +2464,7 @@ export class SeatPicker {
       this.hold = remaining
         ? { holdId: remaining.holdId, expiresAt: remaining.expiresAt, seats: remaining.seats, items: remaining.items }
         : null;
-      this.handedOff = false;
+      this.handedOff = !!this.hold && preserveAcrossNavigation;
       this.bookedShown = false;
       this.ctaPhase = 'idle';
       if (this.hold) {
@@ -2346,6 +2474,7 @@ export class SeatPicker {
         this.forgetHold();
       }
       this.syncTray();
+      this.emitHoldChange();
       this.toast(`${label} removed from your hold.`, 'success');
       return true;
     } finally {
@@ -2359,20 +2488,22 @@ export class SeatPicker {
     // Best-available (or a prior CTA press) already holds the seats — hand off.
     // Held seats are NOT in the client selection (the server holds them), so
     // pass the hold's own seat list to the host.
-    if (this.hold && !this.controller.getSelection().some((s) => !(this.hold!.items ?? []).some((i) => i.label === s.label))) {
-      const seats = this.hold.seats ?? this.controller.getSelection();
+    const committed = this.committedSelection();
+    if (this.hold && !committed.some((s) => !(this.hold!.items ?? []).some((i) => i.label === s.label))) {
+      const seats = this.hold.seats ?? committed;
       this.handedOff = true;
       this.setCtaPhase('checkout');
       this.opts.onCheckout?.(this.hold, seats, this.buildHandoff(this.hold));
       return;
     }
+    this.holdingLabels = new Set(committed.map((seat) => seat.label));
     this.setCtaPhase('holding');
     try {
       // seats first (controller.hold covers selected seats); GA quantities ride along
       let hold: HoldResult | null = null;
       const gaEntries = [...this.gaQty.entries()].filter(([, q]) => q > 0);
       // Snapshot before hold — the hold's own WS echo repaints these seats.
-      const chosenSeats = this.controller.getSelection();
+      const chosenSeats = this.committedSelection();
       if (chosenSeats.length) {
         const h = await this.controller.hold(undefined, this.opts.holdTtlMs);
         hold = h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
@@ -2392,6 +2523,7 @@ export class SeatPicker {
       this.startHoldTimer(hold.expiresAt);
       this.flashHeldSeats(hold);
       this.setCtaPhase('checkout');
+      this.emitHoldChange();
       // The replacement hold can combine an earlier best-available set with
       // newly selected seats. Hand the host the complete held seat set; the
       // server-priced line items remain authoritative for GA and totals.
@@ -2401,6 +2533,7 @@ export class SeatPicker {
       this.toast('One or more seats were just taken. Please pick again.', 'error');
       this.setCtaPhase('idle');
     } finally {
+      this.holdingLabels.clear();
       if (this.ctaPhase === 'holding') this.ctaPhase = 'idle';
       this.syncTray();
     }
@@ -2462,6 +2595,8 @@ export class SeatPicker {
         this.hold = { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items };
         this.holdExpiresAt = h.expiresAt;
         this.extendEl?.classList.remove('on');
+        this.rememberHold(this.hold);
+        this.emitHoldChange();
         this.toast('More time added — your seats are still held.', 'success');
       } else {
         this.toast("Couldn't add more time — please head to checkout now.", 'warning');
@@ -2523,6 +2658,15 @@ export class SeatPicker {
     return { holdId: hold.holdId, expiresAt: hold.expiresAt, currency, lineItems, total };
   }
 
+  private emitHoldChange(): void {
+    const hold = this.hold;
+    this.opts.onHoldChange?.(
+      hold,
+      hold?.seats ?? [],
+      hold ? this.buildHandoff(hold) : null,
+    );
+  }
+
   private toast(msg: string, tone: 'neutral' | 'success' | 'warning' | 'error' = 'neutral'): void {
     const el = this.els.toast;
     if (!el) return;
@@ -2561,8 +2705,13 @@ export class SeatPicker {
         : `<div style="margin-top:5px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:700">${
             details.status === 'held' ? t('map.statusHeld') : t('map.statusTaken')
           }</div>`;
+    const location = [
+      details.sectionLabel ? `Section ${details.sectionLabel}` : '',
+      details.rowLabel ? `Row ${details.rowLabel}` : '',
+      details.seatNumber ? `Seat ${details.seatNumber}` : details.label,
+    ].filter(Boolean).join(' · ');
     this.tipEl.innerHTML =
-      `<div style="font-weight:800;font-size:13px">${details.label}</div>` +
+      `<div style="font-weight:800;font-size:13px">${location}</div>` +
       `<div style="display:flex;align-items:center;gap:6px;margin-top:4px">` +
       `<span style="width:9px;height:9px;border-radius:50%;flex:none;background:${details.categoryColor}"></span>` +
       `<span style="opacity:.75">${details.categoryLabel}</span>` +
@@ -2575,7 +2724,7 @@ export class SeatPicker {
   // ---- public conveniences ----------------------------------------------------
 
   getSelection(): PickerSeat[] {
-    return this.controller.getSelection();
+    return this.committedSelection();
   }
 
   /** Current active/restored hold reflected in the tray. */
@@ -2595,6 +2744,7 @@ export class SeatPicker {
 
   async bestAvailable(qty: number, categoryKey?: string): Promise<HoldResult | null> {
     if (this.bestAvailableBusy) return null;
+    if (this.confirmSeat) this.cancelConfirm();
     this.bestAvailableBusy = true;
     const button = this.els.tray?.querySelector<HTMLButtonElement>('.sl-ba-go');
     if (button) {
@@ -2610,6 +2760,7 @@ export class SeatPicker {
         this.startHoldTimer(h.expiresAt);
         this.flashHeldSeats(this.hold);
         this.syncTray();
+        this.emitHoldChange();
         return this.hold;
       }
       return null;
@@ -2661,6 +2812,7 @@ export class SeatPicker {
     this.stopHoldTimer();
     this.gaQty.clear();
     this.syncTray();
+    this.emitHoldChange();
   }
 
   destroy(): void {

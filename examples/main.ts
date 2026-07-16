@@ -16,6 +16,10 @@ const inlinePicker = new SeatPicker({
   container: '#inline',
   event: EVENT,
   apiBase: API,
+  // The page also mounts a narrow picker for responsive QA. Keep one owner for
+  // the shared event-scoped session hold so two demo widgets do not race to
+  // restore the same checkout capability after a reload.
+  restoreHold: false,
   confirmSelection: true,
   // P4: the THIRD arg is the stable CheckoutHandoff — build your order from it.
   onCheckout: (hold, seats, handoff) => {
@@ -36,13 +40,28 @@ inlinePicker.render();
 // Dev-harness only: expose for scripted verification.
 (window as unknown as { __picker: SeatPicker }).__picker = inlinePicker;
 
-new SeatPicker({
-  container: '#narrow',
-  event: EVENT,
-  apiBase: API,
-  theme: { accent: '#E54558', accentInk: '#fff' },
-  onCheckout: (_hold, _seats, handoff) => console.log('[harness] narrow checkout', handoff),
-}).render();
+let lastNarrowHoldId: string | undefined;
+const mountNarrowPicker = (): SeatPicker => {
+  const picker = new SeatPicker({
+    container: '#narrow',
+    event: EVENT,
+    apiBase: API,
+    initialHoldId: lastNarrowHoldId,
+    theme: { accent: '#E54558', accentInk: '#fff' },
+    onCheckout: (_hold, _seats, handoff) => {
+      lastNarrowHoldId = handoff.holdId;
+      console.log('[harness] narrow checkout', handoff);
+    },
+  });
+  void picker.render();
+  return picker;
+};
+let narrowPicker = mountNarrowPicker();
+
+document.getElementById('return-btn')!.addEventListener('click', () => {
+  narrowPicker.destroy();
+  narrowPicker = mountNarrowPicker();
+});
 
 document.getElementById('modal-btn')!.addEventListener('click', () => {
   void SeatPicker.open({

@@ -15,8 +15,8 @@
  * PubApi while the dashboard uses an adapter over src/lib/api.ts.
  */
 import { createRenderer } from '../engine/SeatmapRenderer';
-import { expandChart } from '../core/layout';
-import { applyHidden } from '../core/sections';
+import { allObjects, expandChart } from '../core/layout';
+import { applyHidden, computeSections } from '../core/sections';
 import { strandedSingles } from '../core/orphans';
 import { t } from '../i18n';
 import type {
@@ -56,6 +56,10 @@ export interface SeatHoverDetails extends PickerSeat {
   categoryColor: string;
   status: SeatStatus;
   currency: string;
+  /** Human-readable spatial context for hover and confirmation UI. */
+  sectionLabel?: string;
+  rowLabel?: string;
+  seatNumber?: string;
 }
 
 export interface HoldConflict {
@@ -243,6 +247,8 @@ export class PickerController {
   private seatTiers = new Map<string, string>();
   /** id → seat, for the section-summary breakdown (renderer members are ids). */
   private seatById = new Map<string, ExpandedSeat>();
+  /** id → buyer-facing spatial metadata used by every tooltip/confirm surface. */
+  private seatContext = new Map<string, { sectionLabel?: string; rowLabel?: string; seatNumber?: string }>();
   private allIds: string[] = [];
 
   // realtime socket
@@ -341,12 +347,32 @@ export class PickerController {
     this.labelToId = new Map();
     this.labelToSeat = new Map();
     this.seatById = new Map();
+    this.seatContext = new Map();
     this.allIds = [];
+    const chartObjects = new Map(allObjects(res.doc).map((object) => [object.id, object] as const));
+    const membership = computeSections(res.doc);
+    const sectionLabels = new Map(
+      [...membership.sections, ...(membership.ungrouped ? [membership.ungrouped] : [])].map((section) => [section.id, section.label] as const),
+    );
     for (const s of expandChart(res.doc)) {
       this.labelToId.set(s.label, s.id);
       this.labelToSeat.set(s.label, s);
       this.seatById.set(s.id, s);
       this.allIds.push(s.id);
+      const source = chartObjects.get(s.rowId);
+      const sourceLabel = source && 'label' in source && typeof source.label === 'string' ? source.label : undefined;
+      const rowLabel = s.kind === 'booth' ? undefined : sourceLabel;
+      const labelParts = s.label.split('-');
+      const seatNumber = rowLabel && s.label.startsWith(`${rowLabel}-`)
+        ? s.label.slice(rowLabel.length + 1)
+        : s.kind === 'booth'
+          ? s.label
+          : labelParts[labelParts.length - 1] ?? s.label;
+      this.seatContext.set(s.id, {
+        sectionLabel: sectionLabels.get(membership.objectToSection.get(s.rowId) ?? ''),
+        rowLabel,
+        seatNumber,
+      });
     }
 
     // The organizer's currency travels with the chart payload; it wins over any
@@ -427,6 +453,11 @@ export class PickerController {
   getSelection(): PickerSeat[] {
     if (!this.renderer) return [];
     return this.renderer.getSelection().map((s) => this.toSeat(s));
+  }
+  /** Enriched metadata for a seat confirmation card or tooltip. */
+  seatDetails(seatId: string): SeatHoverDetails | null {
+    const seat = this.seatById.get(seatId);
+    return seat ? this.describeSeat(seat) : null;
   }
   clearSelection(): void {
     this.renderer?.clearSelection();
@@ -763,6 +794,9 @@ export class PickerController {
   worldToScreen(p: { x: number; y: number }): { x: number; y: number } {
     return this.renderer?.worldToScreen(p) ?? { x: 0, y: 0 };
   }
+  setSelectionFocus(seatId: string | null): void {
+    this.renderer?.setSelectionFocus?.(seatId);
+  }
   setAccessibilityFilter(types: string[] | null): void {
     this.renderer?.setAccessibilityFilter?.(types as never);
   }
@@ -971,6 +1005,7 @@ export class PickerController {
       categoryColor: cat?.color ?? '#6e7bff',
       status: this.renderer?.getStatus(s.id) ?? 'free',
       currency: this.currency,
+      ...this.seatContext.get(s.id),
     };
   }
 
