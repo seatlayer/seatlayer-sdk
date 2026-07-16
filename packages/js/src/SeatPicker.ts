@@ -344,9 +344,9 @@ const CSS = `
 .sl-chip.sl-leave{pointer-events:none;animation:slChipOut .16s ease-in both}
 .sl-chip.sl-held{border-color:var(--sl-line);background:color-mix(in srgb,var(--sl-accent) 7%,var(--sl-surface));
   box-shadow:inset 3px 0 0 color-mix(in srgb,var(--sl-accent) 72%,transparent)}
-.sl-chip b{font-weight:800}
+.sl-chip b{font-weight:800;flex:none;min-width:max-content;white-space:nowrap}
 .sl-chip .cat{color:var(--sl-muted);font-size:11.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sl-chip .amt{font-weight:700;font-variant-numeric:tabular-nums}
+.sl-chip .amt{font-weight:700;font-variant-numeric:tabular-nums;flex:none;white-space:nowrap}
 .sl-chip-state{flex:none;padding:3px 6px;border-radius:999px;background:var(--sl-accent);color:var(--sl-accent-ink);
   font-size:8.5px;line-height:1;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
 .sl-chip-state.sl-pending{background:transparent;color:var(--sl-muted);border:1px solid var(--sl-line)}
@@ -2261,7 +2261,7 @@ export class SeatPicker {
       parts.push(
         `<div class="sl-chip sl-held${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-held="${encodeURIComponent(item.label)}"><b>${item.label}</b>` +
           `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>` +
-          `<span class="sl-chip-state">Held by you</span>` +
+          `<span class="sl-chip-state" aria-label="Held by you" title="Held by you">Held</span>` +
           `<span class="amt">${this.money(item.unitPrice * (item.quantity ?? 1))}</span>` +
           (canView
             ? `<button type="button" class="view" data-view-label="${item.label}" aria-label="${t('picker.viewFromSeat', { label: item.label })}">` +
