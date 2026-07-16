@@ -61,6 +61,12 @@ const SECTION_PROMINENT_SCALE = 0.45 * SEAT_LEGIBLE_SCALE;
  * as named blocks and only reveals seats once you zoom in close.
  */
 const BLOCK_MELT_TOP = 0.9 * SEAT_LEGIBLE_SCALE;
+/** Camera scale used after a section drill-in. Keeping this above the block
+ * melt band guarantees that a section tap lands on live, legible seats even
+ * when a narrow phone viewport cannot frame the whole section at that scale. */
+const SEAT_FOCUS_SCALE = Math.max(SEAT_LEGIBLE_SCALE * 1.1, BLOCK_MELT_TOP);
+/** Ignore normal finger jitter before treating a tap as a map pan. */
+const PAN_START_SLOP_PX = 8;
 /**
  * Below this scale, ZONE blocks/labels take over from per-section detail (the
  * farthest rung). ~0.55× the section rung so: seats → section blocks → zones.
@@ -423,7 +429,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private pointers = new Map<number, { x: number; y: number }>();
   private pinch: { startDist: number; startScale: number; worldMid: { x: number; y: number } } | null = null;
   private panLast: { x: number; y: number } | null = null;
-  /** Cumulative gesture movement in px — clicks are suppressed after a real pan/pinch. */
+  private panStart: { x: number; y: number } | null = null;
+  private panStarted = false;
+  /** Maximum displacement from gesture start — suppress taps only after a real pan/pinch. */
   private moved = 0;
   /**
    * Manage-mode rubber-band marquee (option-gated). `start`/`cur` are WORLD-space
@@ -698,6 +706,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   }): void {
     if (this.marquee) this.cancelMarquee();
     this.panLast = null;
+    this.panStart = null;
+    this.panStarted = false;
     this.opts.manageMode = options.manageMode;
     this.opts.marqueeSelect = options.marqueeSelect;
     this.opts.selectableStatuses = [...options.selectableStatuses];
@@ -1557,7 +1567,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.drawFocusBackdrop(id);
     this.repaintSectionsAndSeats();
     this.updateLOD();
-    this.focusRegion(id);
+    this.focusRegion(id, { minScale: SEAT_FOCUS_SCALE });
   }
 
   /** Clear an AXS section focus — restore full-bowl brightness + drop the backdrop. */
@@ -2511,7 +2521,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const { min, max } = this.zoomBounds();
     const margin = 1.12;
     if (b.width <= 0 || b.height <= 0) return this.stage.scaleX();
-    return clamp(Math.min(w / (b.width * margin), h / (b.height * margin)), min, max);
+    const frameScale = Math.min(w / (b.width * margin), h / (b.height * margin));
+    return clamp(Math.max(frameScale, SEAT_FOCUS_SCALE), min, max);
   }
 
   /**
@@ -2573,7 +2584,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   private wireInteraction(): void {
     this.seatLayer.on('click tap', (e: KonvaEventObject<Event>) => {
-      if (this.moved > 8) return; // it was a pan/pinch, not a tap
+      if (this.moved > PAN_START_SLOP_PX) return; // it was a pan/pinch, not a tap
       const id = seatIdOf(e.target);
       if (!id) return;
       this.handleSeatTap(id);
@@ -2614,7 +2625,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // are finger-width anyway — a tap zooms into that area instead of
     // attempting a 4px-precision selection (same behaviour as seats.io).
     this.stage.on('click tap', (e: KonvaEventObject<Event>) => {
-      if (this.moved > 8) return;
+      if (this.moved > PAN_START_SLOP_PX) return;
       const pointer = this.stage.getPointerPosition();
       if (!pointer) return;
       // Seats are LIVE (not a cached bitmap): the seatLayer handler above owns
@@ -2686,10 +2697,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   // pipeline. We rely on bubbling instead.
   private onPointerDown = (e: PointerEvent): void => {
     this.cancelGlide(); // grabbing the map cancels an in-flight glide
-    this.pointers.set(e.pointerId, this.toLocal(e));
+    const local = this.toLocal(e);
+    this.pointers.set(e.pointerId, local);
     if (this.pointers.size === 1) {
       this.moved = 0;
       this.pinch = null;
+      this.panStart = local;
+      this.panStarted = false;
       // Manage-mode rubber-band marquee (option-gated — buyer pan is byte-
       // identical when manageMode is off). A mouse/pen primary-button drag at
       // the seats rung selects instead of panning; touch keeps single-finger
@@ -2700,10 +2714,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         e.pointerType !== 'touch' && e.button === 0 &&
         this.getRung() === 'seats'
       ) {
-        this.beginMarquee(this.toLocal(e));
+        this.beginMarquee(local);
         this.panLast = null;
       } else {
-        this.panLast = this.toLocal(e);
+        this.panLast = local;
       }
     } else if (this.pointers.size === 2) {
       // A second finger converts an in-progress marquee into a pinch-zoom.
@@ -2720,6 +2734,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         worldMid: { x: (mid.x - this.stage.x()) / s, y: (mid.y - this.stage.y()) / s },
       };
       this.panLast = null;
+      this.panStart = null;
+      this.panStarted = true;
+      this.moved = PAN_START_SLOP_PX + 1;
     }
   };
 
@@ -2727,9 +2744,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (!this.pointers.has(e.pointerId)) return;
     e.preventDefault();
     const p = this.toLocal(e);
-    const prev = this.pointers.get(e.pointerId)!;
-    this.moved += Math.hypot(p.x - prev.x, p.y - prev.y);
     this.pointers.set(e.pointerId, p);
+    if (this.pointers.size === 1 && this.panStart) {
+      this.moved = Math.max(this.moved, Math.hypot(p.x - this.panStart.x, p.y - this.panStart.y));
+    } else if (this.pointers.size >= 2) {
+      this.moved = PAN_START_SLOP_PX + 1;
+    }
 
     if (this.marquee) {
       this.updateMarquee(p);
@@ -2750,6 +2770,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       this.stage.batchDraw();
       this.scheduleViewChange();
     } else if (this.panLast && this.pointers.size === 1) {
+      // Keep the camera still through normal finger jitter. Aside from making
+      // taps feel steadier, this lets Konva deliver the section tap instead of
+      // losing it to a one- or two-pixel accidental drag.
+      if (!this.panStarted) {
+        if (this.moved <= PAN_START_SLOP_PX) return;
+        this.panStarted = true;
+      }
       this.stage.position({
         x: this.stage.x() + (p.x - this.panLast.x),
         y: this.stage.y() + (p.y - this.panLast.y),
@@ -2773,9 +2800,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (this.pointers.size === 1) {
       // pinch → single finger: continue as a pan without jumping
       this.panLast = [...this.pointers.values()][0];
+      this.panStart = this.panLast;
+      this.panStarted = true;
     }
     if (this.pointers.size === 0) {
       this.panLast = null;
+      this.panStart = null;
+      this.panStarted = false;
       this.afterViewChange();
     }
   };
@@ -2812,12 +2843,16 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   }
 
   /** Zoom + pan so world-rect `b` fills the viewport (with a small margin). */
-  private zoomToBounds(b: { x: number; y: number; width: number; height: number }): void {
+  private zoomToBounds(
+    b: { x: number; y: number; width: number; height: number },
+    minScale?: number,
+  ): void {
     const w = this.stage.width();
     const h = this.stage.height();
     const { min, max } = this.zoomBounds();
     const margin = 1.12;
-    const scale = clamp(Math.min(w / (b.width * margin), h / (b.height * margin)), min, max);
+    const frameScale = Math.min(w / (b.width * margin), h / (b.height * margin));
+    const scale = clamp(Math.max(frameScale, minScale ?? min), min, max);
     this.stage.scale({ x: scale, y: scale });
     this.stage.position({
       x: w / 2 - (b.x + b.width / 2) * scale,
@@ -2836,7 +2871,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    */
   focusRegion(
     target: string | { x: number; y: number; width: number; height: number },
-    opts?: { animate?: boolean },
+    opts?: { animate?: boolean; minScale?: number },
   ): void {
     const b =
       typeof target === 'string'
@@ -2848,14 +2883,15 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (!b) return;
     this.cancelGlide();
     if (opts?.animate === false || this.reducedMotion) {
-      this.zoomToBounds(b);
+      this.zoomToBounds(b, opts?.minScale);
       return;
     }
     const w = this.stage.width();
     const h = this.stage.height();
     const { min, max } = this.zoomBounds();
     const margin = 1.12;
-    const toScale = clamp(Math.min(w / (b.width * margin), h / (b.height * margin)), min, max);
+    const frameScale = Math.min(w / (b.width * margin), h / (b.height * margin));
+    const toScale = clamp(Math.max(frameScale, opts?.minScale ?? min), min, max);
     const toX = w / 2 - (b.x + b.width / 2) * toScale;
     const toY = h / 2 - (b.y + b.height / 2) * toScale;
     const fromScale = this.stage.scaleX();
@@ -2913,7 +2949,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const target =
       rung === 'sections'
         ? (SECTION_PROMINENT_SCALE + CACHE_THRESHOLD) / 2
-        : Math.max(SEAT_LEGIBLE_SCALE * 1.1, CACHE_THRESHOLD * 1.3);
+        : Math.max(SEAT_FOCUS_SCALE, CACHE_THRESHOLD * 1.3);
     const w = this.stage.width();
     const h = this.stage.height();
     const cx = this.bounds.x + this.bounds.width / 2;
