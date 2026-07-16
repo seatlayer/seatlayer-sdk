@@ -258,7 +258,7 @@ const CSS = `
 .sl-body{display:flex;flex:1;min-height:0}
 .sl-map{position:relative;flex:1;min-width:0}
 .sl-map-host{position:absolute;inset:0}
-.sl-side{width:300px;flex:none;border-left:1px solid var(--sl-line);display:flex;flex-direction:column;min-height:0;overflow-y:auto}
+.sl-side{width:300px;flex:none;border-left:1px solid var(--sl-line);display:flex;flex-direction:column;min-height:0;overflow:hidden}
 
 /* narrow (container < 640px): map-first — the map claims ~80-85% of the
    container and the side panel becomes a PEEKING bottom sheet (AXS/Ticketmaster
@@ -341,6 +341,7 @@ const CSS = `
 .sl-price-select{min-height:32px;max-width:130px;padding:5px 28px 5px 9px;border:1px solid var(--sl-line);border-radius:9px;
   background:var(--sl-surface);color:var(--sl-text);font:inherit;font-size:11px;font-weight:750;letter-spacing:0;text-transform:none}
 .sl-prices{padding:5px 14px 10px;border-bottom:1px solid var(--sl-line)}
+.sl-prices-sec,.sl-prices,.sl-seats-sec{flex:none}
 .sl-price-row{display:flex;align-items:center;gap:7px;min-height:28px;font-size:12px}
 .sl-dot{width:9px;height:9px;border-radius:50%;flex:none}
 .sl-price-label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
@@ -357,7 +358,8 @@ const CSS = `
 /* tray */
 .sl-seats-sec{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:13px}
 .sl-seat-summary{font-size:10px;letter-spacing:0;text-transform:none;white-space:nowrap}
-.sl-tray{flex:1;padding:10px 14px;display:flex;flex-direction:column;gap:7px;min-height:0}
+.sl-tray{flex:1;padding:10px 14px 14px;display:flex;flex-direction:column;gap:7px;min-height:0;overflow-y:auto;
+  overscroll-behavior:contain;scrollbar-gutter:stable}
 .sl-tray-hint{font-size:12.5px;color:var(--sl-muted);line-height:1.5}
 .sl-chip{position:relative;display:grid;grid-template-columns:24px minmax(0,1fr) auto 30px;align-items:center;gap:8px;
   min-height:53px;padding:7px 7px 7px 9px;border:1px solid var(--sl-line);border-radius:var(--sl-r-sm);
@@ -392,16 +394,22 @@ const CSS = `
 .sl-ga-qty span{min-width:16px;text-align:center;font-weight:800;font-variant-numeric:tabular-nums}
 
 /* footer */
-.sl-foot{padding:12px 16px 14px;border-top:1px solid var(--sl-line);flex:none}
-.sl-hold-note{display:none;align-items:center;gap:9px;margin-bottom:10px;padding:9px 10px;border-radius:var(--sl-r-sm);
+.sl-foot{position:relative;z-index:2;padding:12px 16px 14px;border-top:1px solid var(--sl-line);flex:none;
+  background:var(--sl-bg);box-shadow:0 -10px 24px -22px rgba(0,0,0,.72)}
+.sl-hold-note{display:none;align-items:center;gap:7px;margin-bottom:8px;padding:7px 8px;border-radius:var(--sl-r-sm);
   border:1px solid var(--sl-line);background:color-mix(in srgb,var(--sl-accent) 7%,var(--sl-surface));
   box-shadow:inset 3px 0 0 color-mix(in srgb,var(--sl-accent) 72%,transparent);
   font-size:11.5px;line-height:1.35;color:var(--sl-muted)}
 .sl-hold-note.on{display:flex;animation:slNoticeIn .38s cubic-bezier(.2,.8,.2,1) both}
 .sl-hold-note svg{width:16px;height:16px;flex:none;stroke:var(--sl-accent);stroke-width:2.4;fill:none;
   stroke-linecap:round;stroke-linejoin:round}
-.sl-hold-note b{display:block;color:var(--sl-text);font-size:12px}
-.sl-hold-copy{display:block}
+.sl-hold-note b{display:block;color:var(--sl-text);font-size:11.5px;white-space:nowrap}
+.sl-hold-copy{display:block;white-space:nowrap;font-size:10.5px}
+.sl-hold-note>span{flex:1;min-width:0}
+.sl-hold-change{flex:none;min-height:30px;padding:5px 8px;border-radius:8px;border:1px solid var(--sl-line);
+  color:var(--sl-text);font-size:10.5px;font-weight:750;white-space:nowrap}
+.sl-hold-change:hover,.sl-hold-change:focus-visible{border-color:var(--sl-accent);color:var(--sl-accent)}
+.sl-hold-change:disabled{opacity:.58;cursor:wait}
 .sl-total{display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:10px}
 .sl-total b{font-size:17px;font-variant-numeric:tabular-nums}
 .sl-value-pop{animation:slValuePop .32s cubic-bezier(.2,.8,.2,1)}
@@ -459,6 +467,9 @@ const CSS = `
   font-size:12.5px;font-weight:600;opacity:0;pointer-events:none;transition:opacity .22s,transform .22s;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 .sl-toast.on{opacity:1;transform:translateY(0) scale(1)}
+.sl-toast.has-action{pointer-events:auto;display:flex;align-items:center;gap:12px;padding-right:8px}
+.sl-toast-action{min-height:30px;padding:5px 10px;border-radius:999px;background:var(--sl-accent);color:var(--sl-accent-ink);
+  font:inherit;font-weight:800}
 .sl-toast[data-tone="error"]{border-color:#ef4444}
 .sl-toast[data-tone="warning"]{border-color:var(--sl-accent)}
 .sl-toast[data-tone="success"]{border-color:#22c55e}
@@ -562,6 +573,12 @@ const CSS = `
   box-shadow:0 8px 18px color-mix(in srgb,var(--sl-accent) 18%,transparent)}
 .sl-picker .sl-ba-go:hover{filter:brightness(1.06)}
 .sl-picker .sl-ba-go:disabled{opacity:.62;cursor:wait}
+.sl-ba-replace{grid-column:1/-1;padding:3px 0 1px}
+.sl-ba-replace b{display:block;font-size:12.5px}
+.sl-ba-replace span{display:block;margin-top:3px;color:var(--sl-muted);font-size:10.5px;line-height:1.35}
+.sl-ba-actions{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.sl-ba-actions button{min-height:36px;border-radius:9px;border:1px solid var(--sl-line);font-size:11.5px;font-weight:800}
+.sl-ba-actions .replace{border-color:var(--sl-accent);background:var(--sl-accent);color:var(--sl-accent-ink)}
 .sl-picker[data-layout="narrow"] .sl-ba{padding:11px}
 .sl-picker[data-layout="narrow"] .sl-ba-copy .wide{display:none}
 .sl-picker[data-layout="narrow"] .sl-ba-copy .narrow{display:inline}
@@ -727,6 +744,7 @@ export class SeatPicker {
   private readonly api: PubApi;
   private readonly apiBase: string;
   private readonly controller: PickerController;
+  private readonly maxTickets: number;
 
   private root: HTMLDivElement | null = null;
   private mapHost: HTMLDivElement | null = null;
@@ -763,6 +781,8 @@ export class SeatPicker {
   private a11yFilter: AccessibilityType | 'all' = 'all';
   private baQty = 2;
   private baCat = '';
+  private bestAvailableConfirm = false;
+  private releasingHold = false;
 
   // arena / multi-floor / seat-view chrome
   private rungsEl: HTMLDivElement | null = null;
@@ -861,6 +881,10 @@ export class SeatPicker {
       if (picker.confirmSeat) {
         e.preventDefault();
         picker.cancelConfirm();
+      } else if (picker.bestAvailableConfirm) {
+        e.preventDefault();
+        picker.bestAvailableConfirm = false;
+        picker.syncTray();
       } else {
         close();
       }
@@ -879,10 +903,11 @@ export class SeatPicker {
     this.opts = { ...options, confirmSelection: options.confirmSelection ?? true };
     this.apiBase = (options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
     this.api = new PubApi(this.apiBase);
+    this.maxTickets = Math.max(1, Math.floor(options.maxSelection ?? DEFAULT_MAX_SELECTION));
     this.controller = new PickerController({
       transport: this.api,
       eventKey: options.event,
-      maxSelection: options.maxSelection ?? DEFAULT_MAX_SELECTION,
+      maxSelection: this.maxTickets,
       currency: options.currency,
       flashOnLiveChange: true,
       colorblindSafe: options.colorblindSafe,
@@ -919,6 +944,9 @@ export class SeatPicker {
       onDeselect: (seat) => {
         if (this.confirmSeat?.id === seat.id) this.dismissConfirm();
       },
+      onSelectionLimit: () => {
+        this.toast(`You can select up to ${this.maxTickets} tickets for this order.`, 'warning');
+      },
       onViewChange: () => {
         this.reanchorConfirm();
         this.syncRung();
@@ -950,10 +978,17 @@ export class SeatPicker {
     this.root = root;
     mount.appendChild(root);
     root.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !this.confirmSeat) return;
-      e.preventDefault();
-      e.stopPropagation();
-      this.cancelConfirm();
+      if (e.key !== 'Escape') return;
+      if (this.confirmSeat) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.cancelConfirm();
+      } else if (this.bestAvailableConfirm) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.bestAvailableConfirm = false;
+        this.syncTray();
+      }
     });
 
     // skeleton first — tokens get re-applied once the chart theme arrives
@@ -1003,6 +1038,7 @@ export class SeatPicker {
             <div class="sl-hold-note" data-ref="holdNote" role="status" aria-live="polite">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
               <span><b data-ref="holdTitle">Seats secured</b><span class="sl-hold-copy" data-ref="holdCopy">Checkout timer is running.</span></span>
+              <button type="button" class="sl-hold-change" data-ref="holdChange" aria-label="Release held tickets and choose different seats">Change</button>
             </div>
             <div class="sl-total"><span data-ref="count"></span><b data-ref="total"></b></div>
             <button type="button" class="sl-cta" data-ref="cta" disabled></button>
@@ -1097,6 +1133,7 @@ export class SeatPicker {
     });
 
     this.els.cta.addEventListener('click', () => void this.handleCta());
+    this.els.holdChange?.addEventListener('click', () => void this.handleChangeSeats());
 
     const canvasHost = document.createElement('div');
     canvasHost.style.cssText = 'position:absolute;inset:0';
@@ -1367,15 +1404,58 @@ export class SeatPicker {
     const heldItems = this.hold?.items ?? [];
     const heldLabels = new Set(heldItems.map((item) => item.label));
     const pendingSeats = this.committedSelection().filter((seat) => !heldLabels.has(seat.label)).length;
+    return pendingSeats + this.pendingGACount();
+  }
+
+  private heldGACounts(): Map<string, number> {
     const heldGA = new Map<string, number>();
-    for (const item of heldItems.filter((candidate) => candidate.objectType === 'ga')) {
+    for (const item of (this.hold?.items ?? []).filter((candidate) => candidate.objectType === 'ga')) {
       heldGA.set(item.objectId, (heldGA.get(item.objectId) ?? 0) + (item.quantity ?? 1));
     }
-    const pendingGA = [...this.gaQty.entries()].reduce(
+    return heldGA;
+  }
+
+  private pendingGACount(): number {
+    const heldGA = this.heldGACounts();
+    return [...this.gaQty.entries()].reduce(
       (sum, [areaId, qty]) => sum + Math.max(0, qty - (heldGA.get(areaId) ?? 0)),
       0,
     );
-    return pendingSeats + pendingGA;
+  }
+
+  private heldTicketCount(): number {
+    return (this.hold?.items ?? []).reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+  }
+
+  private totalTicketCount(): number {
+    const heldLabels = new Set((this.hold?.items ?? []).map((item) => item.label));
+    const freshSeats = this.committedSelection().filter((seat) => !heldLabels.has(seat.label)).length;
+    return this.heldTicketCount() + freshSeats + this.pendingGACount();
+  }
+
+  /** Held tickets and standing quantities consume the same order-wide cap. */
+  private updateSelectionCapacity(): void {
+    const heldLabels = new Set((this.hold?.items ?? []).map((item) => item.label));
+    const selectedHeld = this.committedSelection().filter((seat) => heldLabels.has(seat.label)).length;
+    const remaining = Math.max(0, this.maxTickets - this.heldTicketCount() - this.pendingGACount());
+    this.controller.setMaxSelection(selectedHeld + remaining);
+  }
+
+  private canAddTicket(): boolean {
+    if (this.totalTicketCount() < this.maxTickets) return true;
+    this.toast(`You can select up to ${this.maxTickets} tickets for this order.`, 'warning');
+    return false;
+  }
+
+  private pendingGATotal(gaAreas: ReturnType<PickerController['getGAAreas']>): number {
+    const heldGA = new Map<string, number>();
+    for (const item of (this.hold?.items ?? []).filter((candidate) => candidate.objectType === 'ga')) {
+      heldGA.set(item.objectId, (heldGA.get(item.objectId) ?? 0) + (item.quantity ?? 1));
+    }
+    return gaAreas.reduce(
+      (sum, area) => sum + area.price * Math.max(0, (this.gaQty.get(area.id) ?? 0) - (heldGA.get(area.id) ?? 0)),
+      0,
+    );
   }
 
   private syncCta(count = this.lastTrayCount, pending = this.pendingSelectionCount()): void {
@@ -2273,6 +2353,7 @@ export class SeatPicker {
 
   private syncTray(): void {
     if (!this.els.tray) return;
+    this.updateSelectionCapacity();
     const seats = this.committedSelection();
     const gaAreas = this.controller.getGAAreas();
     const heldItems = this.hold?.items ?? [];
@@ -2289,8 +2370,14 @@ export class SeatPicker {
     // buyers who care about sitting together more than inspecting every dot.
     if (!this.hold) {
       const cats = this.controller.doc?.categories ?? [];
-      parts.push(
-        `<div class="sl-ba">` +
+      parts.push(this.bestAvailableConfirm
+        ? `<div class="sl-ba" role="alert">` +
+          `<div class="sl-ba-title"><span class="spark" aria-hidden="true">✦</span>Replace your current choices?</div>` +
+          `<div class="sl-ba-replace"><b>We’ll find ${this.baQty} seats together.</b>` +
+          `<span>Your manually selected tickets will be removed only after a new group is secured.</span></div>` +
+          `<div class="sl-ba-actions"><button type="button" data-ba-cancel>Keep mine</button>` +
+          `<button type="button" class="replace" data-ba-replace>Find new seats</button></div></div>`
+        : `<div class="sl-ba">` +
           `<div class="sl-ba-title"><span class="spark" aria-hidden="true">✦</span>Find the best seats together</div>` +
           `<div class="sl-ba-copy"><span class="wide">We’ll choose the closest available group for you.</span>` +
           `<span class="narrow">Closest available group, chosen instantly.</span></div>` +
@@ -2307,8 +2394,7 @@ export class SeatPicker {
           (this.bestAvailableBusy
             ? `<span class="sl-ba-spin" aria-hidden="true"></span>Finding the best seats…`
             : `Find ${this.baQty} best ${this.baQty === 1 ? 'seat' : 'seats'}`) +
-          `</button></div>`,
-      );
+          `</button></div>`);
     }
 
     // Held line items (best-available, completed, or restored). Tier is
@@ -2385,7 +2471,7 @@ export class SeatPicker {
     this.lastTrayKeys = nextTrayKeys;
     this.els.tray.querySelectorAll<HTMLButtonElement>('[data-ba]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        this.baQty = Math.max(1, Math.min(8, this.baQty + Number(btn.dataset.ba)));
+        this.baQty = Math.max(1, Math.min(this.maxTickets, this.baQty + Number(btn.dataset.ba)));
         this.syncTray();
       });
     });
@@ -2393,6 +2479,21 @@ export class SeatPicker {
       this.baCat = (e.target as HTMLSelectElement).value;
     });
     this.els.tray.querySelector<HTMLButtonElement>('.sl-ba-go')?.addEventListener('click', () => {
+      if (this.pendingSelectionCount() > 0) {
+        this.bestAvailableConfirm = true;
+        this.syncTray();
+        this.els.tray.querySelector<HTMLButtonElement>('[data-ba-replace]')?.focus();
+        return;
+      }
+      void this.bestAvailable(this.baQty, this.baCat || undefined);
+    });
+    this.els.tray.querySelector<HTMLButtonElement>('[data-ba-cancel]')?.addEventListener('click', () => {
+      this.bestAvailableConfirm = false;
+      this.syncTray();
+      this.els.tray.querySelector<HTMLButtonElement>('.sl-ba-go')?.focus();
+    });
+    this.els.tray.querySelector<HTMLButtonElement>('[data-ba-replace]')?.addEventListener('click', () => {
+      this.bestAvailableConfirm = false;
       void this.bestAvailable(this.baQty, this.baCat || undefined);
     });
     this.els.tray.querySelectorAll<HTMLElement>('.sl-chip .rm').forEach((btn) => {
@@ -2403,12 +2504,26 @@ export class SeatPicker {
           return;
         }
         const id = chip.dataset.seat!;
-        if (this.reducedMotion()) {
+        const label = chip.querySelector('b')?.textContent ?? 'Seat';
+        const remove = (): void => {
           this.controller.deselect([id]);
+          this.toast(`${label} removed.`, 'neutral', {
+            label: 'Undo',
+            onClick: () => {
+              const restored = this.controller.select([id]);
+              this.toast(
+                restored.length ? `${label} restored.` : `${label} is no longer available.`,
+                restored.length ? 'success' : 'warning',
+              );
+            },
+          });
+        };
+        if (this.reducedMotion()) {
+          remove();
           return;
         }
         chip.classList.add('sl-leave');
-        this.scheduleMotion(() => this.controller.deselect([id]), 150);
+        this.scheduleMotion(remove, 150);
       });
     });
     // Per-seat ticket-tier pick (Adult/Child/…) — updates price via onSelectionChange.
@@ -2427,15 +2542,17 @@ export class SeatPicker {
         const areaEl = btn.closest('.sl-ga') as HTMLElement;
         const id = areaEl.dataset.ga!;
         const area = gaAreas.find((a) => a.id === id);
-        const next = Math.max(0, Math.min(area?.available ?? 0, (this.gaQty.get(id) ?? 0) + Number(btn.dataset.d)));
+        const delta = Number(btn.dataset.d);
+        if (delta > 0 && !this.canAddTicket()) return;
+        const next = Math.max(0, Math.min(area?.available ?? 0, (this.gaQty.get(id) ?? 0) + delta));
         this.gaQty.set(id, next);
         this.syncTray();
       });
     });
 
     // totals + CTA (held lines + fresh selections + GA)
-    const gaTotal = gaAreas.reduce((sum, a) => sum + a.price * (this.gaQty.get(a.id) ?? 0), 0);
-    const gaCount = [...this.gaQty.values()].reduce((a, b) => a + b, 0);
+    const gaTotal = this.pendingGATotal(gaAreas);
+    const gaCount = this.pendingGACount();
     const heldTotal = heldItems.reduce((sum, item) => sum + item.unitPrice * (item.quantity ?? 1), 0);
     const heldCount = heldItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
     const freshSeats = seats.filter((seat) => !heldLabels.has(seat.label));
@@ -2457,12 +2574,17 @@ export class SeatPicker {
     if (this.hold) {
       const securedCount = heldCount || this.hold.seats?.length || 0;
       if (this.els.holdTitle) {
-        this.els.holdTitle.textContent = `${securedCount} ${securedCount === 1 ? 'seat' : 'seats'} secured`;
+        this.els.holdTitle.textContent = `${securedCount} secured`;
       }
       if (this.els.holdCopy) {
         this.els.holdCopy.textContent = pendingCount
-          ? `${pendingCount} more selected — secure before checkout.`
-          : 'Checkout timer is running.';
+          ? `${pendingCount} more selected`
+          : 'Checkout timer running';
+      }
+      const change = this.els.holdChange as HTMLButtonElement | undefined;
+      if (change) {
+        change.disabled = this.releasingHold;
+        change.textContent = this.releasingHold ? 'Releasing…' : 'Change';
       }
     }
     if (count !== previousCount) this.animateOnce(this.els.count, 'sl-value-pop', 380);
@@ -2533,7 +2655,31 @@ export class SeatPicker {
     }
   }
 
+  private async handleChangeSeats(): Promise<void> {
+    if (!this.hold || this.releasingHold) return;
+    this.releasingHold = true;
+    const button = this.els.holdChange as HTMLButtonElement | undefined;
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Releasing…';
+    }
+    try {
+      await this.release();
+      if (!this.hold) this.toast('Held tickets released. Choose your new seats.', 'success');
+    } finally {
+      this.releasingHold = false;
+      if (button?.isConnected) {
+        button.disabled = false;
+        button.textContent = 'Change';
+      }
+    }
+  }
+
   private async handleCta(): Promise<void> {
+    if (this.totalTicketCount() > this.maxTickets) {
+      this.toast(`Remove tickets until your order has ${this.maxTickets} or fewer.`, 'warning');
+      return;
+    }
     // Best-available (or a prior CTA press) already holds the seats — hand off.
     // Held seats are NOT in the client selection (the server holds them), so
     // pass the hold's own seat list to the host.
@@ -2579,7 +2725,14 @@ export class SeatPicker {
       this.opts.onCheckout?.(hold, hold.seats ?? chosenSeats, this.buildHandoff(hold));
     } catch (err) {
       this.opts.onError?.(err);
-      this.toast('One or more seats were just taken. Please pick again.', 'error');
+      const problem = err as { reason?: string; conflicts?: Array<{ label?: string }> };
+      const labels = (problem.conflicts ?? []).map((conflict) => conflict.label).filter(Boolean).slice(0, 3);
+      const message = problem.reason === 'event_closed'
+        ? 'Seat sales have closed for this event.'
+        : labels.length
+          ? `${labels.join(', ')} ${labels.length === 1 ? 'is' : 'are'} no longer available. Choose another ${labels.length === 1 ? 'seat' : 'group'}.`
+          : 'One or more seats were just taken. Please pick again.';
+      this.toast(message, 'error');
       this.setCtaPhase('idle');
     } finally {
       this.holdingLabels.clear();
@@ -2716,15 +2869,32 @@ export class SeatPicker {
     );
   }
 
-  private toast(msg: string, tone: 'neutral' | 'success' | 'warning' | 'error' = 'neutral'): void {
+  private toast(
+    msg: string,
+    tone: 'neutral' | 'success' | 'warning' | 'error' = 'neutral',
+    action?: { label: string; onClick: () => void },
+  ): void {
     const el = this.els.toast;
     if (!el) return;
-    el.textContent = msg;
+    el.replaceChildren();
+    const copy = document.createElement('span');
+    copy.textContent = msg;
+    el.appendChild(copy);
+    el.classList.toggle('has-action', !!action);
+    if (action) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'sl-toast-action';
+      button.textContent = action.label;
+      button.addEventListener('click', action.onClick, { once: true });
+      el.appendChild(button);
+    }
     el.dataset.tone = tone;
     el.classList.add('on');
     if (this.toastTimer) clearTimeout(this.toastTimer);
     this.toastTimer = setTimeout(() => {
       el.classList.remove('on');
+      el.classList.remove('has-action');
       el.dataset.tone = 'neutral';
     }, 4200);
   }
@@ -2793,7 +2963,9 @@ export class SeatPicker {
 
   async bestAvailable(qty: number, categoryKey?: string): Promise<HoldResult | null> {
     if (this.bestAvailableBusy) return null;
+    qty = Math.max(1, Math.min(this.maxTickets, Math.floor(qty)));
     if (this.confirmSeat) this.cancelConfirm();
+    this.bestAvailableConfirm = false;
     this.bestAvailableBusy = true;
     const button = this.els.tray?.querySelector<HTMLButtonElement>('.sl-ba-go');
     if (button) {
@@ -2806,6 +2978,7 @@ export class SeatPicker {
         this.hold = { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items };
         this.handedOff = false;
         this.bookedShown = false;
+        this.gaQty.clear();
         this.startHoldTimer(h.expiresAt);
         this.flashHeldSeats(this.hold);
         this.syncTray();
@@ -2815,14 +2988,19 @@ export class SeatPicker {
       return null;
     } catch (err) {
       this.opts.onError?.(err);
-      this.toast('Those seats are no longer available. Try another quantity or category.', 'error');
+      const reason = (err as { reason?: string })?.reason;
+      const message = reason === 'not_enough_together'
+        ? `We couldn't find ${qty} seats together. Try fewer seats or another ticket type.`
+        : reason === 'sold_out'
+          ? 'That ticket type is sold out. Try another ticket type.'
+          : reason === 'event_closed'
+            ? 'Seat sales have closed for this event.'
+            : 'Those seats are no longer available. Try another quantity or ticket type.';
+      this.toast(message, 'error');
       return null;
     } finally {
       this.bestAvailableBusy = false;
-      if (!this.hold && button?.isConnected) {
-        button.disabled = false;
-        button.textContent = 'Best available';
-      }
+      this.syncTray();
     }
   }
 

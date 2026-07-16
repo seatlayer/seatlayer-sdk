@@ -437,6 +437,8 @@ export type SeatStatus = 'free' | 'held' | 'booked' | 'not_for_sale';
 export interface RendererCallbacks {
   onSelect?: (seat: ExpandedSeat) => void;
   onDeselect?: (seat: ExpandedSeat) => void;
+  /** Buyer tried to add a seat after the active selection cap was reached. */
+  onSelectionLimit?: (maxSelection: number) => void;
   /** seat is null when the pointer leaves any seat. */
   onHover?: (seat: ExpandedSeat | null) => void;
   /** Keyboard focus moved to a seat (arrow-key navigation) — for screen-reader announcements. */
@@ -537,6 +539,13 @@ export interface ISeatmapRenderer {
   getStatus(seatId: string): SeatStatus;
   getSelection(): ExpandedSeat[];
   clearSelection(): void;
+  /** Update the buyer selection cap without rebuilding the chart or camera. */
+  setMaxSelection?(maxSelection: number): void;
+  /**
+   * Programmatically restore free seats (for example an Undo action). Added
+   * seats respect the active cap and do not reopen a confirmation popover.
+   */
+  select?(seatIds: string[]): ExpandedSeat[];
   /**
    * Dynamically update organizer-only interaction without rebuilding the
    * renderer. No buyer surface calls this; every behavior remains gated by

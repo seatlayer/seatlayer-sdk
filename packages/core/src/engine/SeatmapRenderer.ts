@@ -753,6 +753,26 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.overlayLayer.batchDraw();
   }
 
+  setMaxSelection(maxSelection: number): void {
+    this.opts.maxSelection = Math.max(0, Math.floor(maxSelection));
+  }
+
+  select(seatIds: string[]): ExpandedSeat[] {
+    const added: ExpandedSeat[] = [];
+    for (const id of seatIds) {
+      if (this.selection.has(id) || !this.isSelectable(id)) continue;
+      if (this.selection.size >= this.opts.maxSelection) {
+        this.opts.onSelectionLimit?.(this.opts.maxSelection);
+        break;
+      }
+      this.setSelected(id, true, true);
+      const seat = this.seatById.get(id);
+      if (seat) added.push(seat);
+    }
+    if (added.length) this.overlayLayer.batchDraw();
+    return added;
+  }
+
   /** Switch organizer interaction in place so the host preserves camera, LOD,
    * focus and live status state while moving between Monitor and Block. */
   setManageInteraction(options: {
@@ -2557,7 +2577,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       if (seat) this.opts.onDeselect?.(seat);
     } else {
       if (!this.isSelectable(id)) return;
-      if (this.selection.size >= this.opts.maxSelection) return; // ignore beyond cap
+      if (this.selection.size >= this.opts.maxSelection) {
+        this.opts.onSelectionLimit?.(this.opts.maxSelection);
+        return;
+      }
       this.setSelected(id, true);
       const seat = this.seatById.get(id);
       if (seat) this.opts.onSelect?.(seat);
