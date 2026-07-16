@@ -263,19 +263,21 @@ const CSS = `
 /* narrow (container < 640px): map-first — the map claims ~80-85% of the
    container and the side panel becomes a PEEKING bottom sheet (AXS/Ticketmaster
    mobile pattern). data-sheet on the root: "peek" (default: grab handle + one
-   summary line) / "open" (≤50%, swipe up or auto-expand on first selection).
+   summary line) / "open" (room for rows + checkout, swipe up to open).
    Swipe handling lives on the sheet head ONLY — never the map host, so the
    map's raw-pointer gesture pipeline is untouched. */
 .sl-picker[data-layout="narrow"] .sl-body{flex-direction:column}
 .sl-picker[data-layout="narrow"] .sl-map{min-height:0;flex:1}
 .sl-picker[data-layout="narrow"] .sl-side{width:100%;border-left:0;border-top:1px solid var(--sl-line);
-  flex:none;height:50%;transition:height .3s cubic-bezier(.2,.8,.2,1)}
+  flex:none;height:min(72%,480px);overflow:hidden;transition:height .3s cubic-bezier(.2,.8,.2,1);overscroll-behavior:contain}
+.sl-picker[data-layout="narrow"][data-sheet="open"][data-has-selection="false"] .sl-side{height:min(252px,52%)}
 .sl-picker[data-layout="narrow"][data-sheet="peek"] .sl-side{height:86px;overflow:hidden}
 .sl-picker[data-layout="narrow"][data-sheet="peek"] .sl-side > :not(.sl-sheet-head){display:none}
-.sl-picker[data-layout="narrow"] .sl-tray{flex:none}
-.sl-picker[data-layout="narrow"] .sl-foot{position:sticky;bottom:0;background:var(--sl-bg)}
+.sl-picker[data-layout="narrow"] .sl-tray{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.sl-picker[data-layout="narrow"] .sl-foot{position:static;background:var(--sl-bg)}
+.sl-picker[data-layout="narrow"] .sl-foot.empty{display:none}
 .sl-picker[data-layout="narrow"] .sl-sheet-head{order:0}
-.sl-picker[data-layout="narrow"] .sl-seats-sec{order:1}
+.sl-picker[data-layout="narrow"] .sl-seats-sec{display:none}
 .sl-picker[data-layout="narrow"] .sl-tray{order:2}
 .sl-picker[data-layout="narrow"] .sl-filtersec{order:3}
 .sl-picker[data-layout="narrow"] .sl-filters{order:4}
@@ -283,13 +285,21 @@ const CSS = `
 .sl-picker[data-layout="narrow"] .sl-pricef{order:6}
 .sl-picker[data-layout="narrow"] .sl-prices{order:7}
 .sl-picker[data-layout="narrow"] .sl-foot{order:8}
+.sl-picker[data-layout="narrow"] .sl-tray-hint,
+.sl-picker[data-layout="narrow"] .sl-filtersec,
+.sl-picker[data-layout="narrow"] .sl-filters,
+.sl-picker[data-layout="narrow"] .sl-prices-sec,
+.sl-picker[data-layout="narrow"] .sl-prices{display:none!important}
+.sl-picker[data-layout="narrow"][data-has-selection="true"] .sl-filtersec,
+.sl-picker[data-layout="narrow"][data-has-selection="true"] .sl-filters,
+.sl-picker[data-layout="narrow"][data-has-selection="true"] .sl-prices-sec{display:none}
 /* touch chrome: pinch-zoom exists — hide +/− on the sheet layout (keep fit) */
 .sl-picker[data-layout="narrow"] .sl-zoom [data-ref="zin"],
 .sl-picker[data-layout="narrow"] .sl-zoom [data-ref="zout"]{display:none}
 
 /* bottom-sheet head: grab handle + one-line summary (narrow only). The WHOLE
    head is the tap/swipe toggle target (min 44px), so it reads as one control. */
-.sl-sheet-head{display:none;flex-direction:column;justify-content:center;padding:6px 16px 8px;min-height:44px;
+.sl-sheet-head{display:none;flex-direction:column;justify-content:center;padding:6px 12px 8px;min-height:56px;
   cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;flex:none}
 .sl-picker[data-layout="narrow"] .sl-sheet-head{display:flex}
 .sl-sheet-grab{width:36px;height:4px;border-radius:999px;background:var(--sl-muted);opacity:.55;margin:2px auto 7px}
@@ -304,54 +314,70 @@ const CSS = `
 /* state chevron: points UP while peeking, rotates to point DOWN when open.
    Base keeps an explicit rotate(0) — transitioning to/from a bare 'none' leaves
    the value stuck in some engines, so both endpoints must be real transforms. */
-.sl-sheet-chevron{flex:none;display:flex;align-items:center;justify-content:center;color:var(--sl-muted);
-  transform:rotate(0deg);transition:transform .22s ease}
-.sl-sheet-chevron svg{width:18px;height:18px;stroke:currentColor;stroke-width:2.4;fill:none;
+.sl-sheet-toggle{width:44px;height:44px;margin:-8px -8px -8px 0;border-radius:999px;flex:none;display:flex;
+  align-items:center;justify-content:center;color:var(--sl-muted);transition:color .15s,background .15s}
+.sl-sheet-toggle:hover,.sl-sheet-toggle:focus-visible{color:var(--sl-text);background:color-mix(in srgb,var(--sl-line) 44%,transparent)}
+.sl-sheet-toggle svg{width:21px;height:21px;stroke:currentColor;stroke-width:2.4;fill:none;
   stroke-linecap:round;stroke-linejoin:round}
-.sl-picker[data-sheet="open"] .sl-sheet-chevron{transform:rotate(180deg)}
+.sl-sheet-toggle svg{transform:rotate(0deg);transition:transform .24s cubic-bezier(.2,.8,.2,1)}
+.sl-picker[data-sheet="open"] .sl-sheet-toggle svg{transform:rotate(180deg)}
 
 /* consolidated Filters row inside the sheet (a11y chips + colorblind toggle
    dock here on narrow; they live on the map / zoom column on wide) */
 .sl-filtersec{display:none}
 .sl-filters{display:none;gap:6px;flex-wrap:wrap;align-items:center;padding:2px 16px 10px}
-.sl-picker[data-layout="narrow"] .sl-filtersec.has{display:block}
-.sl-picker[data-layout="narrow"] .sl-filters.has{display:flex}
+.sl-picker[data-layout="narrow"] .sl-filtersec.has,
+.sl-picker[data-layout="narrow"] .sl-filters.has{display:none}
+.sl-picker[data-layout="narrow"][data-has-selection="true"] .sl-filtersec.has,
+.sl-picker[data-layout="narrow"][data-has-selection="true"] .sl-filters.has{display:none}
 .sl-cbbtn{width:32px;height:32px;border-radius:999px;background:var(--sl-surface);border:1px solid var(--sl-line);
   color:var(--sl-text);display:flex;align-items:center;justify-content:center;transition:border-color .15s}
 .sl-cbbtn:hover{border-color:var(--sl-muted)}
 .sl-cbbtn svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
 
-/* price panel */
-.sl-sec{padding:14px 16px 4px;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--sl-muted);font-weight:700}
-.sl-prices{padding:4px 16px 10px;border-bottom:1px solid var(--sl-line)}
-.sl-price-row{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px}
+/* price panel — one compact filter control replaces the wrapping price-chip row. */
+.sl-sec{padding:14px 14px 4px;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--sl-muted);font-weight:700}
+.sl-prices-sec{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:13px}
+.sl-price-select{min-height:32px;max-width:130px;padding:5px 28px 5px 9px;border:1px solid var(--sl-line);border-radius:9px;
+  background:var(--sl-surface);color:var(--sl-text);font:inherit;font-size:11px;font-weight:750;letter-spacing:0;text-transform:none}
+.sl-prices{padding:5px 14px 10px;border-bottom:1px solid var(--sl-line)}
+.sl-price-row{display:flex;align-items:center;gap:7px;min-height:28px;font-size:12px}
 .sl-dot{width:9px;height:9px;border-radius:50%;flex:none}
 .sl-price-label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
 .sl-price-left{font-size:11px;color:var(--sl-muted);font-variant-numeric:tabular-nums}
 .sl-price-amt{font-weight:800;font-variant-numeric:tabular-nums}
-.sl-status-key{display:flex;gap:12px;flex-wrap:wrap;padding:8px 16px 12px;border-bottom:1px solid var(--sl-line);color:var(--sl-muted);font-size:11px}
+.sl-status-key{display:flex;gap:13px;flex-wrap:wrap;padding:8px 0 2px;margin-top:5px;border-top:1px solid var(--sl-line);color:var(--sl-muted);font-size:10.5px}
 .sl-status-item{display:inline-flex;align-items:center;gap:6px}
 .sl-status-icon{width:17px;height:17px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
-  color:#fff;background:#6b7280;font-size:9px;font-weight:900;line-height:1}
-.sl-status-icon.sold{background:#374151;font-size:14px}
+  color:#fff;background:#6b7280;line-height:1}
+.sl-status-icon svg{width:10px;height:10px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.sl-status-icon.sold{background:#8b93a0}
+.sl-status-icon.sold svg{width:11px;height:11px;stroke-width:2.4}
 
 /* tray */
-.sl-tray{flex:1;padding:10px 16px;display:flex;flex-direction:column;gap:8px;min-height:0}
+.sl-seats-sec{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:13px}
+.sl-seat-summary{font-size:10px;letter-spacing:0;text-transform:none;white-space:nowrap}
+.sl-tray{flex:1;padding:10px 14px;display:flex;flex-direction:column;gap:7px;min-height:0}
 .sl-tray-hint{font-size:12.5px;color:var(--sl-muted);line-height:1.5}
-.sl-chip{display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid var(--sl-line);
-  border-radius:var(--sl-r-sm);background:var(--sl-surface);font-size:13px;transform-origin:center}
+.sl-chip{position:relative;display:grid;grid-template-columns:24px minmax(0,1fr) auto 30px;align-items:center;gap:8px;
+  min-height:53px;padding:7px 7px 7px 9px;border:1px solid var(--sl-line);border-radius:var(--sl-r-sm);
+  background:var(--sl-surface);font-size:13px;transform-origin:center;transition:border-color .15s,background .15s}
+.sl-chip:hover{border-color:color-mix(in srgb,var(--sl-accent) 38%,var(--sl-line))}
 .sl-chip.sl-enter{animation:slChipIn .38s cubic-bezier(.2,.8,.2,1) both}
 .sl-chip.sl-leave{pointer-events:none;animation:slChipOut .16s ease-in both}
 .sl-chip.sl-held{border-color:var(--sl-line);background:color-mix(in srgb,var(--sl-accent) 7%,var(--sl-surface));
   box-shadow:inset 3px 0 0 color-mix(in srgb,var(--sl-accent) 72%,transparent)}
-.sl-chip b{font-weight:800;flex:none;min-width:max-content;white-space:nowrap}
-.sl-chip .cat{color:var(--sl-muted);font-size:11.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sl-ticket-state{width:23px;height:23px;border-radius:999px;display:flex;align-items:center;justify-content:center;
+  background:var(--sl-accent);color:var(--sl-accent-ink)}
+.sl-ticket-state.held{background:color-mix(in srgb,var(--sl-accent) 18%,var(--sl-surface));color:var(--sl-accent)}
+.sl-ticket-state svg{width:13px;height:13px;stroke:currentColor;stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.sl-chip-main{min-width:0}
+.sl-chip b{display:block;font-weight:800;min-width:max-content;white-space:nowrap}
+.sl-chip-sub{display:flex;align-items:center;gap:5px;min-width:0;margin-top:2px}
+.sl-chip .cat{color:var(--sl-muted);font-size:10.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sl-chip .amt{font-weight:700;font-variant-numeric:tabular-nums;flex:none;white-space:nowrap}
-.sl-chip-state{flex:none;padding:3px 6px;border-radius:999px;background:var(--sl-accent);color:var(--sl-accent-ink);
-  font-size:8.5px;line-height:1;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
-.sl-chip-state.sl-pending{background:transparent;color:var(--sl-muted);border:1px solid var(--sl-line)}
-.sl-chip .rm{width:22px;height:22px;border-radius:999px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--sl-muted)}
-.sl-chip .rm:hover{color:var(--sl-text)}
+.sl-chip .rm{width:29px;height:29px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--sl-muted)}
+.sl-chip .rm:hover,.sl-chip .rm:focus-visible{color:var(--sl-accent);background:color-mix(in srgb,var(--sl-accent) 10%,transparent)}
 .sl-chip .rm svg{width:11px;height:11px;stroke:currentColor;stroke-width:2.4;fill:none;stroke-linecap:round}
 
 /* GA rows */
@@ -515,29 +541,43 @@ const CSS = `
 .sl-picker[data-layout="narrow"] .sl-confirm{left:50%!important;top:auto!important;bottom:14px;width:min(342px,calc(100% - 24px));
   transform:translateX(-50%);animation:slConfirmMobileIn .24s cubic-bezier(.2,.8,.2,1) both}
 
-/* best-available row */
-.sl-ba{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:9px 11px;border:1px solid var(--sl-line);border-radius:var(--sl-r-sm)}
-.sl-ba select{background:var(--sl-surface);color:var(--sl-text);border:1px solid var(--sl-line);border-radius:7px;
-  font:inherit;font-size:12px;padding:7px 8px;min-width:0;width:100%;max-width:none}
-.sl-ba-qty{display:flex;align-items:center;gap:7px}
-.sl-ba-qty button{width:24px;height:24px;border-radius:999px;background:var(--sl-surface);border:1px solid var(--sl-line);
-  font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
+/* Best available is a first-class shortcut, not an anonymous utility row. */
+.sl-ba{position:relative;overflow:hidden;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:7px;
+  padding:13px;border:1px solid color-mix(in srgb,var(--sl-accent) 34%,var(--sl-line));border-radius:13px;
+  background:linear-gradient(135deg,color-mix(in srgb,var(--sl-accent) 5%,var(--sl-surface)),color-mix(in srgb,var(--sl-accent) 11%,var(--sl-surface)))}
+.sl-ba::after{content:'✦';position:absolute;right:10px;top:3px;color:color-mix(in srgb,var(--sl-accent) 20%,transparent);font-size:42px;line-height:1}
+.sl-ba-title,.sl-ba-copy,.sl-ba select,.sl-ba-qty,.sl-ba-go{position:relative;z-index:1}
+.sl-ba-title{grid-column:1/-1;display:flex;align-items:center;gap:7px;font-size:13px;font-weight:850}
+.sl-ba-title .spark{color:var(--sl-accent);font-size:16px}
+.sl-ba-copy{grid-column:1/-1;margin:-4px 0 2px 23px;color:var(--sl-muted);font-size:10.5px;line-height:1.35}
+.sl-ba-copy .narrow{display:none}
+.sl-ba select{background:var(--sl-surface);color:var(--sl-text);border:1px solid var(--sl-line);border-radius:8px;
+  font:inherit;font-size:11px;padding:7px 8px;min-width:0;width:100%;max-width:none}
+.sl-ba-qty{display:flex;align-items:center;gap:7px;padding:3px;border:1px solid var(--sl-line);border-radius:9px;background:var(--sl-surface)}
+.sl-ba-qty button{width:25px;height:25px;border-radius:7px;background:color-mix(in srgb,var(--sl-line) 35%,transparent);border:0;
+  font-size:14px;font-weight:800;display:flex;align-items:center;justify-content:center}
 .sl-ba-qty span{min-width:14px;text-align:center;font-weight:800}
-.sl-ba-go{grid-column:1/-1;width:100%;min-height:38px;padding:7px 12px;border-radius:9px;border:1px solid var(--sl-line);font-weight:800;font-size:12px;
-  transition:border-color .15s,opacity .15s;display:flex;align-items:center;justify-content:center;gap:6px}
-.sl-ba-go:hover{border-color:var(--sl-muted)}
-.sl-ba-go:disabled{opacity:.62;cursor:wait}
+.sl-picker .sl-ba-go{grid-column:1/-1;width:100%;min-height:37px;padding:7px 12px;border-radius:9px;background:var(--sl-accent);
+  color:var(--sl-accent-ink);font-weight:800;font-size:12px;transition:filter .15s,opacity .15s;display:flex;align-items:center;justify-content:center;gap:6px;
+  box-shadow:0 8px 18px color-mix(in srgb,var(--sl-accent) 18%,transparent)}
+.sl-picker .sl-ba-go:hover{filter:brightness(1.06)}
+.sl-picker .sl-ba-go:disabled{opacity:.62;cursor:wait}
+.sl-picker[data-layout="narrow"] .sl-ba{padding:11px}
+.sl-picker[data-layout="narrow"] .sl-ba-copy .wide{display:none}
+.sl-picker[data-layout="narrow"] .sl-ba-copy .narrow{display:inline}
 
 /* screen-reader live region */
 .sl-sr{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 
 /* per-seat ticket-tier select + view-from-seat button in tray chips */
-.sl-chip .tier{background:var(--sl-bg);color:var(--sl-text);border:1px solid var(--sl-line);border-radius:7px;
-  font:inherit;font-size:11px;padding:3px 5px;max-width:130px;cursor:pointer}
-.sl-chip .view{width:24px;height:24px;border-radius:999px;flex:none;display:flex;align-items:center;justify-content:center;
-  color:var(--sl-muted);transition:color .15s}
+.sl-chip .tier{background:var(--sl-bg);color:var(--sl-text);border:1px solid var(--sl-line);border-radius:6px;
+  font:inherit;font-size:10px;padding:2px 4px;min-width:0;max-width:100%;cursor:pointer}
+.sl-chip .view{width:20px;height:20px;border-radius:999px;flex:none;display:flex;align-items:center;justify-content:center;
+  color:var(--sl-muted);opacity:.36;transition:color .15s,opacity .15s}
 .sl-chip .view:hover{color:var(--sl-text)}
-.sl-chip .view svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.sl-chip:hover .view,.sl-chip .view:focus-visible{opacity:1;color:var(--sl-text)}
+.sl-chip .view svg{width:12px;height:12px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+@media(pointer:coarse){.sl-chip .view{opacity:.58}}
 
 /* arena: LOD rung pills (flow within the top-center region) */
 .sl-rungs{display:none;background:var(--sl-surface);border:1px solid var(--sl-line);border-radius:999px;padding:3px}
@@ -624,10 +664,6 @@ const CSS = `
 .sl-minimap canvas{display:block}
 .sl-picker[data-layout="narrow"] .sl-minimap{display:none}
 
-/* F4 price-band filter — chip row in the side panel, above the price legend it
- *  dims (keeps clear of the map's top-center rungs / top-left a11y chips). */
-.sl-pricef{display:flex;gap:6px;flex-wrap:wrap;padding:2px 16px 10px}
-.sl-pricef .sl-chip-f{padding:6px 11px;font-size:11.5px}
 /* F4 legend reflection: rows + counts for out-of-band categories read muted */
 .sl-price-row.sl-dim{opacity:.4}
 .sl-seccard-mix-item.sl-dim{opacity:.4}
@@ -744,7 +780,7 @@ export class SeatPicker {
 
   // F4 price-band filter — active band's category keys (null = all prices)
   private priceBandKeys: Set<string> | null = null;
-  private priceFilterEl: HTMLDivElement | null = null;
+  private priceFilterEl: HTMLSelectElement | null = null;
   /** Last surfaced section summary (re-rendered when the price band changes). */
   private lastSection: SectionSummary | null = null;
   /** Section card collapsed to its slim pill (seat-picking has begun). */
@@ -952,18 +988,18 @@ export class SeatPicker {
             <div class="sl-sheet-grab"></div>
             <div class="sl-sheet-bar">
               <div class="sl-sheet-peek" data-ref="peek"></div>
-              <span class="sl-sheet-chevron" aria-hidden="true">
+              <button type="button" class="sl-sheet-toggle" data-ref="sheetToggle" aria-label="Open ticket panel" aria-expanded="false">
                 <svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>
-              </span>
+              </button>
             </div>
           </div>
           <div class="sl-sec sl-filtersec" data-ref="filtersSec">Filters</div>
           <div class="sl-filters" data-ref="filters"></div>
-          <div class="sl-sec sl-prices-sec" data-ref="pricesSec">Prices</div>
+          <div class="sl-sec sl-prices-sec" data-ref="pricesSec"><span>Ticket prices</span></div>
           <div class="sl-prices" data-ref="prices"></div>
-          <div class="sl-sec sl-seats-sec">Your seats</div>
+          <div class="sl-sec sl-seats-sec"><span>Your seats</span><span class="sl-seat-summary" data-ref="seatSummary"></span></div>
           <div class="sl-tray" data-ref="tray"></div>
-          <div class="sl-foot">
+          <div class="sl-foot" data-ref="foot">
             <div class="sl-hold-note" data-ref="holdNote" role="status" aria-live="polite">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
               <span><b data-ref="holdTitle">Seats secured</b><span class="sl-hold-copy" data-ref="holdCopy">Checkout timer is running.</span></span>
@@ -1009,9 +1045,17 @@ export class SeatPicker {
     // ✕ lives inside the head — taps on the card must not toggle the sheet.
     const head = this.els.sheetHead;
     if (head) {
+      const toggle = this.els.sheetToggle as HTMLButtonElement | undefined;
       const setSheet = (open: boolean): void => {
         root.dataset.sheet = open ? 'open' : 'peek';
+        toggle?.setAttribute('aria-expanded', String(open));
+        toggle?.setAttribute('aria-label', open ? 'Collapse ticket panel' : 'Open ticket panel');
       };
+      setSheet(root.dataset.sheet === 'open');
+      toggle?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setSheet(root.dataset.sheet !== 'open');
+      });
       let startY = 0;
       let swiped = false;
       let tracking = false;
@@ -1034,7 +1078,7 @@ export class SeatPicker {
       });
       head.addEventListener('pointerup', (e: PointerEvent) => {
         if (tracking && !swiped && Math.abs(e.clientY - startY) < 6) {
-          if (!(e.target as HTMLElement).closest('.sl-seccard')) setSheet(root.dataset.sheet !== 'open');
+          if (!(e.target as HTMLElement).closest('.sl-seccard,.sl-sheet-toggle')) setSheet(root.dataset.sheet !== 'open');
         }
         tracking = false;
         head.releasePointerCapture?.(e.pointerId);
@@ -1668,41 +1712,29 @@ export class SeatPicker {
     return bands;
   }
 
-  /**
-   * Build the price-band chip row in the side panel, directly under the "Prices"
-   * header and above the legend it dims. Living in the panel (not a map overlay)
-   * keeps it clear of the top-center rung pills and top-left a11y chips, and it
-   * rides the bottom sheet on narrow layouts. Skipped when there's <2 bands.
-   */
+  /** Build the compact price selector in the panel header. Choosing a band both
+   *  filters availability and smoothly frames the matching seats on the map. */
   private buildPriceFilter(): void {
     if (!this.els.prices || !this.els.pricesSec) return;
     const bands = this.priceBands();
     if (bands.length < 2) return;
-    const wrap = document.createElement('div');
-    wrap.className = 'sl-pricef';
-    wrap.setAttribute('role', 'group');
-    wrap.setAttribute('aria-label', 'Filter seats by price');
-    const mk = (band: string, label: string, on: boolean): string =>
-      `<button type="button" class="sl-chip-f${on ? ' on' : ''}" data-band="${band}">${label}</button>`;
-    wrap.innerHTML = mk('all', 'All prices', true) + bands.map((bd) => mk(bd.id, bd.label, false)).join('');
-    this.els.pricesSec.after(wrap);
-    this.priceFilterEl = wrap;
-    wrap.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        wrap.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === btn));
-        const id = btn.dataset.band!;
-        if (id === 'all') {
-          this.priceBandKeys = null;
-          this.controller.setCategoryFilter(null);
-        } else {
-          const bd = bands.find((x) => x.id === id);
-          this.priceBandKeys = bd ? new Set(bd.keys) : null;
-          this.controller.setCategoryFilter(bd ? bd.keys : null);
-        }
-        // Reflect the band in the legend rows + any open section card.
-        this.syncPrices();
-        if (this.lastSection) this.showSectionCard(this.lastSection);
-      });
+    const select = document.createElement('select');
+    select.className = 'sl-price-select';
+    select.setAttribute('aria-label', 'Filter and focus seats by price');
+    select.innerHTML = `<option value="all">All prices</option>` + bands
+      .map((band) => `<option value="${band.id}">${band.label}</option>`)
+      .join('');
+    this.els.pricesSec.appendChild(select);
+    this.priceFilterEl = select;
+    select.addEventListener('change', () => {
+      const band = bands.find((candidate) => candidate.id === select.value);
+      const keys = band?.keys ?? null;
+      this.priceBandKeys = keys ? new Set(keys) : null;
+      this.controller.setCategoryFilter(keys);
+      this.controller.focusCategoryFilter(keys);
+      // Reflect the band in the legend rows + any open section card.
+      this.syncPrices();
+      if (this.lastSection) this.showSectionCard(this.lastSection);
     });
   }
 
@@ -2210,8 +2242,12 @@ export class SeatPicker {
       })
       .join('') +
       `<div class="sl-status-key" aria-label="Seat status legend">` +
-      `<span class="sl-status-item"><i class="sl-status-icon">H</i>Held by another buyer</span>` +
-      `<span class="sl-status-item"><i class="sl-status-icon sold">×</i>Sold</span>` +
+      `<span class="sl-status-item"><i class="sl-status-icon" aria-hidden="true">` +
+      `<svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>` +
+      `</i>Temporarily held</span>` +
+      `<span class="sl-status-item"><i class="sl-status-icon sold" aria-hidden="true">` +
+      `<svg viewBox="0 0 24 24"><path d="M7 17L17 7"/></svg>` +
+      `</i>Sold</span>` +
       `</div>`;
     // Legend-hover highlight: dim other categories on the map while hovering a row.
     this.els.prices.querySelectorAll<HTMLElement>('.sl-price-row').forEach((row) => {
@@ -2249,6 +2285,32 @@ export class SeatPicker {
       parts.push(`<div class="sl-tray-hint">Tap a seat on the map — or grab standing tickets below.</div>`);
     }
 
+    // Best available comes before manual choices: it is the fastest path for
+    // buyers who care about sitting together more than inspecting every dot.
+    if (!this.hold) {
+      const cats = this.controller.doc?.categories ?? [];
+      parts.push(
+        `<div class="sl-ba">` +
+          `<div class="sl-ba-title"><span class="spark" aria-hidden="true">✦</span>Find the best seats together</div>` +
+          `<div class="sl-ba-copy"><span class="wide">We’ll choose the closest available group for you.</span>` +
+          `<span class="narrow">Closest available group, chosen instantly.</span></div>` +
+          (cats.length > 1
+            ? `<select aria-label="Preferred ticket type" data-ba-cat>` +
+              `<option value="">Any ticket type</option>` +
+              cats.map((c) => `<option value="${c.key}"${this.baCat === c.key ? ' selected' : ''}>${c.label}</option>`).join('') +
+              `</select>`
+            : `<span aria-hidden="true"></span>`) +
+          `<div class="sl-ba-qty">` +
+          `<button type="button" data-ba="-1" aria-label="Fewer seats">−</button><span>${this.baQty}</span>` +
+          `<button type="button" data-ba="1" aria-label="More seats">+</button></div>` +
+          `<button type="button" class="sl-ba-go"${this.bestAvailableBusy ? ' disabled' : ''}>` +
+          (this.bestAvailableBusy
+            ? `<span class="sl-ba-spin" aria-hidden="true"></span>Finding the best seats…`
+            : `Find ${this.baQty} best ${this.baQty === 1 ? 'seat' : 'seats'}`) +
+          `</button></div>`,
+      );
+    }
+
     // Held line items (best-available, completed, or restored). Tier is
     // server-committed, but each item can be released without discarding the
     // rest of the hold.
@@ -2258,15 +2320,17 @@ export class SeatPicker {
       const cat = this.controller.doc?.categories.find((c) => c.key === item.categoryKey);
       const tierName = item.tierId ? cat?.tiers?.find((ti) => ti.id === item.tierId)?.name : undefined;
       const canView = this.seatViewEnabled() && item.objectType !== 'ga' && !!this.controller.seatByLabel(item.label);
+      const viewBtn = canView
+        ? `<button type="button" class="view" data-view-label="${item.label}" aria-label="${t('picker.viewFromSeat', { label: item.label })}">` +
+          `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`
+        : '';
       parts.push(
-        `<div class="sl-chip sl-held${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-held="${encodeURIComponent(item.label)}"><b>${item.label}</b>` +
-          `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>` +
-          `<span class="sl-chip-state" aria-label="Held by you" title="Held by you">Held</span>` +
+        `<div class="sl-chip sl-held${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-held="${encodeURIComponent(item.label)}">` +
+          `<span class="sl-ticket-state held" aria-label="Held for you" title="Held for you">` +
+          `<svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>` +
+          `<div class="sl-chip-main"><b>${item.label}</b><div class="sl-chip-sub">` +
+          `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>${viewBtn}</div></div>` +
           `<span class="amt">${this.money(item.unitPrice * (item.quantity ?? 1))}</span>` +
-          (canView
-            ? `<button type="button" class="view" data-view-label="${item.label}" aria-label="${t('picker.viewFromSeat', { label: item.label })}">` +
-              `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`
-            : '') +
           `<button type="button" class="rm" aria-label="Remove held ticket ${item.label}">` +
           `<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` +
           `</button>` +
@@ -2293,12 +2357,12 @@ export class SeatPicker {
           `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`
         : '';
       parts.push(
-        `<div class="sl-chip${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-seat="${s.id}"><b>${s.label}</b>` +
-          `<span class="cat">${cat?.label ?? s.categoryKey}</span>` +
-          tierSelect +
-          `<span class="sl-chip-state sl-pending">Selected</span>` +
+        `<div class="sl-chip${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-seat="${s.id}">` +
+          `<span class="sl-ticket-state" aria-label="Selected" title="Selected">` +
+          `<svg viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></svg></span>` +
+          `<div class="sl-chip-main"><b>${s.label}</b><div class="sl-chip-sub">` +
+          `<span class="cat">${cat?.label ?? s.categoryKey}</span>${tierSelect}${viewBtn}</div></div>` +
           `<span class="amt">${this.money(s.price)}</span>` +
-          viewBtn +
           `<button type="button" class="rm" aria-label="Remove ${s.label}">` +
           `<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` +
           `</button></div>`,
@@ -2314,26 +2378,6 @@ export class SeatPicker {
           `<div class="sl-ga-qty">` +
           `<button type="button" data-d="-1" aria-label="Fewer">−</button><span>${qty}</span>` +
           `<button type="button" data-d="1" aria-label="More">+</button></div></div>`,
-      );
-    }
-
-    // Best available — qty (+ optional category) picked server-side and held atomically.
-    if (!this.hold) {
-      const cats = this.controller.doc?.categories ?? [];
-      parts.push(
-        `<div class="sl-ba">` +
-          (cats.length > 1
-            ? `<select aria-label="Category" data-ba-cat>` +
-              `<option value="">Any tier</option>` +
-              cats.map((c) => `<option value="${c.key}"${this.baCat === c.key ? ' selected' : ''}>${c.label}</option>`).join('') +
-              `</select>`
-            : '') +
-          `<div class="sl-ba-qty">` +
-          `<button type="button" data-ba="-1" aria-label="Fewer seats">−</button><span>${this.baQty}</span>` +
-          `<button type="button" data-ba="1" aria-label="More seats">+</button></div>` +
-          `<button type="button" class="sl-ba-go"${this.bestAvailableBusy ? ' disabled' : ''}>` +
-          (this.bestAvailableBusy ? `<span class="sl-ba-spin" aria-hidden="true"></span>Finding…` : 'Best available') +
-          `</button></div>`,
       );
     }
 
@@ -2404,6 +2448,11 @@ export class SeatPicker {
       ? `${count} ${count === 1 ? 'ticket' : 'tickets'}`
       : 'No seats selected';
     this.els.total.textContent = count ? this.money(total) : '';
+    this.root?.setAttribute('data-has-selection', String(count > 0));
+    this.els.foot?.classList.toggle('empty', count === 0);
+    if (this.els.seatSummary) {
+      this.els.seatSummary.textContent = count ? `${count} selected` : '';
+    }
     this.syncCta(count, pendingCount);
     if (this.hold) {
       const securedCount = heldCount || this.hold.seats?.length || 0;
@@ -2435,7 +2484,7 @@ export class SeatPicker {
           .filter((p): p is number => p != null);
         this.els.peek.innerHTML =
           (prices.length ? `<span>From ${this.money(Math.min(...prices))}</span>` : '<span>Pick your seats</span>') +
-          `<span class="sub">· Best available</span>`;
+          `<span class="go">✦ Best seats</span>`;
       }
     }
     // Keep the mobile map stable after selection. The persistent Review pill

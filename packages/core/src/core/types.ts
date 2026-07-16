@@ -595,6 +595,9 @@ export interface ISeatmapRenderer {
   /** Price-band filter (F4): dim free seats whose category is NOT in `keys`
    *  (null clears). The widget resolves which categories fall in the band. */
   setCategoryFilter?(keys: string[] | null): void;
+  /** Smoothly frame the currently available seats in these categories. `null`
+   *  returns to the full chart. Used after an explicit buyer price-filter action. */
+  focusCategories?(keys: string[] | null): void;
   /** Dim the seats of these section/zone ids (organizer manager: held-back inventory). */
   setDimmedSections?(ids: string[] | null): void;
   /**
@@ -647,12 +650,12 @@ export interface ISeatmapRenderer {
   sectionMembers?(id: string): string[];
   /**
    * Smoothly glide (pan+zoom) the camera to frame a section (by id) or a world-
-   * space bounds rect over ~450ms easeInOutCubic. `prefers-reduced-motion` snaps.
+   * space bounds rect over a calm easeInOutCubic glide. `prefers-reduced-motion` snaps.
    * A pointer-down (grab/pan) cancels an in-flight glide. Slice 5 "glide in".
    */
   focusRegion?(
     target: string | { x: number; y: number; width: number; height: number },
-    opts?: { animate?: boolean },
+    opts?: { animate?: boolean; minScale?: number; durationMs?: number },
   ): void;
   /** Current LOD rung derived from zoom (for the ZONES/SECTIONS/SEATS pill). */
   getRung?(): LodRung;
