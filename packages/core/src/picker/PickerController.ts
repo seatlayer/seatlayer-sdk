@@ -872,6 +872,18 @@ export class PickerController {
     this.renderer?.setCategoryFilter?.(keys);
   }
 
+  /** An explicit buyer price-filter action should not only dim the rest of the
+   *  chart: clear any older section drill-in and guide the camera to the seats
+   *  that remain relevant. Clearing the filter glides back to the full chart. */
+  focusCategoryFilter(keys: string[] | null): void {
+    const renderer = this.renderer;
+    if (!renderer) return;
+    renderer.clearSectionFocus?.();
+    this.opts.onSectionFocus?.(null);
+    if (renderer.focusCategories) renderer.focusCategories(keys);
+    else renderer.zoomToFit();
+  }
+
   /** World-space rect currently visible + full chart bounds (F3 minimap frame). */
   getViewport(): { visible: { x: number; y: number; width: number; height: number }; bounds: { x: number; y: number; width: number; height: number } } | null {
     const r = this.renderer;

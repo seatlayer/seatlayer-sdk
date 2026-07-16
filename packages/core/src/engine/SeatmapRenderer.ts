@@ -91,6 +91,8 @@ const ISO_SQUASH = 0.58;
 const LIFT_PER_STEP = 58;
 /** Flat⇄iso tween duration (ms); reduced-motion snaps. */
 const ISO_TWEEN_MS = 320;
+/** Buyer camera travel should be easy to follow without feeling sluggish. */
+const CAMERA_GLIDE_MS = 650;
 
 // ---- Section/zone LOD ("melt") tuning -------------------------------------
 /** Peak fill opacity of a solid section block at the block rung. */
@@ -1159,6 +1161,41 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     } else {
       this.seatLayer.batchDraw();
     }
+  }
+
+  /** Frame the currently available inventory that survived a buyer price
+   *  filter. Clearing the filter glides back to the full venue. */
+  focusCategories(keys: string[] | null): void {
+    if (!keys?.length) {
+      this.focusRegion(this.bounds, { durationMs: CAMERA_GLIDE_MS });
+      return;
+    }
+    const wanted = new Set(keys);
+    const matching = this.seats.filter((seat) => {
+      if (!wanted.has(seat.categoryKey) || this.seatInClosedSection(seat.id)) return false;
+      const status = this.statusById.get(seat.id) ?? 'free';
+      return status === 'free' || this.ownedHold.has(seat.id);
+    });
+    if (!matching.length) return;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const seat of matching) {
+      minX = Math.min(minX, seat.x);
+      maxX = Math.max(maxX, seat.x);
+      minY = Math.min(minY, seat.y);
+      maxY = Math.max(maxY, seat.y);
+    }
+    const pad = Math.max(24, this.seatR * 3);
+    minX -= pad;
+    maxX += pad;
+    minY -= pad;
+    maxY += pad;
+    this.focusRegion(
+      { x: minX, y: minY, width: Math.max(40, maxX - minX), height: Math.max(40, maxY - minY) },
+      { durationMs: CAMERA_GLIDE_MS },
+    );
   }
 
   // ---- isometric ("3D") view mode -------------------------------------------
@@ -3019,14 +3056,14 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   /**
    * Smoothly glide the camera to frame a section (by id) or a world-space bounds
-   * rect — the Slice 5 "glide in". Pan+zoom tween over ~450ms easeInOutCubic; the
+   * rect — the Slice 5 "glide in". Pan+zoom tween over a calm easeInOutCubic; the
    * melt/LOD rides the camera every frame. `prefers-reduced-motion` (or
    * `opts.animate === false`) snaps via zoomToBounds. A grab (pointer-down) or a
    * newer glide cancels an in-flight one.
    */
   focusRegion(
     target: string | { x: number; y: number; width: number; height: number },
-    opts?: { animate?: boolean; minScale?: number },
+    opts?: { animate?: boolean; minScale?: number; durationMs?: number },
   ): void {
     const b =
       typeof target === 'string'
@@ -3057,10 +3094,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       return;
     }
     const start = performance.now();
-    const DUR = 450;
+    const duration = Math.max(180, Math.min(1200, opts?.durationMs ?? CAMERA_GLIDE_MS));
     const step = (now: number): void => {
       if (this.destroyed) { this.glideRaf = 0; return; }
-      const raw = Math.min(1, (now - start) / DUR);
+      const raw = Math.min(1, (now - start) / duration);
       const e = raw < 0.5 ? 4 * raw * raw * raw : 1 - Math.pow(-2 * raw + 2, 3) / 2;
       const sc = fromScale + (toScale - fromScale) * e;
       this.stage.scale({ x: sc, y: sc });
@@ -3213,15 +3250,39 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       if (seat.kind === 'booth') continue;
       if (seat.x < x0 || seat.x > x1 || seat.y < y0 || seat.y > y1) continue;
       const status = this.statusById.get(seat.id) ?? 'free';
-      const statusCue = status === 'booked' ? '×' : status === 'held' && !this.ownedHold.has(seat.id) ? 'H' : null;
+      const unavailable = status === 'booked' || (status === 'held' && !this.ownedHold.has(seat.id));
+      if (unavailable) {
+        // Status is geometry, not a letter: a centred lock for a temporary hold
+        // and one quiet diagonal mark for sold. This stays aligned at every
+        // zoom level and does not ask buyers to decode "H" or a large × glyph.
+        const cue = new Group({ x: seat.x, y: seat.y, listening: false });
+        if (status === 'held') {
+          cue.add(new Rect({
+            x: -4.2, y: -0.7, width: 8.4, height: 6.5, cornerRadius: 1.3,
+            stroke: '#ffffff', strokeWidth: 1.25, listening: false,
+          }));
+          cue.add(new Line({
+            points: [-2.4, -0.8, -2.4, -2.7, -1.2, -4, 0, -4.35, 1.2, -4, 2.4, -2.7, 2.4, -0.8],
+            stroke: '#ffffff', strokeWidth: 1.2, lineCap: 'round', lineJoin: 'round', listening: false,
+          }));
+        } else {
+          cue.add(new Line({
+            points: [-4.2, 4.2, 4.2, -4.2], stroke: '#ffffff', strokeWidth: 1.8,
+            lineCap: 'round', listening: false,
+          }));
+        }
+        this.labelGroup.add(cue);
+        if (++count >= MAX_LABELS) break;
+        continue;
+      }
       const t = new Text({
         x: seat.x,
         y: seat.y,
-        text: statusCue ?? seat.label,
-        fontSize: statusCue ? (status === 'booked' ? 13 : 8) : 7,
-        fontStyle: statusCue ? '800' : '600',
+        text: seat.label,
+        fontSize: 7,
+        fontStyle: '600',
         fontFamily: this.labelFont(),
-        fill: statusCue ? '#ffffff' : (this.theme.seatLabelColor ?? DEF_SEAT_LABEL),
+        fill: this.theme.seatLabelColor ?? DEF_SEAT_LABEL,
         listening: false,
         perfectDrawEnabled: false,
       });
