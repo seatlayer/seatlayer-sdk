@@ -510,6 +510,12 @@ export interface ISeatmapRenderer {
   /** Bulk status update; re-renders affected seats only. */
   setStatus(seatIds: string[], status: SeatStatus): void;
   /**
+   * Mark the active buyer's own held seats. They remain server-status `held`,
+   * but render with the buyer selection treatment instead of the anonymous
+   * unavailable treatment used for another buyer's hold.
+   */
+  setOwnedHold?(seatIds: string[] | null): void;
+  /**
    * SYNCHRONOUS repaint that bypasses requestAnimationFrame. Konva's batchDraw()
    * (used by setStatus and friends) schedules the actual paint on the next rAF
    * tick, which Chrome throttles/pauses on hidden, backgrounded, or occluded

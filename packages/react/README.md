@@ -34,6 +34,8 @@ Drive it imperatively through the ref:
 ```tsx
 const hold = await chart.current?.hold();              // hold the selection (null on conflict)
 const best = await chart.current?.bestAvailable(4);    // auto-pick 4 seats and hold them
+const restored = await chart.current?.resumeHold(savedHoldId);
+await chart.current?.releaseLabels(['A-12']);          // keep the remainder held
 await chart.current?.release();                        // release the current hold
 ```
 
@@ -48,6 +50,7 @@ Extends the vanilla SDK options minus `container` (the component owns its own mo
 | `maxSelection` | `number?` | Max seats selectable at once (default 10). |
 | `onSelectionChange` | `(seats) => void` | Fires when the selection changes. |
 | `onHold` | `(result) => void` | Fires when seats are held; hand `holdId` to your server. |
+| `onHoldRestored` | `(result) => void` | Fires after `resumeHold()` verifies an active hold. |
 | `onError` | `(err) => void` | Fires on errors. |
 | `className` / `style` | — | Applied to the container element. |
 

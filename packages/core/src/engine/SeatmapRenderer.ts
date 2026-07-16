@@ -347,7 +347,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private catOrder: string[] = [];
 
   private selection = new Set<string>();
-  private selectionRings = new Map<string, Circle>();
+  private selectionRings = new Map<string, Shape>();
+  /** Held by this picker instance, not by another buyer. */
+  private ownedHold = new Set<string>();
   private hoverRing: Circle;
   /** Keyboard-navigation focus ring + the currently focused seat id. */
   private focusRing: Circle;
@@ -539,6 +541,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.circleById.clear();
     this.boothDims.clear();
     this.selectionRings.clear();
+    this.ownedHold.clear();
     this.statusById.clear();
     this.selection.clear();
     this.seatById.clear();
@@ -670,6 +673,23 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (!touched) return;
     if (this.cached) {
       // bitmap is stale; debounce a re-cache so bulk updates coalesce
+      if (this.recacheTimer) clearTimeout(this.recacheTimer);
+      this.recacheTimer = setTimeout(() => this.cacheSeatLayer(), 150);
+    } else {
+      this.seatLayer.batchDraw();
+    }
+  }
+
+  setOwnedHold(seatIds: string[] | null): void {
+    const next = new Set((seatIds ?? []).filter((id) => this.statusById.has(id)));
+    const touched = new Set([...this.ownedHold, ...next]);
+    this.ownedHold = next;
+    for (const id of touched) {
+      const shape = this.circleById.get(id);
+      if (shape) this.paintSeat(shape, id);
+    }
+    if (!touched.size) return;
+    if (this.cached) {
       if (this.recacheTimer) clearTimeout(this.recacheTimer);
       this.recacheTimer = setTimeout(() => this.cacheSeatLayer(), 150);
     } else {
@@ -1437,7 +1457,17 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         );
         break;
       case 'held':
-        c.fill(HELD_FILL);
+        if (this.ownedHold.has(id)) {
+          // A buyer returning from checkout must be able to distinguish their
+          // own inventory from somebody else's hold. Preserve the category
+          // identity and outline the actual seat/booth shape (full rectangle
+          // for a booth), rather than painting it generic unavailable grey.
+          c.fill(lighten(base, this.effSelection === DEF_SELECTION ? 0.24 : 0.1));
+          c.stroke(this.effSelection);
+          c.strokeWidth(3);
+        } else {
+          c.fill(HELD_FILL);
+        }
         break;
       case 'booked':
         if (this.colorblind) {
@@ -2479,16 +2509,29 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (on) {
       this.selection.add(id);
       const seat = this.seatById.get(id)!;
-      const ring = new Circle({
+      const dims = this.boothDims.get(seat.rowId);
+      const common = {
         x: seat.x,
         y: seat.y,
-        radius: this.seatR,
         stroke: this.effSelection,
         strokeWidth: 3,
         listening: false,
         perfectDrawEnabled: false,
         shadowForStrokeEnabled: false,
-      });
+      };
+      // Booths are selected as complete blocks. A circular ring around their
+      // centre label made the block itself look unchanged (DesiPass #116).
+      const ring: Shape = dims
+        ? new Rect({
+            ...common,
+            width: dims.width,
+            height: dims.height,
+            offsetX: dims.width / 2,
+            offsetY: dims.height / 2,
+            rotation: dims.rotation,
+            cornerRadius: 4,
+          })
+        : new Circle({ ...common, radius: this.seatR });
       this.selectionRings.set(id, ring);
       this.overlayLayer.add(ring);
     } else {

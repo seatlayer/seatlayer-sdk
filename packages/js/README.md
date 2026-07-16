@@ -103,10 +103,14 @@ Give the container a height, for example `min-height: 760px`. Keep the default
 
 `new SeatingChart(options)` — options: `container` (selector or element, required),
 `event` (key, required), `apiBase?`, `maxSelection?` (default 10), `onSelectionChange?`,
-`onHold?`, `onError?`.
+`onHold?`, `onHoldRestored?`, `onError?`.
 
 Methods: `render()`, `getSelection()`, `hold()`, `bestAvailable(qty, categoryKey?)`,
-`release()`, `destroy()`.
+`resumeHold(holdId)`, `getCurrentHold()`, `releaseLabels(labels)`, `release()`, `destroy()`.
+
+The full `SeatPicker` automatically restores an active hold after same-tab
+checkout navigation and lets the buyer remove individual held tickets. Set
+`restoreHold: false` and pass `initialHoldId` when your host owns persistence.
 
 The browser **holds**; your **server books** with a secret key. See the
 [integration guide](https://docs.seatlayer.io/getting-started/how-it-works/).

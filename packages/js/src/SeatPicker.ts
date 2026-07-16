@@ -156,6 +156,18 @@ export interface SeatPickerOptions {
   /** Hold TTL in ms passed to hold(); server clamps to its own limits. */
   holdTtlMs?: number;
   /**
+   * An opaque hold id supplied by the host to restore after navigation. It is
+   * verified against the event and active server state before anything renders
+   * as owned by this buyer.
+   */
+  initialHoldId?: string;
+  /**
+   * Automatically remember the active hold id in sessionStorage and restore it
+   * when this event's picker mounts again. Default true. Set false when the host
+   * owns hold persistence and supplies initialHoldId itself.
+   */
+  restoreHold?: boolean;
+  /**
    * Confirm mode: tapping a seat shows an anchored popover (seat · category ·
    * price · Add/Cancel) instead of adding straight to the tray. Default false.
    */
@@ -184,6 +196,8 @@ export interface SeatPickerOptions {
   onSelectionChange?: (seats: PickerSeat[]) => void;
   /** The open hold expired server-side (widget already reset itself). */
   onHoldExpired?: () => void;
+  /** A prior active hold was verified and restored into the tray. */
+  onHoldRestored?: (hold: HoldResult, seats: PickerSeat[], handoff: CheckoutHandoff) => void;
   /** Modal only: the buyer closed the picker (ESC / scrim / ✕). */
   onClose?: () => void;
   onError?: (err: unknown) => void;
@@ -633,6 +647,7 @@ function resolveTokens(chart: ChartTheme | undefined, host: SeatPickerTheme | un
 export class SeatPicker {
   private readonly opts: SeatPickerOptions;
   private readonly api: PubApi;
+  private readonly apiBase: string;
   private readonly controller: PickerController;
 
   private root: HTMLDivElement | null = null;
@@ -701,6 +716,7 @@ export class SeatPicker {
   /** Stable item keys prevent tray chips re-animating on unrelated realtime syncs. */
   private lastTrayKeys = new Set<string>();
   private bestAvailableBusy = false;
+  private releasingLabels = new Set<string>();
   private ctaPhase: 'idle' | 'holding' | 'checkout' = 'idle';
   // narrow-layout chrome that docks into the sheet's Filters row on mobile
   private a11yChipsEl: HTMLDivElement | null = null;
@@ -775,7 +791,8 @@ export class SeatPicker {
     if (!options.event || typeof options.event !== 'string') throw new Error('seatmap: `event` key is required');
     if (!options.container) throw new Error('seatmap: `container` is required (or use SeatPicker.open())');
     this.opts = options;
-    this.api = new PubApi((options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, ''));
+    this.apiBase = (options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
+    this.api = new PubApi(this.apiBase);
     this.controller = new PickerController({
       transport: this.api,
       eventKey: options.event,
@@ -797,6 +814,7 @@ export class SeatPicker {
       },
       onHoldExpired: () => {
         this.hold = null;
+        this.forgetHold();
         this.handedOff = false;
         this.bookedShown = false;
         this.ctaPhase = 'idle';
@@ -1099,6 +1117,9 @@ export class SeatPicker {
     // CURRENT layout — the initial applyLayout ran before these were built.
     this.dockLayoutChrome();
 
+    await this.restoreRememberedHold();
+    if (this.destroyed) return this;
+
     this.syncPrices();
     this.syncTray();
     return this;
@@ -1280,6 +1301,80 @@ export class SeatPicker {
         this.syncCta();
       }, 1100);
     }
+  }
+
+  /** Session-scoped capability key: isolated by API origin and event. */
+  private holdStorageKey(): string {
+    return `@seatlayer/hold/v1/${encodeURIComponent(this.apiBase)}/${encodeURIComponent(this.opts.event)}`;
+  }
+
+  private rememberedHoldId(): string | null {
+    if (this.opts.initialHoldId) return this.opts.initialHoldId;
+    if (this.opts.restoreHold === false || typeof window === 'undefined') return null;
+    try {
+      return window.sessionStorage.getItem(this.holdStorageKey());
+    } catch {
+      return null;
+    }
+  }
+
+  private rememberHold(hold: HoldResult): void {
+    if (this.opts.restoreHold === false || typeof window === 'undefined') return;
+    try {
+      // Persist only the opaque capability. Labels, prices and expiry are
+      // always reloaded from the authoritative server projection.
+      window.sessionStorage.setItem(this.holdStorageKey(), hold.holdId);
+    } catch {
+      // Storage can be unavailable in privacy/sandboxed embeds; the live picker
+      // remains fully functional for the current mount.
+    }
+  }
+
+  private forgetHold(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      window.sessionStorage.removeItem(this.holdStorageKey());
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }
+
+  private async resumeHoldFromServer(holdId: string, automatic: boolean): Promise<HoldResult | null> {
+    try {
+      const h = await this.controller.resumeHold(holdId);
+      if (!h) return null;
+      const restored: HoldResult = {
+        holdId: h.holdId,
+        expiresAt: h.expiresAt,
+        seats: h.seats,
+        items: h.items,
+      };
+      this.hold = restored;
+      this.handedOff = false;
+      this.bookedShown = false;
+      this.ctaPhase = 'idle';
+      this.startHoldTimer(restored.expiresAt);
+      this.rememberHold(restored);
+      this.syncTray();
+      this.opts.onHoldRestored?.(restored, restored.seats ?? [], this.buildHandoff(restored));
+      if (automatic) this.toast('Your held tickets have been restored.', 'success');
+      return restored;
+    } catch (error) {
+      const status = (error as { status?: number })?.status;
+      if (status === 404 || status === 409) {
+        // A stale/foreign/settled capability is expected recovery state, not a
+        // picker failure. Drop it and let the buyer choose again.
+        this.forgetHold();
+      } else {
+        this.opts.onError?.(error);
+      }
+      return null;
+    }
+  }
+
+  private async restoreRememberedHold(): Promise<void> {
+    const holdId = this.rememberedHoldId();
+    if (holdId) await this.resumeHoldFromServer(holdId, true);
   }
 
   /** Section-bearing objects on the active floor (single-floor → doc.objects). */
@@ -2025,8 +2120,9 @@ export class SeatPicker {
       parts.push(`<div class="sl-tray-hint">Tap a seat on the map — or grab standing tickets below.</div>`);
     }
 
-    // Held line items (best-available or a completed hold) — locked in, no remove.
-    // Tier is server-committed on a hold, so it shows read-only (no re-pick).
+    // Held line items (best-available, completed, or restored). Tier is
+    // server-committed, but each item can be released without discarding the
+    // rest of the hold.
     for (const item of heldItems) {
       const itemKey = `held:${item.label}`;
       nextTrayKeys.add(itemKey);
@@ -2034,7 +2130,7 @@ export class SeatPicker {
       const tierName = item.tierId ? cat?.tiers?.find((ti) => ti.id === item.tierId)?.name : undefined;
       const canView = this.seatViewEnabled() && item.objectType !== 'ga' && !!this.controller.seatByLabel(item.label);
       parts.push(
-        `<div class="sl-chip sl-held${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}"><b>${item.label}</b>` +
+        `<div class="sl-chip sl-held${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-held="${encodeURIComponent(item.label)}"><b>${item.label}</b>` +
           `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>` +
           `<span class="sl-chip-state">Held</span>` +
           `<span class="amt">${this.money(item.unitPrice * (item.quantity ?? 1))}</span>` +
@@ -2042,6 +2138,9 @@ export class SeatPicker {
             ? `<button type="button" class="view" data-view-label="${item.label}" aria-label="${t('picker.viewFromSeat', { label: item.label })}">` +
               `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`
             : '') +
+          `<button type="button" class="rm" aria-label="Remove held ticket ${item.label}">` +
+          `<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` +
+          `</button>` +
           `</div>`,
       );
     }
@@ -2126,6 +2225,10 @@ export class SeatPicker {
     this.els.tray.querySelectorAll<HTMLElement>('.sl-chip .rm').forEach((btn) => {
       btn.addEventListener('click', () => {
         const chip = btn.closest('.sl-chip') as HTMLElement;
+        if (chip.dataset.held) {
+          void this.removeHeldLabel(decodeURIComponent(chip.dataset.held), chip);
+          return;
+        }
         const id = chip.dataset.seat!;
         if (this.reducedMotion()) {
           this.controller.deselect([id]);
@@ -2217,6 +2320,41 @@ export class SeatPicker {
     this.opts.onSelectionChange?.(seats);
   }
 
+  private async removeHeldLabel(label: string, chip?: HTMLElement): Promise<boolean> {
+    if (!label || this.releasingLabels.has(label)) return false;
+    this.releasingLabels.add(label);
+    chip?.setAttribute('aria-busy', 'true');
+    const button = chip?.querySelector<HTMLButtonElement>('.rm');
+    if (button) button.disabled = true;
+    try {
+      const released = await this.controller.releaseLabels([label]);
+      if (!released) {
+        this.toast(`Couldn't remove ${label}. Your hold is unchanged.`, 'error');
+        return false;
+      }
+      const remaining = this.controller.currentHold();
+      this.hold = remaining
+        ? { holdId: remaining.holdId, expiresAt: remaining.expiresAt, seats: remaining.seats, items: remaining.items }
+        : null;
+      this.handedOff = false;
+      this.bookedShown = false;
+      this.ctaPhase = 'idle';
+      if (this.hold) {
+        this.startHoldTimer(this.hold.expiresAt);
+      } else {
+        this.stopHoldTimer();
+        this.forgetHold();
+      }
+      this.syncTray();
+      this.toast(`${label} removed from your hold.`, 'success');
+      return true;
+    } finally {
+      this.releasingLabels.delete(label);
+      chip?.removeAttribute('aria-busy');
+      if (button?.isConnected) button.disabled = false;
+    }
+  }
+
   private async handleCta(): Promise<void> {
     // Best-available (or a prior CTA press) already holds the seats — hand off.
     // Held seats are NOT in the client selection (the server holds them), so
@@ -2271,6 +2409,7 @@ export class SeatPicker {
   private startHoldTimer(expiresAt: number): void {
     this.stopHoldTimer();
     this.holdExpiresAt = expiresAt;
+    if (this.hold) this.rememberHold(this.hold);
     const pill = this.els.hold;
     pill.innerHTML =
       '<span class="sl-hold-dot" aria-hidden="true"></span><span>Held</span><span class="sl-hold-time" data-ref="holdTime"></span>';
@@ -2355,6 +2494,7 @@ export class SeatPicker {
     this.bookedShown = true;
     const handoff = this.buildHandoff(this.hold);
     this.stopHoldTimer();
+    this.forgetHold();
     const n = handoff.lineItems.reduce((sum, i) => sum + i.quantity, 0);
     if (this.els.bookedSub) {
       this.els.bookedSub.innerHTML =
@@ -2438,6 +2578,21 @@ export class SeatPicker {
     return this.controller.getSelection();
   }
 
+  /** Current active/restored hold reflected in the tray. */
+  getCurrentHold(): HoldResult | null {
+    return this.hold;
+  }
+
+  /** Explicit host-driven hold restore (automatic session restore is on by default). */
+  async resumeHold(holdId: string): Promise<HoldResult | null> {
+    return this.resumeHoldFromServer(holdId, false);
+  }
+
+  /** Remove one server-held ticket while keeping the rest of the hold active. */
+  async removeHeldTicket(label: string): Promise<boolean> {
+    return this.removeHeldLabel(label);
+  }
+
   async bestAvailable(qty: number, categoryKey?: string): Promise<HoldResult | null> {
     if (this.bestAvailableBusy) return null;
     this.bestAvailableBusy = true;
@@ -2474,8 +2629,9 @@ export class SeatPicker {
   async release(): Promise<void> {
     const tracked = this.hold;
     const controllerHold = this.controller.currentHold();
+    let released = true;
     if (controllerHold) {
-      await this.controller.release();
+      released = await this.controller.release();
     } else if (tracked) {
       // The live controller can legitimately settle/clear its local hold before
       // the shell finishes dismissing. The shell still owns the server handoff,
@@ -2489,10 +2645,16 @@ export class SeatPicker {
           await this.api.release(this.opts.event, labels, tracked.holdId);
         } catch (error) {
           this.opts.onError?.(error);
+          released = false;
         }
       }
     }
+    if (!released) {
+      this.toast("Couldn't release your tickets. Your hold is unchanged.", 'error');
+      return;
+    }
     this.hold = null;
+    this.forgetHold();
     this.handedOff = false;
     this.bookedShown = false;
     this.ctaPhase = 'idle';

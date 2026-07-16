@@ -64,6 +64,11 @@ export interface HoldResult {
   items?: HoldLineItem[];
 }
 
+/** Browser-safe active-hold projection returned by the resume endpoint. */
+export interface ResumedHoldResult extends HoldResult {
+  items: HoldLineItem[];
+}
+
 /** Best-available response — the server-picked seats plus the hold they landed in. */
 export interface BestAvailableResult {
   holdId: string;
@@ -130,7 +135,14 @@ export class PubApi {
     });
   }
 
-  release(key: string, labels: string[], holdId: string): Promise<{ ok: true }> {
+  resume(key: string, holdId: string): Promise<ResumedHoldResult> {
+    return request(this.base, `/pub/events/${encodeURIComponent(key)}/hold/resume`, {
+      method: 'POST',
+      body: { holdId },
+    });
+  }
+
+  release(key: string, labels: string[], holdId: string): Promise<{ ok: true; released?: string[] }> {
     return request(this.base, `/pub/events/${encodeURIComponent(key)}/release`, {
       method: 'POST',
       body: { labels, holdId },

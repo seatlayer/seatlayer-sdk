@@ -151,6 +151,32 @@ Authorization: Bearer <your_secret_key>
 { "holdId": "<handoff.holdId>", "labels": [...], "bookingRef": "<your_order_id>" }
 ```
 
+## Returning from checkout and changing held tickets
+
+`SeatPicker` remembers only the opaque `holdId` in `sessionStorage`, scoped by
+API origin and event. When the buyer returns to the picker in the same browser
+tab, it verifies that capability with SeatLayer and restores the authoritative
+held line items, countdown, total, and map treatment. Expired, released, booked,
+foreign-event, and stale ids are discarded automatically.
+
+Every held ticket card has a remove control. Removing one calls the partial
+release API first; only after the server confirms does the card disappear and
+the seat return to free. The rest of the hold keeps its original id and expiry.
+
+Hosts that own persistence can opt out and supply their saved capability:
+
+```tsx
+<SeatPicker
+  event="ev_9f3a"
+  restoreHold={false}
+  initialHoldId={orderDraft.seatlayerHoldId}
+  onHoldRestored={(hold, seats, handoff) => syncOrderDraft(handoff)}
+/>
+```
+
+The imperative handles also expose `getCurrentHold()`, `resumeHold(holdId)`, and
+`removeHeldTicket(label)` (`SeatingChart` exposes `releaseLabels(labels)`).
+
 ## Booked confirmation (`onBooked`)
 
 After your server books the held seats, the booking is broadcast over the widget's

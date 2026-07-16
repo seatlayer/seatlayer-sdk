@@ -22,6 +22,10 @@ export type { SeatHoverDetails } from '@seatlayer/js';
 export interface SeatingChartHandle {
   /** Hold the current selection. Resolves the hold, or `null` on a 409 conflict. */
   hold(options?: { ttlMs?: number }): Promise<HoldResult | null>;
+  /** Restore an active hold by its opaque id. */
+  resumeHold(holdId: string): Promise<HoldResult | null>;
+  /** Current active hold known to the chart. */
+  getCurrentHold(): HoldResult | null;
   /** GA areas with live remaining capacity. */
   getGAAreas(): GAAreaAvailability[];
   /** Atomically hold a quantity from one GA area. */
@@ -30,6 +34,8 @@ export interface SeatingChartHandle {
   bestAvailable(qty: number, categoryKey?: string): Promise<BestAvailableResult | null>;
   /** Release the current hold (if any). */
   release(): Promise<void>;
+  /** Release some held labels while keeping the remainder active. */
+  releaseLabels(labels: string[]): Promise<boolean>;
   /** The current selection, with prices resolved from the chart categories. */
   getSelection(): SelectedSeat[];
   /**
@@ -96,6 +102,7 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
         messages: callbacks.current.messages,
         onSelectionChange: (seats) => callbacks.current.onSelectionChange?.(seats),
         onHold: (result) => callbacks.current.onHold?.(result),
+        onHoldRestored: (result) => callbacks.current.onHoldRestored?.(result),
         onHoldExpired: () => callbacks.current.onHoldExpired?.(),
         onGAClick: (area) => callbacks.current.onGAClick?.(area),
         onError: (err) => callbacks.current.onError?.(err),
@@ -119,11 +126,14 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
       ref,
       (): SeatingChartHandle => ({
         hold: (options) => chartRef.current?.hold(options) ?? Promise.resolve(null),
+        resumeHold: (holdId) => chartRef.current?.resumeHold(holdId) ?? Promise.resolve(null),
+        getCurrentHold: () => chartRef.current?.getCurrentHold() ?? null,
         getGAAreas: () => chartRef.current?.getGAAreas() ?? [],
         holdGA: (areaId, qty, options) => chartRef.current?.holdGA(areaId, qty, options) ?? Promise.resolve(null),
         bestAvailable: (qty, categoryKey) =>
           chartRef.current?.bestAvailable(qty, categoryKey) ?? Promise.resolve(null),
         release: () => chartRef.current?.release() ?? Promise.resolve(),
+        releaseLabels: (labels) => chartRef.current?.releaseLabels(labels) ?? Promise.resolve(false),
         getSelection: () => chartRef.current?.getSelection() ?? [],
         setSeatTier: (seatId, tierId) => chartRef.current?.setSeatTier(seatId, tierId),
         getFloors: () => chartRef.current?.getFloors() ?? [],
