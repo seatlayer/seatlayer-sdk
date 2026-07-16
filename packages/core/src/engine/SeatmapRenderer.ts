@@ -1527,8 +1527,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     }
 
     if (boothLabel) {
-      const owned = status === 'held' && this.ownedHold.has(id);
-      boothLabel.text(status === 'booked' ? 'SOLD' : status === 'held' ? (owned ? 'HELD BY YOU' : 'HELD') : seat.label);
+      boothLabel.text(status === 'booked' ? 'SOLD' : status === 'held' ? 'HELD' : seat.label);
       boothLabel.fontSize(status === 'free' ? 10 : Math.min(10, Math.max(6, this.boothDims.get(seat.rowId)?.width ?? 40) / 6));
       boothLabel.fontStyle(status === 'free' ? '600' : '800');
       boothLabel.fill(status === 'free' ? (this.theme.seatLabelColor ?? DEF_SEAT_LABEL) : '#ffffff');
