@@ -15,6 +15,8 @@ import type {
   SeatOverride,
   TableObject,
 } from './types';
+import { distributeAlongCubic } from './complexGeometry';
+import { translateSectionOutlinePath } from './sectionPath';
 
 /** Resolve a seat override's accessibility, honouring the legacy boolean flag. */
 function overrideAccessibility(o: SeatOverride | undefined): AccessibilityType[] {
@@ -61,6 +63,7 @@ function place(lx: number, ly: number, deg: number, origin: Point): { x: number;
 function rowSeatPositions(row: RowObject): Point[] {
   const { seatCount, seatSpacing, curve, rotation, origin } = row;
   const out: Point[] = [];
+  if (row.path) return distributeAlongCubic(row.path, seatCount);
   if (seatCount <= 1) {
     if (seatCount === 1) out.push({ x: origin.x, y: origin.y });
     return out;
@@ -272,6 +275,57 @@ export function pointInPolygon(p: Point, poly: Point[]): boolean {
   return inside;
 }
 
+function pointOnPolygonBoundary(p: Point, poly: Point[]): boolean {
+  return poly.some((start, index) => {
+    const end = poly[(index + 1) % poly.length];
+    const cross = (p.y - start.y) * (end.x - start.x) - (p.x - start.x) * (end.y - start.y);
+    if (Math.abs(cross) > 1e-7) return false;
+    const dot = (p.x - start.x) * (end.x - start.x) + (p.y - start.y) * (end.y - start.y);
+    const lengthSquared = (end.x - start.x) ** 2 + (end.y - start.y) ** 2;
+    return dot >= -1e-7 && dot <= lengthSquared + 1e-7;
+  });
+}
+
+export function pointInPolygonWithHoles(p: Point, outer: Point[], holes: Point[][] | undefined): boolean {
+  return pointInPolygon(p, outer)
+    && !(holes ?? []).some((hole) => pointInPolygon(p, hole) || pointOnPolygonBoundary(p, hole));
+}
+
+/** Stable interior label anchor that cannot land inside a polygon cutout. */
+export function polygonLabelPoint(outer: Point[], holes: Point[][] | undefined): Point {
+  if (!outer.length) return { x: 0, y: 0 };
+  const xs = outer.map((point) => point.x);
+  const ys = outer.map((point) => point.y);
+  const bounds = { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+  const centroid = polygonCentroid(outer);
+  if (pointInPolygonWithHoles(centroid, outer, holes)) return centroid;
+  let best = outer[0];
+  let bestScore = -Infinity;
+  const rings = [outer, ...(holes ?? [])];
+  for (let row = 1; row < 24; row += 1) {
+    for (let column = 1; column < 24; column += 1) {
+      const point = {
+        x: bounds.minX + ((bounds.maxX - bounds.minX) * column) / 24,
+        y: bounds.minY + ((bounds.maxY - bounds.minY) * row) / 24,
+      };
+      if (!pointInPolygonWithHoles(point, outer, holes)) continue;
+      const score = Math.min(...rings.flatMap((ring) => ring.map((start, index) => {
+        const end = ring[(index + 1) % ring.length];
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const denominator = dx * dx + dy * dy;
+        const projection = denominator
+          ? ((point.x - start.x) * dx + (point.y - start.y) * dy) / denominator
+          : 0;
+        const t = Math.max(0, Math.min(1, projection));
+        return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+      })));
+      if (score > bestScore) { best = point; bestScore = score; }
+    }
+  }
+  return best;
+}
+
 /** Average of polygon vertices (v1 centroid — good enough for labels/membership). */
 function polygonCentroid(pts: Point[]): Point {
   if (!pts.length) return { x: 0, y: 0 };
@@ -355,9 +409,14 @@ function translateObject(o: ChartObject, dx: number, dy: number): ChartObject {
     case 'booth':
       return { ...o, center: p(o.center) };
     case 'gaArea':
-      return { ...o, points: pts(o.points) };
+      return { ...o, points: pts(o.points), ...(o.holes ? { holes: o.holes.map(pts) } : {}) };
     case 'section':
-      return { ...o, outline: pts(o.outline) };
+      return {
+        ...o,
+        outline: pts(o.outline),
+        ...(o.outlinePath ? { outlinePath: translateSectionOutlinePath(o.outlinePath, dx, dy) } : {}),
+        ...(o.holes ? { holes: o.holes.map(pts) } : {}),
+      };
     case 'text':
       return { ...o, position: p(o.position) };
     case 'shape':

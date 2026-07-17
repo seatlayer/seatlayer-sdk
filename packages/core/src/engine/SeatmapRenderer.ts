@@ -21,7 +21,7 @@ import { Line } from 'konva/lib/shapes/Line';
 import { Text } from 'konva/lib/shapes/Text';
 import { Image as KImage } from 'konva/lib/shapes/Image';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import type { Shape } from 'konva/lib/Shape';
+import { Shape } from 'konva/lib/Shape';
 
 import type {
   AccessibilityType,
@@ -31,11 +31,28 @@ import type {
   ISeatmapRenderer,
   LodRung,
   Point,
+  RenderedBookableLabelEvidence,
+  RenderedGAAreaEvidence,
+  RenderedFreeTextEvidence,
+  RendererQualityEvidence,
   RendererOptions,
   SeatStatus,
+  SectionOutlinePath,
   SectionObject,
 } from '../core/types';
-import { chartBounds, expandChart, floorsOf, pointInPolygon, stackFloors } from '../core/layout';
+import { chartBounds, expandChart, floorsOf, pointInPolygonWithHoles, polygonLabelPoint, stackFloors } from '../core/layout';
+import {
+  BOOTH_LABEL_FONT_SIZE,
+  GA_CAPACITY_LABEL_FONT_SIZE,
+  GA_FILL_OPACITY,
+  GA_LABEL_FONT_SIZE,
+  MIN_VISIBLE_BOOKABLE_LABEL_PX,
+  SEAT_LABEL_FONT_SIZE,
+  bookableMarkerLabel,
+  compositeHexOver,
+  isBookableLabelLegibleAtScale,
+  stateAwareBookableLabelInk,
+} from '../core/chartRenderRules';
 import { t } from '../i18n';
 import { formatMoney } from '../lib/money';
 
@@ -44,16 +61,14 @@ const SEAT_RADIUS = 9;
 const SEAT_LEGIBLE_SCALE = 0.9;
 /** Below this absolute scale we swap seats for a cached bitmap. */
 const CACHE_THRESHOLD = 0.55 * SEAT_LEGIBLE_SCALE;
-/** Show per-seat labels above this ABSOLUTE scale (seat ⌀ ≈ 18px) — chart-size independent. */
-const LABEL_SCALE = 1.0;
+/** First scale where a 7u seat label reaches the shared rendered-size floor. */
+const LABEL_SCALE = MIN_VISIBLE_BOOKABLE_LABEL_PX / SEAT_LABEL_FONT_SIZE;
+const MIN_FITTED_SEAT_LABEL_FONT_SIZE = 4;
 /** Extra screen-px of slack around a seat circle that still counts as a tap on
  *  it. Gives small seats a finger-friendly hit target (§4 "hit ≥ 24px") so a
  *  near-miss on mobile still selects the nearest seat instead of doing nothing. */
 const SEAT_TAP_SLOP_PX = 14;
-/**
- * At/below this scale, sections read as solid BLOCKS with row-line hints (seats
- * fully hidden) — the seats.io-style default overview.
- */
+/** At/below this scale, sections read as clean labelled shells (seats hidden). */
 const SECTION_PROMINENT_SCALE = 0.45 * SEAT_LEGIBLE_SCALE;
 /**
  * Above this scale, seats are fully shown (dots); between here and
@@ -95,15 +110,25 @@ const ISO_TWEEN_MS = 320;
 const CAMERA_GLIDE_MS = 650;
 
 // ---- Section/zone LOD ("melt") tuning -------------------------------------
-/** Peak fill opacity of a solid section block at the block rung. */
-const BLOCK_FILL_ALPHA = 0.85;
-/** How far a fully-sold section's fill darkens toward black. */
-const SOLD_DARKEN = 0.5;
+/** Section overview is a semantic hierarchy, not a price/availability heatmap. */
+const BLOCK_FILL_ALPHA = 1;
+const SECTION_STROKE_PX = 2;
+const LIGHT_OVERVIEW_SECTION_FILL = '#e5e7eb';
+const LIGHT_OVERVIEW_SECTION_STROKE = '#c7cbd1';
+const LIGHT_OVERVIEW_SECTION_INK = '#595f69';
+const LIGHT_OVERVIEW_FOCAL_FILL = '#d1d5db';
+const LIGHT_OVERVIEW_FOCAL_STROKE = '#b8bdc4';
+const DARK_OVERVIEW_SECTION_FILL = '#273142';
+const DARK_OVERVIEW_SECTION_STROKE = '#526078';
+const DARK_OVERVIEW_SECTION_INK = '#f1f5f9';
+const DARK_OVERVIEW_FOCAL_FILL = '#374151';
+const DARK_OVERVIEW_FOCAL_STROKE = '#64748b';
 /** Screen-space target sizes (px) for scale-compensated section/zone labels. */
 const SECTION_LABEL_PX = 20;
-const SECTION_SUB_PX = 12.5;
-const ZONE_LABEL_PX = 30;
+const MIN_SECTION_LABEL_PX = 12;
+const ZONE_LABEL_PX = 18;
 const ZONE_SUB_PX = 12;
+const HIERARCHY_PILL_BACKGROUND = '#111827';
 
 const HELD_FILL = '#6b7280';
 const TAKEN_FILL = '#374151';
@@ -111,13 +136,10 @@ const NFS_STROKE = '#4b5563';
 /** Phase 2 event-level `closed` section: a flat desaturated slate block (label
  *  kept), distinct from the per-seat availability-grey. Seats inside read grey
  *  at 40% and are not pickable (per chart-design-standards §3). */
-const CLOSED_SECTION_FILL = '#586070';
 const CLOSED_SEAT_FILL = '#4b5563';
 const CLOSED_SEAT_OPACITY = 0.4;
-/** AXS section-focus: non-focused sections dim to this opacity + desaturate. */
+/** AXS section-focus: non-focused sections dim to this opacity. */
 const FOCUS_DIM_OPACITY = 0.16;
-const FOCUS_DESATURATE = 0.72; // lerp non-focused fills toward neutral grey
-const FOCUS_NEUTRAL = '#6b7280';
 /** Light/neutral backdrop panel drawn behind the focused section's seats. */
 const FOCUS_BACKDROP_FILL = 'rgba(244,246,248,0.06)';
 /** Okabe-Ito colorblind-safe hues (black dropped — unreadable on dark charts).
@@ -148,6 +170,7 @@ const DEF_SELECTION = '#ffffff';
 const DEF_SELECTION_ON_LIGHT = '#0b1220';
 const DEF_DECOR_FILL = '#232c40';
 const DEF_TEXT = '#8b93a7';
+const DEF_CANVAS_BACKGROUND = '#0e1117';
 
 /**
  * Relative luminance (0..1) of a CSS color — supports #rgb, #rrggbb and
@@ -181,6 +204,49 @@ function colorLuminance(color: string): number {
 function isLightColor(color: string): boolean {
   const lum = colorLuminance(color);
   return !Number.isNaN(lum) && lum > 0.6;
+}
+
+/** Normalize the opaque CSS colours used by supported buyer surfaces. */
+function opaqueColorHex(color: string): string | null {
+  const value = color.trim();
+  const hex = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(value);
+  if (hex) {
+    const expanded = hex[1].length === 3
+      ? hex[1].split('').map((channel) => channel + channel).join('')
+      : hex[1];
+    return `#${expanded.toLowerCase()}`;
+  }
+  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)$/i.exec(value);
+  if (!rgb || (rgb[4] != null && Number(rgb[4]) < 0.999)) return null;
+  const channels = [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+  if (channels.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)) return null;
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+}
+
+interface OverviewPalette {
+  sectionFill: string;
+  sectionStroke: string;
+  sectionInk: string;
+  focalFill: string;
+  focalStroke: string;
+}
+
+function overviewPalette(canvasBackground: string): OverviewPalette {
+  return isLightColor(canvasBackground)
+    ? {
+        sectionFill: LIGHT_OVERVIEW_SECTION_FILL,
+        sectionStroke: LIGHT_OVERVIEW_SECTION_STROKE,
+        sectionInk: LIGHT_OVERVIEW_SECTION_INK,
+        focalFill: LIGHT_OVERVIEW_FOCAL_FILL,
+        focalStroke: LIGHT_OVERVIEW_FOCAL_STROKE,
+      }
+    : {
+        sectionFill: DARK_OVERVIEW_SECTION_FILL,
+        sectionStroke: DARK_OVERVIEW_SECTION_STROKE,
+        sectionInk: DARK_OVERVIEW_SECTION_INK,
+        focalFill: DARK_OVERVIEW_FOCAL_FILL,
+        focalStroke: DARK_OVERVIEW_FOCAL_STROKE,
+      };
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -225,6 +291,136 @@ function polyBounds(pts: Point[]): { x: number; y: number; width: number; height
     if (p.y > maxY) maxY = p.y;
   }
   return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+}
+
+function rotatedRectPoints(center: Point, width: number, height: number, rotation: number): Point[] {
+  const radians = rotation * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return [
+    { x: -width / 2, y: -height / 2 },
+    { x: width / 2, y: -height / 2 },
+    { x: width / 2, y: height / 2 },
+    { x: -width / 2, y: height / 2 },
+  ].map((point) => ({
+    x: center.x + point.x * cos - point.y * sin,
+    y: center.y + point.x * sin + point.y * cos,
+  }));
+}
+
+function pointsBounds(points: Point[]): { x: number; y: number; width: number; height: number } {
+  const bounds = polyBounds(points);
+  return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+}
+
+/**
+ * Prove the whole rotated label rectangle remains on the filled shell. Sampling
+ * a small grid (rather than corners alone) also catches a concave edge or aisle
+ * hole passing through the middle of otherwise-valid corners.
+ */
+function rotatedRectFitsPolygon(
+  center: Point,
+  width: number,
+  height: number,
+  rotation: number,
+  outer: Point[],
+  holes: Point[][],
+): boolean {
+  const radians = rotation * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  for (let yStep = 0; yStep <= 4; yStep++) {
+    for (let xStep = 0; xStep <= 6; xStep++) {
+      const localX = width * (xStep / 6 - 0.5);
+      const localY = height * (yStep / 4 - 0.5);
+      const point = {
+        x: center.x + localX * cos - localY * sin,
+        y: center.y + localX * sin + localY * cos,
+      };
+      if (!pointInPolygonWithHoles(point, outer, holes)) return false;
+    }
+  }
+  return true;
+}
+
+/** Centre-first interior anchors used when a hole/concavity occupies the shell centre. */
+function polygonLabelCandidates(outer: Point[], holes: Point[][], preferred: Point): Point[] {
+  const bounds = polyBounds(outer);
+  const centre = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  const points: Point[] = [preferred];
+  for (let row = 1; row < 12; row += 1) {
+    for (let column = 1; column < 12; column += 1) {
+      const point = {
+        x: bounds.x + bounds.width * column / 12,
+        y: bounds.y + bounds.height * row / 12,
+      };
+      if (pointInPolygonWithHoles(point, outer, holes)) points.push(point);
+    }
+  }
+  return points
+    .sort((left, right) => Math.hypot(left.x - centre.x, left.y - centre.y)
+      - Math.hypot(right.x - centre.x, right.y - centre.y))
+    .filter((point, index, all) => index === all.findIndex((other) => (
+      Math.abs(other.x - point.x) < 1e-6 && Math.abs(other.y - point.y) < 1e-6
+    )));
+}
+
+function polygonWithHolesShape(
+  outer: Point[],
+  holes: Point[][] | undefined,
+  attrs: { fill?: string; stroke?: string; strokeWidth?: number; opacity?: number; listening?: boolean },
+  outerPath?: SectionOutlinePath,
+): Shape {
+  const signedArea = (points: Point[]): number => points.reduce((sum, point, index) => {
+    const next = points[(index + 1) % points.length];
+    return sum + point.x * next.y - next.x * point.y;
+  }, 0);
+  const outerClockwise = signedArea(outer) > 0;
+  return new Shape({
+    ...attrs,
+    sceneFunc(context, shape) {
+      context.beginPath();
+      const polygonPath = (points: Point[]) => {
+        if (!points.length) return;
+        context.moveTo(points[0].x, points[0].y);
+        for (let index = 1; index < points.length; index += 1) context.lineTo(points[index].x, points[index].y);
+        context.closePath();
+      };
+      const vectorPath = (path: SectionOutlinePath) => {
+        context.moveTo(path.start.x, path.start.y);
+        let current = path.start;
+        for (const segment of path.segments) {
+          if (segment.kind === 'line') context.lineTo(segment.end.x, segment.end.y);
+          else if (segment.kind === 'arc') context.arc(
+            segment.center.x,
+            segment.center.y,
+            segment.radius,
+            Math.atan2(current.y - segment.center.y, current.x - segment.center.x),
+            Math.atan2(segment.end.y - segment.center.y, segment.end.x - segment.center.x),
+            !segment.clockwise,
+          );
+          else context.bezierCurveTo(
+            segment.control1.x, segment.control1.y,
+            segment.control2.x, segment.control2.y,
+            segment.end.x, segment.end.y,
+          );
+          current = segment.end;
+        }
+        context.closePath();
+      };
+      if (outerPath) vectorPath(outerPath);
+      else polygonPath(outer);
+      // Canvas' default non-zero rule cuts a hole only when its winding is the
+      // opposite of the outer path. Normalize here so imported docs do not
+      // depend on the order in which a client happened to serialize vertices.
+      for (const hole of holes ?? []) {
+        const holeClockwise = signedArea(hole) > 0;
+        polygonPath(holeClockwise === outerClockwise ? [...hole].reverse() : hole);
+      }
+      context.fillStrokeShape(shape);
+    },
+    perfectDrawEnabled: false,
+  });
 }
 
 /** #rrggbb → rgba() string at alpha `a`; passes non-hex through unchanged. */
@@ -277,9 +473,15 @@ function lerpColor(a: string, b: string, t: number): string {
 /** Per-section render state for the block LOD rung (fills, labels, membership). */
 interface SectionRender {
   id: string;
+  /** Shared public management identity for disconnected visual components. */
+  logicalId: string;
   label: string;
   outline: Point[];
+  outlinePath?: SectionOutlinePath;
+  holes: Point[][];
   centroid: Point;
+  /** Deterministic centre-first alternatives for concave/holed label fitting. */
+  labelAnchors: Point[];
   zone?: string;
   /** Seats whose centre falls inside the outline (first-match, doc order). */
   memberIds: string[];
@@ -289,15 +491,16 @@ interface SectionRender {
   baseFill: string;
   outlineTint: string;
   /** Faint outline drawn under seats — the existing near-zoom look, untouched. */
-  outlinePoly: Line;
+  outlinePoly: Shape;
   /** Solid block fill that melts in at the block rung. */
-  blockPoly: Line;
-  /** Faint per-row hint lines drawn inside the block (the seats.io "rows" look). */
-  rowLines: Line[];
+  blockPoly: Shape;
   /** Section name (always drawn; brightens at the block rung, hides at zone rung). */
   nameLabel: Text;
-  /** Mono "N LEFT" availability sublabel (block rung only). */
+  /** Availability retained for focused/detail UI, never painted on the overview shell. */
   subLabel: Text;
+  /** Responsive fit decisions for the current stage scale and local polygon span. */
+  nameLabelFits: boolean;
+  subLabelFits: boolean;
   /** Tier height (0 = floor). Lifts the section + members in iso ("3D") view. */
   elevation: number;
   /**
@@ -313,6 +516,9 @@ interface SectionRender {
 /** Per-zone render state for the farthest LOD rung. */
 interface ZoneRender {
   id: string;
+  anchor: Point;
+  back: Rect;
+  background: string;
   label: Text;
   sub: Text | null;
 }
@@ -338,11 +544,36 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private circleById = new Map<string, Shape>();
   /** Booth block geometry, keyed by booth id (= the unit's rowId). */
   private boothDims = new Map<string, { width: number; height: number; rotation: number }>();
-  /** Booth label node so status changes can say HELD/SOLD on the full block. */
+  /** Booth labels live with the booth shape but obey the shared rendered-size LOD. */
   private boothLabelById = new Map<string, Text>();
+  /** Viewport seat labels are rebuilt after each settled camera change. */
+  private seatLabelById = new Map<string, Text>();
+  /** Authored free-text nodes obey the same rendered-size visibility floor. */
+  private freeTextById = new Map<string, {
+    objectId?: string;
+    node: Text;
+    background: string;
+    kind: RenderedFreeTextEvidence['kind'];
+    categoryKey?: string;
+  }>();
+  /** Stage/rink landmarks retain a readable screen-space caption at overview. */
+  private primaryFocalLabels = new Map<Text, number>();
+  /** GA paint and text share price/highlight filter state. */
+  private gaById = new Map<string, {
+    label: string;
+    capacity: number;
+    categoryKey: string;
+    points: Point[];
+    polygon: Shape;
+    effectiveBackground: string;
+    /** GA inventory contained by a section is detail, not overview paint. */
+    sectionId?: string;
+  }>();
   private statusById = new Map<string, SeatStatus>();
   private catColor = new Map<string, string>();
   private theme: ChartTheme = {};
+  /** Opaque paint actually visible behind transparent Konva canvases. */
+  private canvasBackground = DEF_CANVAS_BACKGROUND;
   /** Effective selection/hover ring color — resolved per chart in setChart(). */
   private effSelection: string = DEF_SELECTION;
   /** Colorblind-safe mode (Okabe-Ito hues + hollow booked seats). */
@@ -389,7 +620,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   /** AXS section-focus: the currently-focused section id (others dim), or null. */
   private focusedSectionId: string | null = null;
   /** Light backdrop panel drawn behind the focused section (removed on clear). */
-  private focusBackdrop: Line | null = null;
+  private focusBackdrop: Group | null = null;
   /** Object id → floor id (multi-floor only) — resolves a deck tap in the 3D stack. */
   private objectFloor = new Map<string, string>();
   /** Zone id → colour (drives extruded side faces in iso view). */
@@ -548,6 +779,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.circleById.clear();
     this.boothDims.clear();
     this.boothLabelById.clear();
+    this.seatLabelById.clear();
+    this.freeTextById.clear();
+    this.primaryFocalLabels.clear();
+    this.gaById.clear();
+    for (const marker of this.selectionMarkers.values()) marker.destroy();
     this.selectionMarkers.clear();
     this.ownedHold.clear();
     this.selectionFocusId = null;
@@ -559,6 +795,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.sections = [];
     this.zones = [];
     this.seatSection.clear();
+    // Section focus is a transient camera/view state. Carrying a section id
+    // across a floor switch can match nothing on the next floor and dim every
+    // newly rendered section as though it were a non-focused sibling.
+    this.focusedSectionId = null;
+    this.focusBackdrop = null;
     this.catPrice.clear();
     this.zoneColor.clear();
     this.lodScale = 0;
@@ -578,8 +819,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // Adjustable seat size: a chart-level scale on the base radius. Clamped so
     // enlarged seats don't collide with typical row spacing (~24 units).
     this.seatR = clamp(this.theme.seatScale ?? 1, 0.7, 1.6) * SEAT_RADIUS;
-    // Canvas background via container style (reset to '' when theme omits it).
-    this.container.style.background = this.theme.background ?? '';
+    // Resolve an unthemed embed against its real host surface once, then pin
+    // that opaque paint on the renderer container. Rendering decisions and QA
+    // evidence must describe the same pixels even when Konva stays transparent.
+    this.container.style.background = '';
+    this.canvasBackground = this.resolveCanvasBackground();
+    this.container.style.background = this.canvasBackground;
     this.effSelection = this.resolveSelectionColor();
     this.hoverRing.stroke(this.effSelection);
     this.hoverRing.radius(this.seatR + 2);
@@ -845,12 +1090,22 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     return this.selectMany(ids);
   }
 
+  /** Exact SDK capture helper. MCP never accepts this id; the SDK derives it
+   * from the persisted floor and uses the normal selected paint/ring path. */
+  setEvidenceSelection(seatId: string): boolean {
+    if (!this.seatById.has(seatId) || !this.isSelectable(seatId)) return false;
+    if (this.selection.size) this.clearSelection();
+    this.setSelected(seatId, true);
+    this.overlayLayer.batchDraw();
+    return this.selection.has(seatId);
+  }
+
   /** Selectable seats in a section OR zone id — pure read (no selection change). */
   getSelectableInSection(sectionId: string): ExpandedSeat[] {
     const out: ExpandedSeat[] = [];
     const seen = new Set<string>();
     for (const sec of this.sections) {
-      if (sec.id !== sectionId && sec.zone !== sectionId) continue;
+      if (sec.id !== sectionId && sec.logicalId !== sectionId && sec.zone !== sectionId) continue;
       for (const id of sec.memberIds) {
         if (seen.has(id)) continue;
         seen.add(id);
@@ -1188,6 +1443,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     return this.seats.length;
   }
 
+  bookableCount(): number {
+    let total = this.seats.length;
+    for (const area of this.gaById.values()) total += area.capacity;
+    return total;
+  }
+
   worldToScreen(point: Point): { x: number; y: number } {
     const s = this.stage.scaleX();
     // In iso view, host overlays (confirm card, tooltip) must anchor to the
@@ -1209,6 +1470,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const c = this.circleById.get(seat.id);
       if (c) this.paintSeat(c, seat.id);
     }
+    this.updateLabels();
     if (this.cached) {
       this.seatLayer.clearCache();
       this.cacheSeatLayer();
@@ -1239,11 +1501,42 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const c = this.circleById.get(seat.id);
       if (c) this.paintSeat(c, seat.id);
     }
+    this.updateLabels();
     if (this.cached) {
       this.seatLayer.clearCache();
       this.cacheSeatLayer();
     } else {
       this.seatLayer.batchDraw();
+    }
+    this.applyGAFilterState();
+  }
+
+  private gaCategoryDimmed(categoryKey: string): boolean {
+    return Boolean(
+      (this.categoryHighlight && categoryKey !== this.categoryHighlight)
+      || (this.categoryFilter && !this.categoryFilter.has(categoryKey)),
+    );
+  }
+
+  /** Keep GA paint and its two labels in the same legend/price-filter state. */
+  private applyGAFilterState(): void {
+    this.paintGAStateForView();
+    this.updateFreeTextVisibility();
+    this.bgLayer.batchDraw();
+  }
+
+  private paintGAStateForView(): void {
+    for (const ga of this.gaById.values()) {
+      const filteredOut = Boolean(this.categoryFilter && !this.categoryFilter.has(ga.categoryKey));
+      const overviewHidden = ga.sectionId != null && this.effScale() < CACHE_THRESHOLD;
+      ga.polygon.opacity(overviewHidden
+        ? 0
+        : this.gaCategoryDimmed(ga.categoryKey)
+          ? GA_FILL_OPACITY * 0.08
+          : GA_FILL_OPACITY);
+      // A legend hover is only visual; a price-filter exclusion is not sellable
+      // from the map until the filter is cleared.
+      ga.polygon.listening(!overviewHidden && !filteredOut);
     }
   }
 
@@ -1564,14 +1857,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     });
     rect.setAttr('seatId', seat.id);
     this.circleById.set(seat.id, rect);
-    this.paintSeat(rect, seat.id);
     target.add(rect);
 
     const t = new Text({
       x: seat.x,
       y: seat.y,
       text: seat.label,
-      fontSize: 10,
+      fontSize: BOOTH_LABEL_FONT_SIZE,
       fontStyle: '600',
       fontFamily: this.labelFont(),
       fill: this.theme.seatLabelColor ?? DEF_SEAT_LABEL,
@@ -1580,9 +1872,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     });
     t.offsetX(t.width() / 2);
     t.offsetY(t.height() / 2);
+    t.visible(false);
+    this.boothLabelById.set(seat.id, t);
     this.hasBoothText = true; // gate the upright-label scan of the seat layer
     this.boothLabelById.set(seat.id, t);
     target.add(t);
+    this.paintSeat(rect, seat.id);
   }
 
   /** The category's display color — Okabe-Ito hue when colorblind-safe is on. */
@@ -1590,6 +1885,16 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (!this.colorblind) return this.catColor.get(categoryKey) ?? '#6e7bff';
     const idx = this.catOrder.indexOf(categoryKey);
     return CB_PALETTE[(idx >= 0 ? idx : 0) % CB_PALETTE.length];
+  }
+
+  /** Authored free fills retain the chart's validated ink. Renderer-owned
+   * transient fills choose an ink against the paint that is actually visible. */
+  private renderedBookableLabelInk(id: string, shape: Shape): string {
+    const preferred = this.theme.seatLabelColor ?? DEF_SEAT_LABEL;
+    const status = this.statusById.get(id) ?? 'free';
+    if (status === 'free' && !this.selection.has(id)) return preferred;
+    const fill = shape.fill();
+    return stateAwareBookableLabelInk(typeof fill === 'string' ? fill : '', preferred);
   }
 
   /** Apply fill/stroke/opacity for a seat's current status + selection. */
@@ -1672,7 +1977,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // read as inactive so the map matches the Sections list at a glance.
     if (this.dimmedSections.size) {
       const sec = this.seatSection.get(id);
-      if (sec && (this.dimmedSections.has(sec.id) || (sec.zone != null && this.dimmedSections.has(sec.zone)))) {
+      if (sec && (
+        this.dimmedSections.has(sec.id)
+        || this.dimmedSections.has(sec.logicalId)
+        || (sec.zone != null && this.dimmedSections.has(sec.zone))
+      )) {
         c.opacity(0.18);
       }
     }
@@ -1689,20 +1998,36 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // the focused block reads against a calm ground (§4 focus spec).
     if (this.focusedSectionId) {
       const sec = this.seatSection.get(id);
-      const inFocus = !!sec && (sec.id === this.focusedSectionId || sec.zone === this.focusedSectionId);
+      const inFocus = !!sec && (
+        sec.id === this.focusedSectionId
+        || sec.logicalId === this.focusedSectionId
+        || sec.zone === this.focusedSectionId
+      );
       if (!inFocus) c.opacity(FOCUS_DIM_OPACITY);
     }
     // Buyer confirmation focus: retain the candidate at full strength while
-    // every unrelated seat recedes. The candidate/selected markers live on the
-    // overlay layer and are dimmed separately so state remains readable.
+    // every unrelated seat recedes. Labels use the resulting opacity below so
+    // the detail layer follows the same focus hierarchy as the seat geometry.
     if (this.selectionFocusId && id !== this.selectionFocusId) c.opacity(Math.min(c.opacity(), 0.16));
+    const bookableLabel = this.boothLabelById.get(id) ?? this.seatLabelById.get(id);
+    if (bookableLabel) {
+      bookableLabel.fill(this.renderedBookableLabelInk(id, c));
+      bookableLabel.visible(
+        isBookableLabelLegibleAtScale(bookableLabel.fontSize(), this.effScale())
+        && c.opacity() >= 0.5,
+      );
+    }
   }
 
   /** True when a seat sits in a section/zone currently marked `closed`. */
   private seatInClosedSection(id: string): boolean {
     if (!this.closedSections.size) return false;
     const sec = this.seatSection.get(id);
-    return !!sec && (this.closedSections.has(sec.id) || (sec.zone != null && this.closedSections.has(sec.zone)));
+    return !!sec && (
+      this.closedSections.has(sec.id)
+      || this.closedSections.has(sec.logicalId)
+      || (sec.zone != null && this.closedSections.has(sec.zone))
+    );
   }
 
   /**
@@ -1716,6 +2041,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const c = this.circleById.get(seat.id);
       if (c) this.paintSeat(c, seat.id);
     }
+    this.updateLabels();
     if (this.cached) {
       this.seatLayer.clearCache();
       this.cacheSeatLayer();
@@ -1763,7 +2089,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    * seat-pick gate below only lets buyers pick once seats are ≥ LABEL_SCALE big).
    */
   focusSection(id: string): void {
-    if (!this.sections.some((s) => s.id === id)) return;
+    if (!this.sections.some((section) => section.id === id || section.logicalId === id)) return;
     this.focusedSectionId = id;
     this.drawFocusBackdrop(id);
     this.repaintSectionsAndSeats();
@@ -1794,20 +2120,20 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       this.focusBackdrop.destroy();
       this.focusBackdrop = null;
     }
-    const sec = this.sections.find((s) => s.id === id);
-    if (!sec) return;
-    const panel = new Line({
-      points: sec.outline.flatMap((p) => [p.x, p.y]),
-      closed: true,
-      fill: FOCUS_BACKDROP_FILL,
-      stroke: rgba('#ffffff', 0.1),
-      strokeWidth: 1,
-      listening: false,
-      perfectDrawEnabled: false,
-    });
-    this.bgLayer.add(panel);
-    panel.moveToTop(); // above the dimmed sibling blocks, still under the seat layer
-    this.focusBackdrop = panel;
+    const sections = this.sections.filter((section) => section.id === id || section.logicalId === id);
+    if (!sections.length) return;
+    const backdrop = new Group({ listening: false });
+    for (const section of sections) {
+      backdrop.add(polygonWithHolesShape(section.outline, section.holes, {
+        fill: FOCUS_BACKDROP_FILL,
+        stroke: rgba('#ffffff', 0.1),
+        strokeWidth: 1,
+        listening: false,
+      }, section.outlinePath));
+    }
+    this.bgLayer.add(backdrop);
+    backdrop.moveToTop(); // above the dimmed sibling blocks, still under the seat layer
+    this.focusBackdrop = backdrop;
   }
 
   /** Repaint every seat + section block to reflect closed/focus state, then redraw. */
@@ -1838,7 +2164,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     };
   }
 
-  /** Axis-aligned world bounds of all seats + section outlines (minimap F3 frame). */
+  /** Axis-aligned world bounds of seats, section outlines, and GA polygons (minimap F3 frame). */
   getWorldBounds(): { x: number; y: number; width: number; height: number } {
     let minX = Infinity;
     let minY = Infinity;
@@ -1852,6 +2178,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     };
     for (const s of this.seats) grow(s.x, s.y);
     for (const sec of this.sections) for (const p of sec.outline) grow(p.x, p.y);
+    for (const area of this.gaById.values()) for (const p of area.points) grow(p.x, p.y);
     if (!Number.isFinite(minX)) return { x: 0, y: 0, width: 1, height: 1 };
     return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
   }
@@ -1864,12 +2191,14 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const c = this.circleById.get(seat.id);
       if (c) this.paintSeat(c, seat.id);
     }
+    this.updateLabels();
     if (this.cached) {
       this.seatLayer.clearCache();
       this.cacheSeatLayer();
     } else {
       this.seatLayer.batchDraw();
     }
+    this.applyGAFilterState();
   }
 
   private renderBackground(doc: ChartDoc): void {
@@ -1895,34 +2224,43 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         this.renderText(obj);
       }
     }
-    // Focal-point crosshair marker.
-    const f = doc.focalPoint;
-    if (f) {
-      const size = 14;
-      const cross = new Group({ listening: false });
-      cross.add(
-        new Line({ points: [f.x - size, f.y, f.x + size, f.y], stroke: '#4b5563', strokeWidth: 1.5 }),
-        new Line({ points: [f.x, f.y - size, f.x, f.y + size], stroke: '#4b5563', strokeWidth: 1.5 }),
-        new Circle({ x: f.x, y: f.y, radius: 3, fill: '#4b5563' }),
-      );
-      this.bgLayer.add(cross);
-    }
+    // `focalPoint` is authoring geometry, not buyer-facing décor. The designer
+    // exposes its guide only while the focal tool is active.
   }
 
   /** Organizer floor-plan photo, dimmed, at the very bottom of the bg layer. */
   private renderBackgroundImage(bg: NonNullable<ChartDoc['backgroundImage']>): void {
+    if (!bg.url || bg.visible === false) return;
     const img = new window.Image();
     img.onload = () => {
       const natW = img.naturalWidth || 4;
       const natH = img.naturalHeight || 3;
+      const rawCrop = bg.crop ?? { x: 0, y: 0, width: 1, height: 1 };
+      const cropX = Math.max(0, Math.min(0.99, rawCrop.x));
+      const cropY = Math.max(0, Math.min(0.99, rawCrop.y));
+      const crop = {
+        x: cropX,
+        y: cropY,
+        width: Math.max(0.01, Math.min(1 - cropX, rawCrop.width)),
+        height: Math.max(0.01, Math.min(1 - cropY, rawCrop.height)),
+      };
       const w = bg.width;
-      const h = w * (natH / natW);
+      const h = w * ((natH * crop.height) / (natW * crop.width));
       const node = new KImage({
         image: img,
-        x: bg.center.x - w / 2,
-        y: bg.center.y - h / 2,
+        x: bg.center.x,
+        y: bg.center.y,
+        offsetX: w / 2,
+        offsetY: h / 2,
         width: w,
         height: h,
+        rotation: bg.rotation ?? 0,
+        crop: {
+          x: crop.x * natW,
+          y: crop.y * natH,
+          width: crop.width * natW,
+          height: crop.height * natH,
+        },
         opacity: bg.opacity,
         listening: false,
       });
@@ -1999,31 +2337,49 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         }),
       );
     }
-    this.addCentredLabel(this.bgLayer, obj.label, obj.center.x, obj.center.y, '#cbd5e1', 12, true);
+    const label = this.addCentredLabel(this.bgLayer, obj.label, obj.center.x, obj.center.y, '#cbd5e1', 12, true);
+    this.freeTextById.set(obj.id, { node: label, background: '#232c40', kind: 'table' });
   }
 
   private renderText(obj: Extract<ChartDoc['objects'][number], { type: 'text' }>): void {
-    this.bgLayer.add(
-      new Text({
-        x: obj.position.x,
-        y: obj.position.y,
-        text: obj.text,
-        fontSize: obj.fontSize,
-        rotation: obj.rotation,
-        fill: obj.color ?? this.theme.textColor ?? DEF_TEXT,
-        fontFamily: this.labelFont(),
-        listening: false,
-        perfectDrawEnabled: false,
-      }),
-    );
+    const background = this.canvasBackground;
+    const preferredInk = obj.color ?? this.theme.textColor ?? DEF_TEXT;
+    const node = new Text({
+      x: obj.position.x,
+      y: obj.position.y,
+      text: obj.text,
+      fontSize: obj.fontSize,
+      rotation: obj.rotation,
+      // Authored ink remains preferred, but an embed/theme surface can change
+      // the actual canvas. Fail over to readable black/white instead of
+      // painting an otherwise valid caption invisibly on that active surface.
+      fill: stateAwareBookableLabelInk(background, preferredInk),
+      fontFamily: this.labelFont(),
+      listening: false,
+      perfectDrawEnabled: false,
+    });
+    this.freeTextById.set(obj.id, {
+      node,
+      background,
+      kind: 'free-text',
+    });
+    this.bgLayer.add(node);
   }
 
   private renderShape(obj: Extract<ChartDoc['objects'][number], { type: 'shape' }>): void {
-    const fill = obj.fill ?? this.theme.decorFill ?? DEF_DECOR_FILL;
+    const authoredFill = obj.fill ?? this.theme.decorFill ?? DEF_DECOR_FILL;
     const isStage = obj.role === 'stage';
+    const referenceFocal = obj.role === 'reference-focal';
     const isDecor = !!obj.role && !isStage;
+    const palette = overviewPalette(this.canvasBackground);
+    // A sampled source colour remains persisted on the object as evidence, but
+    // the buyer overview renders the focal landmark as the same neutral visual
+    // hierarchy as the supplied seating-chart target. Source black must not
+    // become an unlabelled black hole in the generated chart.
+    const fill = referenceFocal ? palette.focalFill : authoredFill;
     // Stage: darker at the back (min-y), brighter toward the audience edge (max-y).
-    const stroke = isStage ? lighten(fill, 0.28) : undefined;
+    const stroke = isStage ? lighten(fill, 0.28) : referenceFocal ? palette.focalStroke : undefined;
+    const strokeWidth = isStage ? 1 : referenceFocal ? 2 : 0;
     let cx = 0;
     let cy = 0;
     if (obj.kind === 'rect' && obj.x != null && obj.y != null && obj.width != null && obj.height != null) {
@@ -2049,7 +2405,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
           height: obj.height,
           ...grad,
           stroke,
-          strokeWidth: isStage ? 1 : 0,
+          strokeWidth,
           cornerRadius: 4,
           listening: false,
         }),
@@ -2065,7 +2421,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
           }
         : { fill };
       this.bgLayer.add(
-        new Ellipse({ x: cx, y: cy, rotation: obj.rotation ?? 0, radiusX: obj.width / 2, radiusY: obj.height / 2, ...grad, stroke, strokeWidth: isStage ? 1 : 0, listening: false }),
+        new Ellipse({ x: cx, y: cy, rotation: obj.rotation ?? 0, radiusX: obj.width / 2, radiusY: obj.height / 2, ...grad, stroke, strokeWidth, listening: false }),
       );
     } else if (obj.kind === 'polygon' && obj.points && obj.points.length) {
       const pts = obj.points.flatMap((p) => [p.x, p.y]);
@@ -2084,18 +2440,41 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // Rotate about the centroid: position=offset=centroid leaves the polygon
       // in place at rotation 0 and pivots there for any angle.
       this.bgLayer.add(
-        new Line({ points: pts, closed: true, x: cx, y: cy, offsetX: cx, offsetY: cy, rotation: obj.rotation ?? 0, ...grad, stroke, strokeWidth: isStage ? 1 : 0, listening: false }),
+        new Line({ points: pts, closed: true, x: cx, y: cy, offsetX: cx, offsetY: cy, rotation: obj.rotation ?? 0, ...grad, stroke, strokeWidth, listening: false }),
       );
     }
     if (obj.label) {
-      if (isStage) this.addStageLabel(cx, cy, obj.label);
-      else if (isDecor) this.addCentredLabel(this.bgLayer, obj.label, cx, cy, '#9aa3b5', 12, false);
-      else this.addCentredLabel(this.bgLayer, obj.label, cx, cy, '#cbd5e1', 16, true);
+      if (isStage) {
+        const node = this.addStageLabel(cx, cy, obj.label, fill);
+        this.primaryFocalLabels.set(node, 22);
+        this.freeTextById.set(obj.id, { node, background: fill, kind: 'stage' });
+      }
+      else if (isDecor) {
+        // A compiled reference focal is a primary orientation landmark, not
+        // quiet furniture. Keep its desktop overview label above the shared
+        // 12px rendered floor and choose ink against the actual source fill.
+        // Ordinary décor retains the subdued treatment.
+        const node = this.addCentredLabel(
+          this.bgLayer,
+          obj.label,
+          cx,
+          cy,
+          referenceFocal ? stateAwareBookableLabelInk(fill, '#e6e9f0') : '#9aa3b5',
+          referenceFocal ? 18 : 12,
+          false,
+        );
+        if (referenceFocal) this.primaryFocalLabels.set(node, 18);
+        this.freeTextById.set(obj.id, { node, background: fill, kind: 'decor' });
+      } else {
+        const node = this.addCentredLabel(this.bgLayer, obj.label, cx, cy, '#cbd5e1', 16, true);
+        this.freeTextById.set(obj.id, { node, background: fill, kind: 'decor' });
+      }
     }
   }
 
   /** Prominent stage caption: uppercase, letter-spaced, larger, softly dimmed. */
-  private addStageLabel(x: number, y: number, text: string): void {
+  private addStageLabel(x: number, y: number, text: string, background: string): Text {
+    const ink = stateAwareBookableLabelInk(background, '#e6e9f0');
     const t = new Text({
       x,
       y,
@@ -2104,23 +2483,25 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       fontStyle: '700',
       letterSpacing: 4,
       fontFamily: this.labelFont(),
-      fill: rgba('#e6e9f0', 0.62),
+      fill: ink,
       listening: false,
       perfectDrawEnabled: false,
     });
     t.offsetX(t.width() / 2);
     t.offsetY(t.height() / 2);
     this.bgLayer.add(t);
+    return t;
   }
 
   private renderGA(obj: Extract<ChartDoc['objects'][number], { type: 'gaArea' }>): void {
     const color = this.catColor.get(obj.categoryKey) ?? '#6e7bff';
-    const pts = obj.points.flatMap((p) => [p.x, p.y]);
-    const poly = new Line({
-      points: pts,
-      closed: true,
+    const canvas = this.canvasBackground;
+    const effectiveBackground = compositeHexOver(color, canvas, GA_FILL_OPACITY);
+    const preferredInk = this.theme.textColor ?? '#e6e9f0';
+    const ink = stateAwareBookableLabelInk(effectiveBackground, preferredInk);
+    const poly = polygonWithHolesShape(obj.points, obj.holes, {
       fill: color,
-      opacity: 0.22,
+      opacity: GA_FILL_OPACITY,
       stroke: color,
       strokeWidth: 1.5,
     });
@@ -2134,26 +2515,48 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     });
     this.bgLayer.add(poly);
 
-    const cx = obj.points.reduce((a, p) => a + p.x, 0) / obj.points.length;
-    const cy = obj.points.reduce((a, p) => a + p.y, 0) / obj.points.length;
-    this.addCentredLabel(this.bgLayer, obj.label, cx, cy - 8, '#e6e9f0', 15, false);
-    this.addCentredLabel(this.bgLayer, `cap ${obj.capacity}`, cx, cy + 10, '#8b93a7', 11, false);
+    const labelPoint = polygonLabelPoint(obj.points, obj.holes);
+    const containingSection = this.sections.find((section) => (
+      pointInPolygonWithHoles(labelPoint, section.outline, section.holes)
+    ));
+    const label = this.addCentredLabel(this.bgLayer, obj.label, labelPoint.x, labelPoint.y - 8, ink, GA_LABEL_FONT_SIZE, false);
+    const capacity = this.addCentredLabel(this.bgLayer, `cap ${obj.capacity}`, labelPoint.x, labelPoint.y + 10, ink, GA_CAPACITY_LABEL_FONT_SIZE, false);
+    this.freeTextById.set(`${obj.id}:label`, {
+      objectId: obj.id,
+      node: label,
+      background: effectiveBackground,
+      kind: 'ga-label',
+      categoryKey: obj.categoryKey,
+    });
+    this.freeTextById.set(`${obj.id}:capacity`, {
+      objectId: obj.id,
+      node: capacity,
+      background: effectiveBackground,
+      kind: 'ga-capacity',
+      categoryKey: obj.categoryKey,
+    });
+    this.gaById.set(obj.id, {
+      label: obj.label,
+      capacity: obj.capacity,
+      categoryKey: obj.categoryKey,
+      points: obj.points,
+      polygon: poly,
+      effectiveBackground,
+      ...(containingSection ? { sectionId: containingSection.logicalId } : {}),
+    });
   }
 
   /**
    * A section renders in three coordinated layers driven by the LOD melt:
    *   • a faint outline (the existing near-zoom look, untouched),
-   *   • a solid category-mix block that fades in at the block rung, and
-   *   • a name + "N LEFT" sublabel.
-   * Membership (which seats live inside the outline) + the mix fill + the live
-   * availability count are precomputed here (once), not per frame.
+   *   • a neutral solid shell that fades in at the overview rung, and
+   *   • one readable, contained section name.
+   * Category, row, seat, and availability detail belongs to section focus/zoom.
+   * Membership and category mix are still precomputed for the detailed state.
    */
   private renderSection(obj: SectionObject): void {
-    const pts = obj.outline.flatMap((p) => [p.x, p.y]);
-    const centroid = {
-      x: obj.outline.reduce((a, p) => a + p.x, 0) / obj.outline.length,
-      y: obj.outline.reduce((a, p) => a + p.y, 0) / obj.outline.length,
-    };
+    const centroid = polygonLabelPoint(obj.outline, obj.holes);
+    const palette = overviewPalette(this.canvasBackground);
 
     // Membership: seats inside the outline, first section (doc order) wins.
     const memberIds: string[] = [];
@@ -2161,7 +2564,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     let free = 0;
     for (const seat of this.seats) {
       if (this.seatSection.has(seat.id)) continue;
-      if (!pointInPolygon(seat, obj.outline)) continue;
+      if (!pointInPolygonWithHoles(seat, obj.outline, obj.holes)) continue;
       memberIds.push(seat.id);
       catCounts.set(seat.categoryKey, (catCounts.get(seat.categoryKey) ?? 0) + 1);
       if ((this.statusById.get(seat.id) ?? 'free') === 'free') free++;
@@ -2208,58 +2611,24 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // Zone-coloured outline under the seats — matches the crisp section blocks
     // the designer draws, so the near-zoom map reads as defined zones too.
     const outlineTint = obj.color ?? this.zoneColor.get(obj.zone ?? '') ?? '#3a4358';
-    const outlinePoly = new Line({
-      points: pts,
-      closed: true,
+    const outlinePoly = polygonWithHolesShape(obj.outline, obj.holes, {
       stroke: rgba(outlineTint, 0.5),
       strokeWidth: 1.75,
       fill: rgba(outlineTint, 0.08),
-      lineJoin: 'round',
       listening: false,
-      perfectDrawEnabled: false,
-    });
+    }, obj.outlinePath);
     bgTarget.add(outlinePoly);
 
-    // Solid block fill — melts in at the block rung (opacity driven by the LOD).
-    const blockPoly = new Line({
-      points: pts,
-      closed: true,
-      fill: baseFill,
-      stroke: rgba('#ffffff', 0.12),
-      strokeWidth: 1,
+    // Neutral overview shell — category paint is intentionally deferred until
+    // focus/seat detail so the venue hierarchy remains legible at first glance.
+    const blockPoly = polygonWithHolesShape(obj.outline, obj.holes, {
+      fill: palette.sectionFill,
+      stroke: palette.sectionStroke,
+      strokeWidth: SECTION_STROKE_PX,
       opacity: 0,
       listening: false,
-      perfectDrawEnabled: false,
-    });
+    }, obj.outlinePath);
     bgTarget.add(blockPoly);
-
-    // Faint per-row hint lines (the seats.io "block-with-rows" look): a polyline
-    // through each member row's seats, fading in with the block. Lets a section
-    // read as SEATING — not a flat colour — at the overview zoom, seats hidden.
-    const rowSeats = new Map<string, Array<{ i: number; x: number; y: number }>>();
-    for (const id of memberIds) {
-      const s = this.seatById.get(id);
-      if (!s) continue;
-      const i = Number(id.slice(id.lastIndexOf(':') + 1)) || 0;
-      (rowSeats.get(s.rowId) ?? rowSeats.set(s.rowId, []).get(s.rowId)!).push({ i, x: s.x, y: s.y });
-    }
-    const rowLines: Line[] = [];
-    for (const arr of rowSeats.values()) {
-      if (arr.length < 2) continue;
-      arr.sort((a, b) => a.i - b.i);
-      const line = new Line({
-        points: arr.flatMap((p) => [p.x, p.y]),
-        stroke: rgba('#ffffff', 0.34),
-        strokeWidth: SEAT_RADIUS * 0.55,
-        lineCap: 'round',
-        lineJoin: 'round',
-        opacity: 0,
-        listening: false,
-        perfectDrawEnabled: false,
-      });
-      rowLines.push(line);
-      bgTarget.add(line);
-    }
 
     const nameLabel = new Text({
       x: centroid.x,
@@ -2268,12 +2637,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       fontSize: 22,
       fontStyle: '700',
       fontFamily: this.labelFont(),
-      fill: '#8b93a7',
-      // Dark halo so the label reads over the seat dots at any zoom.
-      shadowColor: '#05070c',
-      shadowBlur: 6,
-      shadowOpacity: 0.9,
-      shadowForStrokeEnabled: false,
+      fill: palette.sectionInk,
       listening: false,
       perfectDrawEnabled: false,
     });
@@ -2288,11 +2652,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       fontSize: 12,
       fontStyle: '700',
       fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-      fill: '#f4f6fb',
-      shadowColor: '#05070c',
-      shadowBlur: 5,
-      shadowOpacity: 0.9,
-      shadowForStrokeEnabled: false,
+      fill: palette.sectionInk,
       opacity: 0,
       listening: false,
       perfectDrawEnabled: false,
@@ -2302,9 +2662,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
     const sec: SectionRender = {
       id: obj.id,
+      logicalId: obj.logicalSectionId ?? obj.id,
       label: obj.label,
       outline: obj.outline,
+      ...(obj.outlinePath ? { outlinePath: obj.outlinePath } : {}),
+      holes: obj.holes ?? [],
       centroid,
+      labelAnchors: polygonLabelCandidates(obj.outline, obj.holes ?? [], centroid),
       zone: obj.zone,
       memberIds,
       total: memberIds.length,
@@ -2313,9 +2677,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       outlineTint,
       outlinePoly,
       blockPoly,
-      rowLines,
       nameLabel,
       subLabel,
+      nameLabelFits: true,
+      subLabelFits: true,
       elevation,
       liftGroupBg,
       liftGroupSeat,
@@ -2328,7 +2693,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   }
 
   private refreshSectionHeat(sec: SectionRender): void {
-    const raw = this.sectionHeat.get(sec.id) ?? (sec.zone ? this.sectionHeat.get(sec.zone) : undefined);
+    const raw = this.sectionHeat.get(sec.id)
+      ?? this.sectionHeat.get(sec.logicalId)
+      ?? (sec.zone ? this.sectionHeat.get(sec.zone) : undefined);
     if (raw == null || raw <= 0) {
       sec.outlinePoly.stroke(rgba(sec.outlineTint, 0.5));
       sec.outlinePoly.fill(rgba(sec.outlineTint, 0.08));
@@ -2345,7 +2712,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     sec.outlinePoly.shadowOpacity(0.25 + raw * 0.45);
   }
 
-  /** Recompute a section's availability-tinted fill + "N LEFT" (cheap; on status change). */
+  /** Recompute a section's neutral overview state and retained detail count. */
   private refreshSectionFill(sec: SectionRender): void {
     sec.blockPoly.fill(this.sectionBlockFill(sec));
     sec.subLabel.text(t('map.seatsLeft', { count: sec.free }));
@@ -2354,26 +2721,15 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   /** True when a section/zone is currently in the `closed` event-state. */
   private isSectionClosed(sec: SectionRender): boolean {
-    return this.closedSections.has(sec.id) || (sec.zone != null && this.closedSections.has(sec.zone));
+    return this.closedSections.has(sec.id)
+      || this.closedSections.has(sec.logicalId)
+      || (sec.zone != null && this.closedSections.has(sec.zone));
   }
 
-  /**
-   * The block-fill colour for a section: flat desaturated grey when `closed`,
-   * else the availability-darkened category mix; then desaturated toward neutral
-   * when another section holds focus (AXS dim treatment).
-   */
+  /** Clean overview shells never leak category, price, or live availability paint. */
   private sectionBlockFill(sec: SectionRender): string {
-    let fill: string;
-    if (this.isSectionClosed(sec)) {
-      fill = CLOSED_SECTION_FILL;
-    } else {
-      const sold = sec.total > 0 ? (sec.total - sec.free) / sec.total : 0;
-      fill = darken(sec.baseFill, sold * SOLD_DARKEN);
-    }
-    if (this.focusedSectionId && sec.id !== this.focusedSectionId && sec.zone !== this.focusedSectionId) {
-      fill = lerpColor(fill, FOCUS_NEUTRAL, FOCUS_DESATURATE);
-    }
-    return fill;
+    const fill = overviewPalette(this.canvasBackground).sectionFill;
+    return this.isSectionClosed(sec) ? darken(fill, 0.12) : fill;
   }
 
   /**
@@ -2410,19 +2766,36 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         }
       }
 
+      // A zone name often extends beyond its irregular section polygon. Give
+      // the entire caption an opaque, measured backing instead of choosing ink
+      // against only the anchor section and then painting part of that text over
+      // the surrounding canvas.
+      const back = new Rect({
+        x: cx,
+        y: cy,
+        width: 1,
+        height: 1,
+        offsetX: 0.5,
+        offsetY: 0.5,
+        cornerRadius: 1,
+        fill: HIERARCHY_PILL_BACKGROUND,
+        stroke: z.color ?? anchor.outlineTint,
+        strokeWidth: 1,
+        opacity: 0,
+        listening: false,
+        perfectDrawEnabled: false,
+      });
+      this.bgLayer.add(back);
+
       const label = new Text({
         x: cx,
         y: cy,
         text: z.label.toUpperCase(),
-        fontSize: 34,
+        fontSize: ZONE_LABEL_PX,
         fontStyle: '800',
-        letterSpacing: 2,
+        letterSpacing: 0.5,
         fontFamily: this.labelFont(),
-        fill: z.color ?? '#f2f4f8',
-        shadowColor: '#05070c',
-        shadowBlur: 10,
-        shadowOpacity: 0.95,
-        shadowForStrokeEnabled: false,
+        fill: '#f4f6fb',
         opacity: 0,
         listening: false,
         perfectDrawEnabled: false,
@@ -2440,7 +2813,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
           fontSize: 14,
           fontStyle: '600',
           fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-          fill: rgba('#e6e9f0', 0.75),
+          fill: '#cbd5e1',
           opacity: 0,
           listening: false,
           perfectDrawEnabled: false,
@@ -2448,7 +2821,14 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         sub.offsetX(sub.width() / 2);
         this.bgLayer.add(sub);
       }
-      this.zones.push({ id: z.id, label, sub });
+      this.zones.push({
+        id: z.id,
+        anchor: { x: cx, y: cy },
+        back,
+        background: HIERARCHY_PILL_BACKGROUND,
+        label,
+        sub,
+      });
     }
   }
 
@@ -2471,11 +2851,16 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       blockT = clamp((BLOCK_MELT_TOP - scale) / (BLOCK_MELT_TOP - SECTION_PROMINENT_SCALE), 0, 1);
       zoneT = clamp((SECTION_PROMINENT_SCALE - scale) / (SECTION_PROMINENT_SCALE - ZONE_PROMINENT_SCALE), 0, 1);
     }
+    // The overview rung is a crisp semantic composition. Finish the melt before
+    // entering it so no residual seats or category outlines leak through simply
+    // because zoom-to-fit landed a few hundredths below the detail threshold.
+    const sectionOverview = scale < CACHE_THRESHOLD;
+    if (sectionOverview) blockT = 1;
     // No zones ⇒ skip the zone rung: sections stay the far rung (graceful).
     if (!this.zones.length) zoneT = 0;
 
     // Seats melt out as the block fill melts in (coordinated with the bitmap swap).
-    this.seatLayer.opacity(1 - blockT);
+    this.seatLayer.opacity(sectionOverview ? 0 : 1 - blockT);
 
     // Labels are drawn UPRIGHT (the iso squash is cancelled per-text), so their
     // on-screen size follows the raw stage scale, not the squashed effective one.
@@ -2485,84 +2870,121 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (rescale) this.lodScale = scale;
 
     const focus = this.focusedSectionId;
+    const palette = overviewPalette(this.canvasBackground);
+    // Avoid a ghosted label during the first 20% of the block melt, when
+    // individual bookable shapes are still the dominant visual layer.
+    const sectionLabelT = clamp((blockT - 0.2) / 0.8, 0, 1);
     for (const sec of this.sections) {
       // AXS focus: non-focused sections dim to ~16%; the focused block stays full.
-      const dim = focus && sec.id !== focus && sec.zone !== focus ? FOCUS_DIM_OPACITY : 1;
+      const dim = focus && sec.id !== focus && sec.logicalId !== focus && sec.zone !== focus ? FOCUS_DIM_OPACITY : 1;
+      // Category-tinted detail outlines disappear as the clean shell takes over.
+      sec.outlinePoly.opacity(sectionOverview ? 0 : (1 - blockT) * dim);
       sec.blockPoly.opacity(BLOCK_FILL_ALPHA * blockT * dim);
-      for (const line of sec.rowLines) line.opacity(blockT * (1 - zoneT) * dim);
-      // Name: faint→bright with blockT, then fades out as zones take over.
-      sec.nameLabel.fill(lerpColor('#aab3c5', '#ffffff', blockT));
-      sec.nameLabel.opacity((1 - zoneT) * dim);
-      sec.subLabel.opacity(blockT * (1 - zoneT) * dim);
-      if (rescale) {
-        this.sizeLabel(sec.nameLabel, SECTION_LABEL_PX / sx, sec.centroid.y - SECTION_SUB_PX / sx);
-        this.sizeLabel(sec.subLabel, SECTION_SUB_PX / sx, sec.centroid.y + SECTION_LABEL_PX / sx);
-      }
+      sec.blockPoly.stroke(palette.sectionStroke);
+      sec.blockPoly.strokeWidth(SECTION_STROKE_PX / Math.max(sx, 0.0001));
+      // Section names belong to the block rung. Hide them completely once
+      // individual seats/booths are the active layer so they cannot sit under
+      // bookable labels or shapes.
+      const sectionFill = sec.blockPoly.fill();
+      const sectionInk = stateAwareBookableLabelInk(
+        typeof sectionFill === 'string' ? sectionFill : sec.baseFill,
+        palette.sectionInk,
+      );
+      sec.nameLabel.fill(sectionInk);
+      sec.subLabel.fill(sectionInk);
+      if (rescale) this.fitSectionRungLabels(sec, sx);
+      const labelOpacity = sectionLabelT * (1 - zoneT) * dim;
+      sec.nameLabel.opacity(sec.nameLabelFits ? labelOpacity : 0);
+      // Availability stays in the focused/detail UI. It is deliberately not a
+      // second map label at the clean section-overview rung.
+      sec.subLabel.opacity(0);
     }
 
     // Fade the big zone labels out as the view tilts into 3D — the raised tiers
     // read clearly on their own, and the overlaid zone text just clutters them.
     const zoneOpacity = zoneT * (1 - this.isoT);
     for (const zone of this.zones) {
+      zone.back.opacity(zoneOpacity);
       zone.label.opacity(zoneOpacity);
       if (zone.sub) zone.sub.opacity(zoneOpacity);
-      if (rescale) {
-        const cy = zone.label.y();
-        this.sizeLabel(zone.label, ZONE_LABEL_PX / sx, cy);
-        if (zone.sub) this.sizeLabel(zone.sub, ZONE_SUB_PX / sx, cy + ZONE_LABEL_PX / sx);
-      }
+      if (rescale) this.sizeZonePill(zone, sx);
     }
     // Greedy de-collision of the visible label tiers (small canvases stack
     // "UPPER BOWL"/"LOWER BOWL"/FROM-$ on top of each other otherwise).
     this.decollideRungLabels(sx);
+    this.dedupeLogicalSectionLabels();
+    for (const zone of this.zones) {
+      const opacity = zone.label.opacity();
+      zone.back.opacity(opacity);
+      if (zone.sub) zone.sub.opacity(opacity);
+    }
     this.bgLayer.batchDraw();
   }
 
+  /** One semantic section gets one overview label, even across split contours. */
+  private dedupeLogicalSectionLabels(): void {
+    const byLogical = new Map<string, SectionRender[]>();
+    for (const section of this.sections) {
+      (byLogical.get(section.logicalId) ?? byLogical.set(section.logicalId, []).get(section.logicalId)!).push(section);
+    }
+    for (const components of byLogical.values()) {
+      if (components.length < 2) continue;
+      const visible = components
+        .filter((component) => component.nameLabel.opacity() > 0.05)
+        .sort((left, right) => {
+          const leftBounds = polyBounds(left.outline);
+          const rightBounds = polyBounds(right.outline);
+          return rightBounds.width * rightBounds.height - leftBounds.width * leftBounds.height;
+        });
+      for (const component of visible.slice(1)) component.nameLabel.opacity(0);
+    }
+  }
+
   /**
-   * Greedy label de-collision for the zone/section rungs (same approach as the
-   * designer's cullRowLabels): price/"N LEFT" sublabels are lowest priority and
-   * drop first; name labels keep top-to-bottom, left-to-right; anything whose
-   * on-screen box (+4px gap) overlaps an already-kept box hides. Recomputed on
-   * every LOD pass so hidden labels reappear as zoom spreads them apart.
-   * Culling multiplies the opacity applySectionLod just assigned (never raises).
+   * Keep transitional zone pills from covering section names. Section names
+   * are already proven inside disjoint shells, so they must not cull each other.
    */
   private decollideRungLabels(sx: number): void {
     const GAP = 4;
-    interface Cand { node: Text; tier: number; owner?: Text; box: { x: number; y: number; w: number; h: number } }
+    interface Cand { node: Text; tier: number; section: boolean; box: { x: number; y: number; w: number; h: number } }
     const cands: Cand[] = [];
     const boxOf = (t: Text): { x: number; y: number; w: number; h: number } => {
-      // Labels are centred (offset = w/2,h/2); world size × stage scale = screen px.
       const p = this.worldToScreen({ x: t.x(), y: t.y() });
-      const w = t.width() * sx;
-      const h = t.height() * sx;
+      const rotated = pointsBounds(rotatedRectPoints(
+        { x: 0, y: 0 },
+        t.width() * sx,
+        t.height() * sx,
+        t.rotation(),
+      ));
+      const w = rotated.width;
+      const h = rotated.height;
       return { x: p.x - w / 2, y: p.y - h / 2, w, h };
     };
-    // Tier order = drop priority (higher tier drops first): zone names (0) win
-    // over section names (1); price/"N LEFT" sublabels (2/3) drop before names.
-    // A sublabel records its `owner` name: if the name lost, the sub hides too
-    // (never a floating price tag without the zone/section it belongs to).
     for (const zone of this.zones) {
-      if (zone.label.opacity() > 0.05) cands.push({ node: zone.label, tier: 0, box: boxOf(zone.label) });
-      if (zone.sub && zone.sub.opacity() > 0.05) cands.push({ node: zone.sub, tier: 2, owner: zone.label, box: boxOf(zone.sub) });
+      if (zone.label.opacity() > 0.05) {
+        const p = this.worldToScreen(zone.anchor);
+        const w = zone.back.width() * sx;
+        const h = zone.back.height() * sx;
+        cands.push({ node: zone.label, tier: 0, section: false, box: { x: p.x - w / 2, y: p.y - h / 2, w, h } });
+      }
     }
     for (const sec of this.sections) {
-      if (sec.nameLabel.opacity() > 0.05) cands.push({ node: sec.nameLabel, tier: 1, box: boxOf(sec.nameLabel) });
-      if (sec.subLabel.opacity() > 0.05) cands.push({ node: sec.subLabel, tier: 3, owner: sec.nameLabel, box: boxOf(sec.subLabel) });
+      if (sec.nameLabel.opacity() > 0.05) cands.push({ node: sec.nameLabel, tier: 1, section: true, box: boxOf(sec.nameLabel) });
     }
     if (cands.length < 2) return;
     cands.sort((a, b) => a.tier - b.tier || a.box.y - b.box.y || a.box.x - b.box.x);
     const kept: Cand['box'][] = [];
-    const culled = new Set<Text>();
     const collides = (b: Cand['box']): boolean =>
       kept.some((k) =>
         b.x < k.x + k.w + GAP && k.x < b.x + b.w + GAP &&
         b.y < k.y + k.h + GAP && k.y < b.y + b.h + GAP,
       );
     for (const c of cands) {
-      if ((c.owner && culled.has(c.owner)) || collides(c.box)) {
+      if (collides(c.box)) {
         c.node.opacity(0);
-        culled.add(c.node);
-      } else {
+      } else if (!c.section) {
+        // Section shells do not collide by construction; only zone pills form
+        // blockers for later transitional labels.
         kept.push(c.box);
       }
     }
@@ -2574,6 +2996,54 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     t.offsetX(t.width() / 2);
     t.offsetY(t.height() / 2);
     t.y(y);
+  }
+
+  /** Fit one centred section name, rotating narrow shells like the target chart. */
+  private fitSectionRungLabels(sec: SectionRender, sx: number): void {
+    const paddingPx = 8;
+    sec.subLabelFits = false;
+    for (let fontPx = SECTION_LABEL_PX; fontPx >= MIN_SECTION_LABEL_PX; fontPx -= 1) {
+      for (const rotation of [0, -90]) {
+        sec.nameLabel.rotation(rotation);
+        this.sizeLabel(sec.nameLabel, fontPx / sx, sec.nameLabel.y());
+        for (const anchor of sec.labelAnchors) {
+          sec.nameLabel.position(anchor);
+          const paddingWorld = paddingPx / sx;
+          if (rotatedRectFitsPolygon(
+            anchor,
+            sec.nameLabel.width() + paddingWorld,
+            sec.nameLabel.height() + paddingWorld,
+            rotation,
+            sec.outline,
+            sec.holes,
+          )) {
+            sec.nameLabelFits = true;
+            return;
+          }
+        }
+      }
+    }
+    sec.nameLabel.position(sec.centroid);
+    sec.nameLabel.rotation(0);
+    sec.nameLabelFits = false;
+  }
+
+  /** Size one screen-constant zone name/price pill around its shared anchor. */
+  private sizeZonePill(zone: ZoneRender, sx: number): void {
+    const padX = 10 / sx;
+    const padY = 6 / sx;
+    const gap = zone.sub ? 3 / sx : 0;
+    this.sizeLabel(zone.label, ZONE_LABEL_PX / sx, zone.anchor.y);
+    if (zone.sub) this.sizeLabel(zone.sub, ZONE_SUB_PX / sx, zone.anchor.y);
+    const width = Math.max(zone.label.width(), zone.sub?.width() ?? 0) + padX * 2;
+    const height = zone.label.height() + (zone.sub ? gap + zone.sub.height() : 0) + padY * 2;
+    zone.label.y(zone.anchor.y - (zone.sub ? (gap + zone.sub.height()) / 2 : 0));
+    if (zone.sub) zone.sub.y(zone.anchor.y + (zone.label.height() + gap) / 2);
+    zone.back.position(zone.anchor);
+    zone.back.size({ width, height });
+    zone.back.offset({ x: width / 2, y: height / 2 });
+    zone.back.cornerRadius(7 / sx);
+    zone.back.strokeWidth(1 / sx);
   }
 
   /**
@@ -2591,13 +3061,15 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   sectionAt(clientPoint: { x: number; y: number }): string | null {
     if (!this.sections.length) return null;
     const world = this.screenToWorld(clientPoint);
-    const hit = this.sections.find((sec) => pointInPolygon(world, sec.outline));
-    return hit ? hit.id : null;
+    const hit = this.sections.find((sec) => pointInPolygonWithHoles(world, sec.outline, sec.holes));
+    return hit ? hit.logicalId : null;
   }
 
   /** Seat ids belonging to a section (Slice 5 section-summary card). */
   sectionMembers(id: string): string[] {
-    return this.sections.find((s) => s.id === id)?.memberIds.slice() ?? [];
+    return [...new Set(this.sections
+      .filter((section) => section.id === id || section.logicalId === id || section.zone === id)
+      .flatMap((section) => section.memberIds))];
   }
 
   private addCentredLabel(
@@ -2608,7 +3080,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     fill: string,
     fontSize: number,
     bold: boolean,
-  ): void {
+  ): Text {
     const t = new Text({
       x,
       y,
@@ -2623,6 +3095,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     t.offsetX(t.width() / 2);
     t.offsetY(t.height() / 2);
     layer.add(t);
+    return t;
   }
 
   // ---- selection ------------------------------------------------------------
@@ -2661,21 +3134,23 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    * the container's computed CSS background (walking up past transparent
    * ancestors). Unknown/unparseable backgrounds keep the dark default.
    */
-  private resolveSelectionColor(): string {
-    if (this.theme.selectionColor) return this.theme.selectionColor;
-    let bg = this.theme.background ?? '';
-    if (!bg && typeof getComputedStyle === 'function') {
-      let el: HTMLElement | null = this.container;
-      while (el) {
-        const c = getComputedStyle(el).backgroundColor;
-        if (c && c !== 'transparent' && !/^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0\s*\)$/.test(c)) {
-          bg = c;
-          break;
-        }
-        el = el.parentElement;
+  private resolveCanvasBackground(): string {
+    const themed = this.theme.background ? opaqueColorHex(this.theme.background) : null;
+    if (themed) return themed;
+    if (typeof getComputedStyle === 'function') {
+      let element: HTMLElement | null = this.container;
+      while (element) {
+        const resolved = opaqueColorHex(getComputedStyle(element).backgroundColor);
+        if (resolved) return resolved;
+        element = element.parentElement;
       }
     }
-    return isLightColor(bg) ? DEF_SELECTION_ON_LIGHT : DEF_SELECTION;
+    return DEF_CANVAS_BACKGROUND;
+  }
+
+  private resolveSelectionColor(): string {
+    if (this.theme.selectionColor) return this.theme.selectionColor;
+    return isLightColor(this.canvasBackground) ? DEF_SELECTION_ON_LIGHT : DEF_SELECTION;
   }
 
   private setSelected(id: string, on: boolean, silent = false): void {
@@ -2704,6 +3179,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const candidate = this.selectionFocusId === id;
     const dims = this.boothDims.get(seat.rowId);
     const marker = new Group({
+      name: 'selection-ring',
       x: seat.x,
       y: seat.y,
       rotation: dims?.rotation ?? 0,
@@ -2711,6 +3187,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       perfectDrawEnabled: false,
       opacity: this.selectionFocusId && !candidate ? 0.2 : 1,
     });
+    marker.setAttr('seatId', id);
     const common = {
       stroke: this.effSelection,
       listening: false,
@@ -2791,10 +3268,21 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    * whether the section already fills the viewport (small container) so the tap
    * must fall through and pick.
    */
+  private sectionBounds(id: string): { x: number; y: number; width: number; height: number } | null {
+    const bounds = this.sections
+      .filter((section) => section.id === id || section.logicalId === id)
+      .map((section) => polyBounds(section.outline));
+    if (!bounds.length) return null;
+    const left = Math.min(...bounds.map((box) => box.x));
+    const top = Math.min(...bounds.map((box) => box.y));
+    const right = Math.max(...bounds.map((box) => box.x + box.width));
+    const bottom = Math.max(...bounds.map((box) => box.y + box.height));
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  }
+
   private sectionFrameScale(id: string): number {
-    const sec = this.sections.find((s) => s.id === id);
-    if (!sec) return this.stage.scaleX();
-    const b = polyBounds(sec.outline);
+    const b = this.sectionBounds(id);
+    if (!b) return this.stage.scaleX();
     const w = this.stage.width();
     const h = this.stage.height();
     const { min, max } = this.zoomBounds();
@@ -2824,13 +3312,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (this.effScale() < LABEL_SCALE && this.sections.length) {
       const sec = this.seatSection.get(id);
       if (sec) {
-        const alreadyFocused = this.focusedSectionId === sec.id;
+        const alreadyFocused = this.focusedSectionId === sec.logicalId;
         // Would section-focus zoom us in meaningfully (>2%)? If not, the gate has
         // nowhere left to go — pick instead of deadlocking.
-        const canZoomInFurther = this.sectionFrameScale(sec.id) > this.stage.scaleX() * 1.02;
+        const canZoomInFurther = this.sectionFrameScale(sec.logicalId) > this.stage.scaleX() * 1.02;
         if (!alreadyFocused && canZoomInFurther) {
-          if (this.opts.onSectionTap) this.opts.onSectionTap(sec.id);
-          else this.focusSection(sec.id);
+          if (this.opts.onSectionTap) this.opts.onSectionTap(sec.logicalId);
+          else this.focusSection(sec.logicalId);
           return;
         }
       }
@@ -2930,10 +3418,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // keep the standalone behaviour of gliding to fit that section.
       if (this.sections.length) {
         const world = this.screenToWorld(pointer);
-        const hit = this.sections.find((sn) => pointInPolygon(world, sn.outline));
+        const hit = this.sections.find((sn) => pointInPolygonWithHoles(world, sn.outline, sn.holes));
         if (hit) {
-          if (this.opts.onSectionTap) this.opts.onSectionTap(hit.id);
-          else this.focusRegion(hit.id);
+          if (this.opts.onSectionTap) this.opts.onSectionTap(hit.logicalId);
+          else this.focusRegion(hit.logicalId);
           return;
         }
       }
@@ -3154,10 +3642,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   ): void {
     const b =
       typeof target === 'string'
-        ? (() => {
-            const sec = this.sections.find((s) => s.id === target);
-            return sec ? polyBounds(sec.outline) : null;
-          })()
+        ? this.sectionBounds(target)
         : target;
     if (!b) return;
     this.cancelGlide();
@@ -3218,7 +3703,272 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     return 'sections';
   }
 
-  /** Jump the camera to a rung's zoom band, centred on the chart (glided). */
+  getRenderedQualityEvidence(): RendererQualityEvidence {
+    const effectiveScale = this.effScale();
+    const stageScale = this.stage.scaleX();
+    const viewport = { width: this.stage.width(), height: this.stage.height() };
+    const rounded = (value: number) => Math.round(value * 100) / 100;
+    const labels: RenderedBookableLabelEvidence[] = this.seats.map((seat) => {
+      const shape = this.circleById.get(seat.id);
+      const label = this.boothLabelById.get(seat.id) ?? this.seatLabelById.get(seat.id);
+      const authoredFontSize = seat.kind === 'booth' ? BOOTH_LABEL_FONT_SIZE : SEAT_LABEL_FONT_SIZE;
+      const renderedFontPx = rounded((label?.fontSize() ?? authoredFontSize) * effectiveScale);
+      const screen = this.worldToScreen(seat);
+      const outside = screen.x < 0 || screen.x > viewport.width || screen.y < 0 || screen.y > viewport.height;
+      const opacity = shape?.opacity() ?? 0;
+      const section = this.seatSection.get(seat.id);
+      const visible = Boolean(label?.isVisible()) && opacity >= 0.5 && !outside;
+      let hiddenReason: RenderedBookableLabelEvidence['hiddenReason'];
+      if (!visible) {
+        if (opacity < 0.5) hiddenReason = 'dimmed-or-unavailable';
+        else if (renderedFontPx < MIN_VISIBLE_BOOKABLE_LABEL_PX) hiddenReason = 'below-minimum-size';
+        else if (outside) hiddenReason = 'outside-viewport';
+        else if (!label) hiddenReason = 'clutter-or-fit';
+        else hiddenReason = 'renderer-hidden';
+      }
+      const labelWidth = label ? label.width() * stageScale : 0;
+      const labelHeight = label ? label.height() * effectiveScale : 0;
+      const directWidthPx = shape instanceof Rect
+        ? shape.width() * stageScale
+        : this.seatR * 2 * effectiveScale;
+      const directHeightPx = shape instanceof Rect
+        ? shape.height() * stageScale
+        : this.seatR * 2 * effectiveScale;
+      // The stage-level near-miss resolver extends every live seat target by
+      // SEAT_TAP_SLOP_PX around the same seat radius used by interaction.
+      const assistedDiameterPx = 2 * (this.seatR * effectiveScale + SEAT_TAP_SLOP_PX);
+      const fill = shape?.fill();
+      const ink = label?.fill();
+      return {
+        seatId: seat.id,
+        label: seat.label,
+        kind: seat.kind === 'booth' ? 'booth' : 'seat',
+        categoryKey: seat.categoryKey,
+        ...(section ? { sectionId: section.id } : {}),
+        ...(section?.zone ? { zoneId: section.zone } : {}),
+        status: this.statusById.get(seat.id) ?? 'free',
+        selected: this.selection.has(seat.id),
+        visible,
+        renderedFontPx,
+        fill: typeof fill === 'string' ? fill : '',
+        ink: typeof ink === 'string' ? ink : (this.theme.seatLabelColor ?? DEF_SEAT_LABEL),
+        opacity: rounded(opacity),
+        pointerTarget: {
+          active: !this.cached && this.isSelectable(seat.id),
+          directWidthPx: rounded(directWidthPx),
+          directHeightPx: rounded(directHeightPx),
+          effectiveMinimumPx: rounded(Math.max(
+            Math.min(directWidthPx, directHeightPx),
+            assistedDiameterPx,
+          )),
+        },
+        screenCenter: { x: rounded(screen.x), y: rounded(screen.y) },
+        ...(visible ? {
+          screenBox: {
+            x: rounded(screen.x - labelWidth / 2),
+            y: rounded(screen.y - labelHeight / 2),
+            width: rounded(labelWidth),
+            height: rounded(labelHeight),
+          },
+        } : {}),
+        ...(hiddenReason ? { hiddenReason } : {}),
+      };
+    });
+    const visibleLabels = labels.filter((label) => label.visible).length;
+    const hierarchyEvidence = (
+      id: string,
+      kind: 'section' | 'zone',
+      role: 'name' | 'availability' | 'price',
+      node: Text,
+      backgroundFill: string,
+      section?: SectionRender,
+    ) => {
+      const worldCorners = rotatedRectPoints(
+        { x: node.x(), y: node.y() },
+        node.width(),
+        node.height(),
+        node.rotation(),
+      );
+      const screenBounds = pointsBounds(worldCorners.map((corner) => this.worldToScreen(corner)));
+      const opacity = rounded(node.opacity());
+      const ink = node.fill();
+      const outside = screenBounds.x + screenBounds.width < 0 || screenBounds.x > viewport.width
+        || screenBounds.y + screenBounds.height < 0 || screenBounds.y > viewport.height;
+      const visible = node.isVisible() && opacity > 0.05 && !outside;
+      const fitsContainer = section
+        ? rotatedRectFitsPolygon(
+            { x: node.x(), y: node.y() },
+            node.width(),
+            node.height(),
+            node.rotation(),
+            section.outline,
+            section.holes,
+          )
+        : undefined;
+      return {
+        id,
+        kind,
+        role,
+        label: node.text(),
+        visible,
+        renderedFontPx: rounded(node.fontSize() * stageScale),
+        opacity,
+        fill: backgroundFill,
+        ink: typeof ink === 'string' ? ink : '',
+        ...(fitsContainer == null ? {} : { fitsContainer }),
+        ...(visible ? {
+          screenBox: {
+            x: rounded(screenBounds.x),
+            y: rounded(screenBounds.y),
+            width: rounded(screenBounds.width),
+            height: rounded(screenBounds.height),
+          },
+        } : {}),
+      };
+    };
+    const hierarchyLabels = [
+      ...this.sections.map((section) => {
+        const fill = section.blockPoly.fill();
+        return hierarchyEvidence(
+          section.id,
+          'section',
+          'name',
+          section.nameLabel,
+          typeof fill === 'string' ? fill : section.baseFill,
+          section,
+        );
+      }),
+      ...this.sections.map((section) => {
+        const fill = section.blockPoly.fill();
+        return hierarchyEvidence(
+          `${section.id}:availability`,
+          'section',
+          'availability',
+          section.subLabel,
+          typeof fill === 'string' ? fill : section.baseFill,
+          section,
+        );
+      }),
+      ...this.zones.flatMap((zone) => [
+        hierarchyEvidence(zone.id, 'zone', 'name', zone.label, zone.background),
+        ...(zone.sub ? [hierarchyEvidence(`${zone.id}:price`, 'zone', 'price', zone.sub, zone.background)] : []),
+      ]),
+    ];
+    const gaAreas: RenderedGAAreaEvidence[] = [...this.gaById].map(([areaId, ga]) => {
+      const screenPoints = ga.points.map((point) => this.worldToScreen(point));
+      const left = Math.min(...screenPoints.map((point) => point.x));
+      const top = Math.min(...screenPoints.map((point) => point.y));
+      const right = Math.max(...screenPoints.map((point) => point.x));
+      const bottom = Math.max(...screenPoints.map((point) => point.y));
+      const outside = right < 0 || left > viewport.width || bottom < 0 || top > viewport.height;
+      const opacity = rounded(ga.polygon.opacity());
+      const visible = opacity >= 0.1 && !outside;
+      const fill = ga.polygon.fill();
+      return {
+        areaId,
+        label: ga.label,
+        capacity: ga.capacity,
+        categoryKey: ga.categoryKey,
+        ...(ga.sectionId ? { sectionId: ga.sectionId } : {}),
+        visible,
+        interactive: ga.polygon.listening(),
+        opacity,
+        fill: typeof fill === 'string' ? fill : '',
+        effectiveBackground: ga.effectiveBackground,
+        ...(visible ? {
+          screenBox: {
+            x: rounded(left),
+            y: rounded(top),
+            width: rounded(right - left),
+            height: rounded(bottom - top),
+          },
+        } : {}),
+      };
+    });
+    const freeTextLabels = [...this.freeTextById].map(([recordKey, record]) => {
+      const { node, background, kind } = record;
+      const point = this.worldToScreen({ x: node.x(), y: node.y() });
+      const width = node.width() * stageScale;
+      const height = node.height() * effectiveScale;
+      const left = point.x - node.offsetX() * stageScale;
+      const top = point.y - node.offsetY() * effectiveScale;
+      const renderedFontPx = rounded(node.fontSize() * effectiveScale);
+      const outside = left + width < 0 || left > viewport.width
+        || top + height < 0 || top > viewport.height;
+      const visible = node.isVisible() && !outside;
+      const ink = node.fill();
+      const opacity = rounded(node.getAbsoluteOpacity());
+      let hiddenReason: 'below-minimum-size' | 'outside-viewport' | 'renderer-hidden' | undefined;
+      if (!visible) {
+        if (renderedFontPx < MIN_VISIBLE_BOOKABLE_LABEL_PX) hiddenReason = 'below-minimum-size';
+        else if (outside) hiddenReason = 'outside-viewport';
+        else hiddenReason = 'renderer-hidden';
+      }
+      return {
+        objectId: record.objectId ?? recordKey,
+        kind,
+        text: node.text(),
+        visible,
+        renderedFontPx,
+        ink: typeof ink === 'string' ? ink : '',
+        background,
+        opacity,
+        ...(visible ? {
+          screenBox: {
+            x: rounded(left),
+            y: rounded(top),
+            width: rounded(width),
+            height: rounded(height),
+          },
+        } : {}),
+        ...(hiddenReason ? { hiddenReason } : {}),
+      };
+    });
+    const palette = overviewPalette(this.canvasBackground);
+    const neutralSectionFills = new Set([
+      palette.sectionFill.toLowerCase(),
+      darken(palette.sectionFill, 0.12).toLowerCase(),
+    ]);
+    const visibleSectionShells = this.sections.filter((section) => section.blockPoly.opacity() > 0.05);
+    return {
+      viewport,
+      canvasBackground: this.canvasBackground,
+      effectiveScale: rounded(effectiveScale),
+      rung: this.getRung(),
+      minimumVisibleLabelPx: MIN_VISIBLE_BOOKABLE_LABEL_PX,
+      totalLabelledBookableUnits: labels.length,
+      visibleLabels,
+      hiddenLabels: labels.length - visibleLabels,
+      totalBookableUnits: labels.length + gaAreas.reduce((sum, area) => sum + area.capacity, 0),
+      selectionRingSeatIds: this.overlayLayer.find('.selection-ring')
+        .map((node) => String(node.getAttr('seatId') ?? ''))
+        .filter(Boolean),
+      selectionRingColor: this.effSelection,
+      focusedSectionId: this.focusedSectionId,
+      focusBackdropVisible: Boolean(this.focusBackdrop?.isVisible()),
+      categoryFilterKeys: this.categoryFilter ? [...this.categoryFilter].sort() : null,
+      overviewStyle: {
+        visibleSectionShells: visibleSectionShells.length,
+        categoryPaintedSectionShells: visibleSectionShells.filter((section) => {
+          const fill = section.blockPoly.fill();
+          return typeof fill !== 'string' || !neutralSectionFills.has(fill.toLowerCase());
+        }).length,
+        visibleCategoryDetailOutlines: this.sections.filter((section) => section.outlinePoly.opacity() > 0.05).length,
+        // Row-hint nodes no longer exist in the production overview scene.
+        visibleSectionRowHints: 0,
+        visibleSectionAvailabilityLabels: this.sections.filter((section) => section.subLabel.opacity() > 0.05).length,
+        visibleSectionGADetails: [...this.gaById.values()].filter((area) => (
+          area.sectionId != null && area.polygon.opacity() > 0.05
+        )).length,
+      },
+      labels,
+      gaAreas,
+      hierarchyLabels,
+      freeTextLabels,
+    };
+  }
+
+  /** Jump the camera to a rung's zoom band (glided). */
   setRung(rung: LodRung): void {
     if (rung === 'zones') {
       this.cancelGlide();
@@ -3228,19 +3978,106 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const target =
       rung === 'sections'
         ? (SECTION_PROMINENT_SCALE + CACHE_THRESHOLD) / 2
-        : Math.max(SEAT_FOCUS_SCALE, CACHE_THRESHOLD * 1.3);
+        : Math.max(
+          this.seatLabelTargetScale() * 1.05,
+          SEAT_FOCUS_SCALE,
+          CACHE_THRESHOLD * 1.3,
+        );
     const w = this.stage.width();
     const h = this.stage.height();
-    const cx = this.bounds.x + this.bounds.width / 2;
-    const cy = this.bounds.y + this.bounds.height / 2;
+    const visible = this.getVisibleWorldRect();
+    const viewCentre = {
+      x: visible.x + visible.width / 2,
+      y: visible.y + visible.height / 2,
+    };
+    let cx = viewCentre.x;
+    let cy = viewCentre.y;
+    if (rung === 'sections' && this.sections.length > 0) {
+      const sectionCentres = this.sections.map((section) => {
+        const bounds = polyBounds(section.outline);
+        return {
+          x: bounds.x + bounds.width / 2,
+          y: bounds.y + bounds.height / 2,
+        };
+      });
+      const halfWidth = w / (target * 2);
+      const halfHeight = h / (target * 2);
+      const hierarchyWillBeVisible = sectionCentres.some((point) =>
+        Math.abs(point.x - viewCentre.x) <= halfWidth
+        && Math.abs(point.y - viewCentre.y) <= halfHeight);
+      if (!hierarchyWillBeVisible) {
+        // A narrow viewport through the empty centre of an upper stadium deck
+        // can miss every section. Fall back to the nearest hierarchy block.
+        const nearest = sectionCentres.reduce((best, point) => {
+          const distance = (point.x - viewCentre.x) ** 2 + (point.y - viewCentre.y) ** 2;
+          return distance < best.distance ? { point, distance } : best;
+        }, { point: sectionCentres[0], distance: Infinity });
+        cx = nearest.point.x;
+        cy = nearest.point.y;
+      }
+    }
+    const seatAnchors = rung === 'seats' ? this.seats.filter((seat) => seat.kind !== 'booth') : [];
+    if (seatAnchors.length > 0) {
+      // Bowl/arena charts commonly have an empty focal area at their geometric
+      // centre. Centring a deep seat zoom there exposes only the pitch or stage.
+      // Anchor the rung on the nearest actual seat to the current view centre so
+      // explicit LOD navigation stays local after a pan and always reveals
+      // bookable inventory after zoom-to-fit.
+      let nearest = seatAnchors[0];
+      let nearestDistance = Infinity;
+      for (const seat of seatAnchors) {
+        const dx = seat.x - viewCentre.x;
+        const dy = seat.y - viewCentre.y;
+        const distance = dx * dx + dy * dy;
+        if (distance < nearestDistance) {
+          nearest = seat;
+          nearestDistance = distance;
+        }
+      }
+      cx = nearest.x;
+      cy = nearest.y;
+    }
     const bw = w / (target * 1.12);
     const bh = h / (target * 1.12);
     this.focusRegion({ x: cx - bw / 2, y: cy - bh / 2, width: bw, height: bh });
   }
 
+  /**
+   * The seat rung must account for labels that auto-fit inside a seat circle.
+   * A short `A-1` remains at the normal 7u target; a table label such as
+   * `T13-10` may fit at 4u and therefore needs a deeper camera target to reach
+   * the same 12 CSS-pixel floor. Measurement happens only on explicit rung
+   * navigation, never during pan/zoom frames.
+   */
+  private seatLabelTargetScale(): number {
+    let minimumFont = BOOTH_LABEL_FONT_SIZE;
+    const measure = new Text({
+      fontSize: SEAT_LABEL_FONT_SIZE,
+      fontStyle: '600',
+      fontFamily: this.labelFont(),
+      listening: false,
+    });
+    const maxWidth = this.seatR * 2 - 3;
+    for (const seat of this.seats) {
+      if (seat.kind === 'booth') {
+        minimumFont = Math.min(minimumFont, BOOTH_LABEL_FONT_SIZE);
+        continue;
+      }
+      measure.fontSize(SEAT_LABEL_FONT_SIZE);
+      measure.text(bookableMarkerLabel(seat.label));
+      const fitted = measure.width() > maxWidth
+        ? Math.max(MIN_FITTED_SEAT_LABEL_FONT_SIZE, (SEAT_LABEL_FONT_SIZE * maxWidth) / measure.width())
+        : SEAT_LABEL_FONT_SIZE;
+      minimumFont = Math.min(minimumFont, fitted);
+    }
+    measure.destroy();
+    return MIN_VISIBLE_BOOKABLE_LABEL_PX / Math.max(MIN_FITTED_SEAT_LABEL_FONT_SIZE, minimumFont);
+  }
+
   /** Recompute LOD (cache/labels) after any pan/zoom settles. */
   private afterViewChange(): void {
     this.updateLOD();
+    this.updateFreeTextVisibility();
     this.updateLabels();
     this.scheduleViewChange();
   }
@@ -3259,7 +4096,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // so LOD/melt thresholds trip correctly in 3D view. Equals the raw stage
     // scale at isoT=0 → flat behaviour is unchanged.
     const scale = this.effScale();
+    const focalScale = Math.max(scale, 0.0001);
+    for (const [label, targetPx] of this.primaryFocalLabels) {
+      this.sizeLabel(label, targetPx / focalScale, label.y());
+    }
     if (this.hasSections) this.applySectionLod(scale);
+    else if (this.primaryFocalLabels.size) this.bgLayer.batchDraw();
+    this.paintGAStateForView();
     const shouldCache = scale < CACHE_THRESHOLD;
     if (shouldCache && !this.cached) {
       this.cacheSeatLayer();
@@ -3305,8 +4148,17 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (this.recacheTimer) {
       clearTimeout(this.recacheTimer);
       this.recacheTimer = null;
-      // Fold the coalesced deltas into the bitmap now, synchronously.
-      this.rebuildSeatCache();
+      // Fold coalesced deltas into a bitmap only if the CURRENT camera is still
+      // on the cached overview rung. A status update can queue this timer and a
+      // subsequent detail zoom can uncache the layer before forceDraw(); blindly
+      // rebuilding here would disable pointer listening on live detail seats.
+      if (this.effScale() < CACHE_THRESHOLD) {
+        this.rebuildSeatCache();
+      } else if (this.cached) {
+        this.seatLayer.clearCache();
+        this.seatLayer.listening(true);
+        this.cached = false;
+      }
     }
     // Synchronous paint of every layer setStatus() may repaint. Layer.draw()
     // renders on the calling thread, unlike batchDraw()'s rAF schedule.
@@ -3315,9 +4167,32 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.overlayLayer.draw();
   }
 
+  private updateFreeTextVisibility(): void {
+    const effectiveScale = this.effScale();
+    for (const { objectId, node, categoryKey, kind } of this.freeTextById.values()) {
+      const gaDimmed = categoryKey != null
+        && (kind === 'ga-label' || kind === 'ga-capacity')
+        && this.gaCategoryDimmed(categoryKey);
+      const gaOverviewHidden = objectId != null
+        && (kind === 'ga-label' || kind === 'ga-capacity')
+        && this.gaById.get(objectId)?.sectionId != null
+        && effectiveScale < CACHE_THRESHOLD;
+      node.visible(!gaDimmed && !gaOverviewHidden && isBookableLabelLegibleAtScale(node.fontSize(), effectiveScale));
+    }
+  }
+
   private updateLabels(): void {
-    const show = this.effScale() > LABEL_SCALE;
+    const effectiveScale = this.effScale();
+    const show = effectiveScale >= LABEL_SCALE;
+    for (const [id, label] of this.boothLabelById) {
+      const shape = this.circleById.get(id);
+      label.visible(
+        isBookableLabelLegibleAtScale(label.fontSize(), effectiveScale)
+        && (shape?.opacity() ?? 1) >= 0.5,
+      );
+    }
     this.labelGroup.destroyChildren();
+    this.seatLabelById.clear();
     if (!show) {
       this.overlayLayer.batchDraw();
       return;
@@ -3336,6 +4211,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // the offset/doubled numbers visible at close zoom levels.
       if (seat.kind === 'booth') continue;
       if (seat.x < x0 || seat.x > x1 || seat.y < y0 || seat.y > y1) continue;
+      const shape = this.circleById.get(seat.id);
+      if ((shape?.opacity() ?? 1) < 0.5) continue;
       const status = this.statusById.get(seat.id) ?? 'free';
       const unavailable = status === 'booked' || (status === 'held' && !this.ownedHold.has(seat.id));
       if (unavailable) {
@@ -3365,11 +4242,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const t = new Text({
         x: seat.x,
         y: seat.y,
-        text: seat.label,
-        fontSize: 7,
+        text: bookableMarkerLabel(seat.label),
+        fontSize: SEAT_LABEL_FONT_SIZE,
         fontStyle: '600',
         fontFamily: this.labelFont(),
-        fill: this.theme.seatLabelColor ?? DEF_SEAT_LABEL,
+        fill: shape ? this.renderedBookableLabelInk(seat.id, shape) : (this.theme.seatLabelColor ?? DEF_SEAT_LABEL),
         listening: false,
         perfectDrawEnabled: false,
       });
@@ -3377,11 +4254,16 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // the seat circle. Down to a legibility floor; below that the label is
       // dropped rather than rendered as an unreadable speck.
       const maxW = this.seatR * 2 - 3;
-      if (t.width() > maxW) t.fontSize(Math.max(4, (t.fontSize() * maxW) / t.width()));
-      if (t.fontSize() < 4.2) { t.destroy(); continue; }
+      if (t.width() > maxW) t.fontSize(Math.max(MIN_FITTED_SEAT_LABEL_FONT_SIZE, (SEAT_LABEL_FONT_SIZE * maxW) / t.width()));
+      // The minimum fitted font can still be wider than the physical marker
+      // for verbose row labels. Never let text spill across adjacent seats;
+      // keep the seat interactive and let the picker/tooltip expose its label.
+      if (t.width() > maxW + 0.01) { t.destroy(); continue; }
+      if (!isBookableLabelLegibleAtScale(t.fontSize(), effectiveScale)) { t.destroy(); continue; }
       t.offsetX(t.width() / 2);
       t.offsetY(t.height() / 2);
       this.labelGroup.add(t);
+      this.seatLabelById.set(seat.id, t);
       if (++count >= MAX_LABELS) break;
     }
     // Keep freshly-built seat labels upright under the iso layer skew.
