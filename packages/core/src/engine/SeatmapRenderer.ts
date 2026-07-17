@@ -4214,7 +4214,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const shape = this.circleById.get(seat.id);
       if ((shape?.opacity() ?? 1) < 0.5) continue;
       const status = this.statusById.get(seat.id) ?? 'free';
-      const unavailable = status === 'booked' || (status === 'held' && !this.ownedHold.has(seat.id));
+      // Buyers see another buyer's hold as an unavailable lock, without its
+      // inventory label. Organizers in manage mode retain the held unit's
+      // identity so they can inspect or release it from the control room.
+      const unavailable = status === 'booked'
+        || (status === 'held' && !this.ownedHold.has(seat.id) && !this.opts.manageMode);
       if (unavailable) {
         // Status is geometry, not a letter: a centred lock for a temporary hold
         // and one quiet diagonal mark for sold. This stays aligned at every
