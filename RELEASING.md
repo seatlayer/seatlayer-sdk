@@ -39,9 +39,42 @@ git commit -am "release: vX.Y.Z"
 git tag vX.Y.Z && git push origin main --tags
 ```
 
-Pushing the tag triggers `.github/workflows/release.yml`, which builds and runs
-`pnpm -r publish --provenance` — publishing every package whose version isn't yet
-on npm, in dependency order, with a signed provenance attestation.
+`release:prep` also builds and verifies the browser CDN artifact. Pushing the tag
+triggers `.github/workflows/release.yml`, which treats npm and CDN as one release:
+
+1. the tag must exactly match the lockstep `core` / `js` / `react` version;
+2. the CDN IIFE and ESM are built directly from `packages/js/src`, with
+   `packages/core/src` aliased into that same build;
+3. a release manifest records the SDK commit, upstream engine commit, package
+   versions, byte sizes, and SHA-256 hashes;
+4. immutable `/sdk/vX.Y.Z/` files are uploaded to R2 and verified through the
+   production CDN before npm publishing is allowed;
+5. npm packages publish in dependency order with provenance; and
+6. the mutable `/sdk/v1/seatmap.{js,mjs}` aliases are promoted and verified only
+   after npm succeeds.
+
+The workflow is safely retryable: an existing npm version is skipped only after
+its unpacked payload matches the local package byte-for-byte, while an existing
+immutable CDN object must match the local SHA-256 or the release stops.
+
+### Release infrastructure prerequisites
+
+- R2 bucket: `seatlayer-sdk-releases`
+- Worker/custom domain: `cdn/wrangler.jsonc` → `cdn.seatlayer.io`
+- GitHub secrets: `NPM_TOKEN`, `CLOUDFLARE_API_TOKEN`, and
+  `CLOUDFLARE_ACCOUNT_ID`
+- The Cloudflare token needs Workers Scripts edit plus R2 object read/write.
+
+Before the first custom-domain transfer, run `pnpm cdn:migrate:legacy` with
+`SEATMAP_REPO` pointing at the app repository. It verifies every historical
+`v0.1.0`–`v0.2.x` browser artifact that is actually live (and repairs any path
+currently returning the dashboard SPA fallback) before copying it into R2. This
+preserves old pinned integrations, including the internal buyer-review renderer
+at `v0.2.11`.
+
+Pinned versions stay in R2 permanently. Do not add an expiry lifecycle to
+`sdk/vX.Y.Z/`. The `/sdk/v1/` objects are the deliberately mutable current-major
+aliases and use a short cache.
 
 ### Hard rules
 
@@ -51,13 +84,17 @@ on npm, in dependency order, with a signed provenance attestation.
 - **Never sync with uncommitted app WIP.** `pnpm check:sync` guards against a stale
   or mid-edit engine before you tag.
 - **Publish only via the tag → CI flow** (provenance + correct workspace→semver).
+- **Never publish npm without the CDN gate.** If immutable CDN upload or
+  verification fails, npm must remain unpublished.
+- **Never overwrite a pinned CDN version.** Re-running a tag is allowed only when
+  every existing immutable object has the same SHA-256.
 
 ### Versioning (semver, currently 0.x)
 
 - Engine/behaviour change or new API → **minor** (`0.1.x` → `0.2.0`).
 - Bug fix / metadata → **patch** (`0.1.1` → `0.1.2`).
-- Keep the three packages in lockstep on the same version unless a change is truly
-  isolated to one.
+- Keep all three packages and the CDN in lockstep on the same version. The
+  release check rejects mixed versions.
 
 ## Migration trigger (retire the copy-and-sync)
 

@@ -1,0 +1,17 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "seatlayer-sdk-cdn",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-07-17",
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "cdn.seatlayer.io", "custom_domain": true }
+  ],
+  "r2_buckets": [
+    { "binding": "SDK_RELEASES", "bucket_name": "seatlayer-sdk-releases" }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

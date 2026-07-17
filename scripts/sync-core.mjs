@@ -13,7 +13,8 @@
  *   node scripts/sync-core.mjs --check    fail (exit 1) if core differs from app
  *   SEATMAP_REPO=/path/to/seatmap node scripts/sync-core.mjs
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,6 +24,11 @@ const repoRoot = resolve(here, '..');
 const appRepo = process.env.SEATMAP_REPO
   ? resolve(process.env.SEATMAP_REPO)
   : resolve(repoRoot, '..', 'seatmap');
+const sourceRecord = join(repoRoot, 'packages/core/engine-source.json');
+
+function appGit(...args) {
+  return execFileSync('git', ['-C', appRepo, ...args], { encoding: 'utf8' }).trim();
+}
 
 // app src path -> core package path (structure preserved)
 const FILES = [
@@ -68,6 +74,10 @@ if (!existsSync(appRepo)) {
 }
 
 if (CHECK) {
+  if (!existsSync(sourceRecord)) {
+    console.error(`✘ Missing engine provenance: ${sourceRecord}`);
+    process.exit(1);
+  }
   const drifted = [];
   for (const [from, to] of FILES) {
     const src = join(appRepo, from);
@@ -91,6 +101,14 @@ if (CHECK) {
   process.exit(0);
 }
 
+const dirty = appGit('status', '--porcelain');
+if (dirty) {
+  console.error('✘ Refusing to sync from a dirty SeatLayer app worktree.');
+  console.error('  Commit the complete engine change first, then run pnpm sync:core.');
+  process.exit(1);
+}
+const appCommit = appGit('rev-parse', 'HEAD');
+
 let copied = 0;
 for (const [from, to] of FILES) {
   const src = join(appRepo, from);
@@ -104,4 +122,9 @@ for (const [from, to] of FILES) {
   console.log(`  ${from} → ${to}`);
   copied++;
 }
+writeFileSync(sourceRecord, `${JSON.stringify({
+  repository: 'paiteq/seatmap',
+  commit: appCommit,
+}, null, 2)}\n`);
 console.log(`✓ Synced ${copied} engine files from ${appRepo}`);
+console.log(`✓ Recorded engine source commit ${appCommit}`);

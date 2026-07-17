@@ -7,14 +7,23 @@
   "scripts": {
     "sync:core": "node scripts/sync-core.mjs",
     "check:sync": "node scripts/sync-core.mjs --check",
+    "check:version": "node scripts/check-release-version.mjs",
     "build": "pnpm -r build",
+    "build:cdn": "vite build --config cdn/vite.config.ts && node scripts/finalize-cdn.mjs",
     "typecheck": "pnpm -r typecheck",
+    "verify:cdn": "node scripts/verify-cdn-build.mjs",
+    "verify:cdn:remote": "node scripts/verify-cdn-deployment.mjs",
+    "cdn:upload:immutable": "node scripts/upload-cdn.mjs immutable",
+    "cdn:promote:v1": "node scripts/upload-cdn.mjs alias",
+    "cdn:migrate:legacy": "node scripts/migrate-legacy-cdn.mjs",
+    "publish:packages": "node scripts/publish-packages.mjs",
     "clean": "pnpm -r exec rm -rf dist",
-    "release:prep": "pnpm sync:core && pnpm check:sync && pnpm -r build && pnpm -r typecheck"
+    "release:prep": "pnpm sync:core && pnpm check:sync && pnpm check:version && pnpm build && pnpm typecheck && pnpm build:cdn && pnpm verify:cdn"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
-    "vite": "^8.1.4"
+    "vite": "^8.1.4",
+    "wrangler": "^4.107.0"
   },
   "packageManager": "pnpm@11.10.0"
 }

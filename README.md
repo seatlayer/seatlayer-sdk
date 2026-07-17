@@ -64,5 +64,15 @@ edit them in the app and re-sync. `packages/core/src/index.ts` (the barrel) is o
 
 ## Publishing
 
-`npm publish` is a manual, credentialed step (run by a maintainer with npm access).
-Publish order respects the dependency graph: `core` → `js` → `react`.
+Every release uses one version for npm and the CDN. Push a `vX.Y.Z` tag only
+after `pnpm release:prep` passes. The release workflow then:
+
+1. builds all three npm packages and a self-contained browser bundle from the
+   same `packages/{core,js}` source tree;
+2. publishes and hash-verifies immutable CDN files at
+   `https://cdn.seatlayer.io/sdk/vX.Y.Z/`;
+3. publishes `@seatlayer/core`, `@seatlayer/js`, and `@seatlayer/react` with npm
+   provenance; and
+4. promotes `https://cdn.seatlayer.io/sdk/v1/seatmap.js` only after npm succeeds.
+
+Do not run `npm publish` manually. See [RELEASING.md](RELEASING.md).

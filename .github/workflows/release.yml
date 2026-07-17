@@ -1,17 +1,22 @@
-name: Release
+name: Release npm + CDN
 
-# Publishes any package whose version isn't yet on npm, in dependency order.
-# Trigger: push a version tag, e.g.  git tag v0.1.2 && git push origin v0.1.2
+# One tag is one release across all npm packages and both CDN channels. The
+# immutable CDN version must be live and hash-verified before npm is allowed to
+# publish. The mutable /sdk/v1 alias is promoted only after npm succeeds.
 on:
   push:
     tags: ['v*']
+
+concurrency:
+  group: seatlayer-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
   id-token: write # required for npm provenance (public repo + OIDC)
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,10 +27,42 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
-      - run: pnpm -r typecheck
-      # pnpm publishes in dependency order and skips versions already on npm.
-      - run: pnpm -r publish --access public --no-git-checks --provenance
+      - name: Verify tag and lockstep package versions
+        run: pnpm check:version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+      - run: pnpm check:sync
+      - run: pnpm build
+      - run: pnpm typecheck
+      - name: Build one browser bundle from the npm source tree
+        run: pnpm build:cdn
+        env:
+          SEATLAYER_RELEASE_COMMIT: ${{ github.sha }}
+      - run: pnpm verify:cdn
+      - name: Upload immutable CDN release
+        run: pnpm cdn:upload:immutable
+        env:
+          CDN_UPLOAD_CONFIRMED: '1'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Deploy dedicated CDN Worker
+        run: pnpm exec wrangler deploy --config cdn/wrangler.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Verify immutable CDN bytes before npm
+        run: pnpm verify:cdn:remote immutable
+      - name: Publish npm packages with provenance
+        run: pnpm publish:packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
+          RELEASE_PUBLISH_CONFIRMED: '1'
+      - name: Promote the v1 CDN alias
+        run: pnpm cdn:promote:v1
+        env:
+          CDN_UPLOAD_CONFIRMED: '1'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Verify npm-synchronized CDN alias
+        run: pnpm verify:cdn:remote full
