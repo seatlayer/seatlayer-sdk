@@ -34,7 +34,7 @@ importers:
   packages/js:
     dependencies:
       '@seatlayer/core':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../core
     devDependencies:
       tsup:
@@ -47,7 +47,7 @@ importers:
   packages/react:
     dependencies:
       '@seatlayer/js':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../js
     devDependencies:
       '@types/react':
