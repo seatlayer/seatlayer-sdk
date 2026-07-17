@@ -39,7 +39,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@seatlayer/js": "workspace:^"
+    "@seatlayer/js": "workspace:*"
   },
   "peerDependencies": {
     "react": ">=17.0.0"
