@@ -31,6 +31,7 @@ export interface SeatManagerHandle {
   setMode(mode: SeatManagerMode): void;
   setToken(token: string, expiresAt?: number): void;
   setHeatOverlay(enabled: boolean): void;
+  setFollowLive(enabled: boolean): void;
   setTrendWindow(windowMinutes: number): Promise<ControlRoomSnapshot>;
   enterFullscreen(): Promise<void>;
   exitFullscreen(): Promise<void>;
@@ -67,7 +68,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
   function SeatManager(props, ref) {
     const {
       className, style, apiBase, eventKey, token, tokenExpiresAt,
-      mode, currency, keepLiveWhileHidden,
+      mode, currency, keepLiveWhileHidden, followLive,
     } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -89,6 +90,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         mode,
         currency,
         keepLiveWhileHidden,
+        followLive,
         theme: callbacks.current.theme,
         onReady: () => callbacks.current.onReady?.(),
         onTallies: (t: SeatManagerTallies) => callbacks.current.onTallies?.(t),
@@ -96,6 +98,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         onControlRoom: (snapshot: ControlRoomSnapshot) => callbacks.current.onControlRoom?.(snapshot),
         onTokenRefresh: callbacks.current.onTokenRefresh ? async () => callbacks.current.onTokenRefresh!() : undefined,
         onModeChange: (nextMode) => callbacks.current.onModeChange?.(nextMode),
+        onFollowLiveChange: (enabled) => callbacks.current.onFollowLiveChange?.(enabled),
         onSelectionChange: (s: ExpandedSeat[]) => callbacks.current.onSelectionChange?.(s),
         onActionComplete: (r: SeatManagerActionResult) => callbacks.current.onActionComplete?.(r),
         onError: (e: unknown) => callbacks.current.onError?.(e),
@@ -121,12 +124,17 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
       if (mode) managerRef.current?.setMode(mode);
     }, [mode]);
 
+    useEffect(() => {
+      if (followLive != null) managerRef.current?.setFollowLive(followLive);
+    }, [followLive]);
+
     useImperativeHandle(
       ref,
       (): SeatManagerHandle => ({
         setMode: (m) => managerRef.current?.setMode(m),
         setToken: (nextToken, expiresAt) => managerRef.current?.setToken(nextToken, expiresAt),
         setHeatOverlay: (enabled) => managerRef.current?.setHeatOverlay(enabled),
+        setFollowLive: (enabled) => managerRef.current?.setFollowLive(enabled),
         setTrendWindow: (windowMinutes) => managerRef.current?.setTrendWindow(windowMinutes)
           ?? Promise.reject(new Error('not ready')),
         enterFullscreen: () => managerRef.current?.enterFullscreen() ?? Promise.resolve(),

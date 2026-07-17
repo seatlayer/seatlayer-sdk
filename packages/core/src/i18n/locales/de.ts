@@ -40,6 +40,8 @@ export const de: Dict = {
   // buyer picker page (src/pages/PickerPage.tsx)
   'picker.language': 'Sprache',
   'picker.zoomToFit': 'Auf Größe anpassen',
+  'picker.seatCountLabel': 'Plätze',
+  'picker.capacity': 'Kapazität',
   'picker.viewMode': 'Ansichtsmodus',
   'picker.floor': 'Etage',
   'picker.zoomLevel': 'Zoomstufe',

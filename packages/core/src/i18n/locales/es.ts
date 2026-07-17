@@ -36,6 +36,8 @@ export const es: Dict = {
   // buyer picker page (src/pages/PickerPage.tsx)
   'picker.language': 'Idioma',
   'picker.zoomToFit': 'Ajustar zoom',
+  'picker.seatCountLabel': 'asientos',
+  'picker.capacity': 'capacidad',
   'picker.viewMode': 'Modo de vista',
   'picker.floor': 'Piso',
   'picker.zoomLevel': 'Nivel de zoom',

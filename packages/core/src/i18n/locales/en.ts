@@ -41,6 +41,8 @@ export const en: Dict = {
   // buyer picker page (src/pages/PickerPage.tsx)
   'picker.language': 'Language',
   'picker.zoomToFit': 'Zoom to fit',
+  'picker.seatCountLabel': 'seats',
+  'picker.capacity': 'capacity',
   'picker.viewMode': 'View mode',
   'picker.floor': 'Floor',
   'picker.zoomLevel': 'Zoom level',

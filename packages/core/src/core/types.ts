@@ -13,12 +13,36 @@ export interface Point {
   y: number;
 }
 
+export interface CubicPath {
+  start: Point;
+  control1: Point;
+  control2: Point;
+  end: Point;
+}
+
+/** A real closed section boundary. `outline` remains its sampled collision and
+ * persistence fallback; this path is the smooth authoring/buyer paint source. */
+export type SectionPathSegment =
+  | { kind: 'line'; end: Point }
+  | { kind: 'arc'; center: Point; radius: number; clockwise: boolean; end: Point }
+  | { kind: 'bezier'; control1: Point; control2: Point; end: Point };
+
+export interface SectionOutlinePath {
+  version: 1;
+  closed: true;
+  start: Point;
+  segments: SectionPathSegment[];
+}
+
 export interface Category {
   key: string;
   label: string;
   color: string;
   /** Base price — used when the category has no explicit tiers. */
   price?: number;
+  /** Durable evidence for semantic/display facts proposed while converting a
+   * private reference into sellable inventory. */
+  referenceCategorySource?: ReferenceCategorySource;
   /**
    * Ticket tiers (Adult / Child / Senior…). When present, a buyer picks a tier
    * per seat in this category and the tier's price applies; the first tier is the
@@ -26,6 +50,34 @@ export interface Category {
    * a single price (the `price` above).
    */
   tiers?: CategoryTier[];
+}
+
+export interface ReferenceCategorySource {
+  assetId: string;
+  /** Original sampled section color. `Category.color` is the approved output
+   * color and may differ only with separately recorded evidence. */
+  sourceColor: string;
+  /** Every exact sampled color normalized into the same original 4-bit/channel
+   * segmentation class. Older documents may contain only `sourceColor`. */
+  sourceColors?: string[];
+  /** Logical sections whose generated inventory uses this category. */
+  logicalSectionIds?: string[];
+  /** Source-color grouping is deterministic; a semantic regrouping needs its
+   * own confirmed assignment evidence. */
+  assignmentDerivation?: 'source-color-class' | 'confirmed-logical-sections';
+  assignmentEvidence?: 'user-confirmed' | 'authoritative-source';
+  assignmentSourceDescription?: string;
+  /** Optional legend/commercial swatch stated by the source. This remains
+   * immutable provenance when the approved accessible output color differs. */
+  sourcePaletteColor?: string;
+  sourcePaletteColorEvidence?: 'user-confirmed' | 'authoritative-source';
+  sourcePaletteColorSourceDescription?: string;
+  labelEvidence: 'user-confirmed' | 'authoritative-source';
+  labelSourceDescription: string;
+  priceEvidence: 'user-confirmed' | 'authoritative-source';
+  priceSourceDescription: string;
+  outputColorEvidence?: 'user-confirmed' | 'authoritative-source';
+  outputColorSourceDescription?: string;
 }
 
 /** One ticket tier within a category: a named price (Adult, Child, Senior…). */
@@ -141,7 +193,14 @@ export interface RowObject {
   seatCount: number;
   /** Distance between adjacent seat centers, in chart units. */
   seatSpacing: number;
+  /** Optional exact cubic centreline. Normal code owns these coordinates and
+   * distributes seats by arc length; MCP/model inputs never submit them. */
+  path?: CubicPath;
   categoryKey: string;
+  /** Deterministic provenance for rows fitted from confirmed reference
+   * inventory. It enables revision-safe replacement without touching manually
+   * authored rows or accepting client coordinates. */
+  referenceInventorySource?: ReferenceInventorySource;
   /** First seat number (default 1). */
   seatLabelStart?: number;
   /** Seat numbering within the row (default ltr, step 1). */
@@ -172,8 +231,62 @@ export interface GAAreaObject {
   label: string;
   /** Closed polygon, in chart units. */
   points: Point[];
+  /** Explicit aisles/pillars/cutouts excluded from the sellable GA surface. */
+  holes?: Point[][];
   capacity: number;
   categoryKey: string;
+  referenceInventorySource?: ReferenceInventorySource;
+}
+
+/**
+ * Durable evidence link for sellable objects generated from a private reference.
+ * The client supplies facts and stable logical-section ids, never coordinates.
+ */
+export interface ReferenceAccessibilitySource {
+  placementDerivation: 'server-synthesized-row-edges';
+  groupLogicalSectionIds: string[];
+  assignmentEvidence: 'user-confirmed' | 'authoritative-source';
+  assignmentSourceDescription: string;
+  counts: Array<{
+    type: AccessibilityType;
+    count: number;
+    evidence: 'user-confirmed' | 'authoritative-source';
+    sourceDescription: string;
+  }>;
+}
+
+export interface ReferenceInventorySource {
+  assetId: string;
+  logicalSectionId: string;
+  evidence: 'user-confirmed' | 'authoritative-source';
+  sourceDescription: string;
+  /** Distinguishes directly supplied inventory from a user-approved server
+   * distribution based only on an aggregate capacity. */
+  derivation?: 'explicit-inventory' | 'server-synthesized-from-aggregate';
+  /** Evidence for the aggregate figure; synthesized rows remain
+   * `user-confirmed` and are never mislabeled as source-extracted. */
+  aggregateEvidence?: 'user-confirmed' | 'authoritative-source';
+  /** Separate evidence for assigning standing inventory to this logical
+   * section. Aggregate evidence alone cannot prove section placement. */
+  sectionAssignmentEvidence?: 'user-confirmed' | 'authoritative-source';
+  sectionAssignmentSourceDescription?: string;
+  /** Aggregate row synthesis may propose numbering, but persistence requires
+   * the applying user/agent to confirm that policy explicitly. */
+  numberingEvidence?: 'user-confirmed';
+  numberingSourceDescription?: string;
+  /** Evidence and deterministic placement contract for synthesized accessible
+   * units in this logical section. */
+  accessibility?: ReferenceAccessibilitySource;
+}
+
+/** Durable evidence that a visible source-backed section shell intentionally
+ * carries no generated sellable inventory in this reference configuration. */
+export interface ReferenceInventoryExclusionSource {
+  assetId: string;
+  logicalSectionId: string;
+  reason: string;
+  evidence: 'user-confirmed' | 'authoritative-source';
+  sourceDescription: string;
 }
 
 /** Non-bookable décor: stage, walls, exits. */
@@ -231,6 +344,7 @@ export interface TableObject {
   categoryKey: string;
   /** Whole-table booking: buyers get all seats or none (per-event override later). */
   bookAsWhole?: boolean;
+  referenceInventorySource?: ReferenceInventorySource;
 }
 
 /** A booth: one bookable unit rendered as a block (trade shows, VIP boxes). */
@@ -243,6 +357,7 @@ export interface BoothObject {
   height: number;
   rotation: number;
   categoryKey: string;
+  referenceInventorySource?: ReferenceInventorySource;
 }
 
 /**
@@ -256,8 +371,40 @@ export interface SectionObject {
   type: 'section';
   id: string;
   label: string;
+  /**
+   * Stable management/inventory identity shared by disconnected visual
+   * components of one logical section. When absent, `id` is the logical id.
+   * Each component keeps its own `id` and reference provenance so rendering,
+   * editing, measured diffs, and source restoration remain exact.
+   */
+  logicalSectionId?: string;
   /** Closed polygon, chart units. */
   outline: Point[];
+  /** Optional true line/arc/cubic boundary. `outline` is a deterministic sample
+   * of this path and remains authoritative for membership, validation, and
+   * clients that predate curved section rendering. */
+  outlinePath?: SectionOutlinePath;
+  /** Explicit aisle/cutout polygons excluded from rendering, hit-testing, and membership. */
+  holes?: Point[][];
+  /** Durable opaque link to the private reference component. Unlike generator
+   * provenance, this survives manual geometry edits so a measured diff can
+   * report drift and server-owned code can restore the source contour. */
+  referenceSource?: {
+    assetId: string;
+    regionId: string;
+  };
+  /** Evidence-backed reason this source section remains a visible shell without
+   * synthesized sellable inventory (press, closed technical zone, etc.). */
+  referenceInventoryExclusion?: ReferenceInventoryExclusionSource;
+  /** Deterministic generator provenance for editable reference/parametric shells. */
+  geometry?: {
+    kind: 'rectangle' | 'tapered' | 'bezier' | 'contour';
+    sourceRegionId?: string;
+    contourMethod?: 'pixel-edge-loops-rdp' | 'shared-edge-vector-fit-v1';
+    simplificationTolerancePx?: number;
+    vectorFitErrorPx?: number;
+    sharedEdgeCount?: number;
+  };
   /** Optional tint override (defaults to a neutral fill / dominant category mix). */
   color?: string;
   /** Zone this section belongs to (id into `ChartDoc.zones`). Far-zoom nav + pricing group. */
@@ -373,6 +520,51 @@ export interface Floor {
   backgroundImage?: ChartDoc['backgroundImage'];
 }
 
+export interface ReferenceCalibration {
+  type: 'two-point';
+  /** Points in immutable source-image pixels, selected by a human or trusted detector. */
+  sourceA: Point;
+  sourceB: Point;
+  /** Verified real-world distance between the two source points. */
+  distance: number;
+  unit: 'm' | 'ft' | 'chart-unit';
+  /** Derived and stored for deterministic geometry compilers. */
+  pixelsPerUnit: number;
+}
+
+/** Coordinate-free physical scale derived by server code from a confirmed
+ * semantic feature. Unlike manual two-point calibration, no source points pass
+ * through an MCP client or language model. */
+export interface ReferenceDerivedScale {
+  method: 'confirmed-focal-axis-v1';
+  feature: 'focal-long-axis' | 'focal-short-axis';
+  distance: number;
+  unit: 'm' | 'ft';
+  evidence: 'user-confirmed' | 'authoritative-source';
+  sourceDescription: string;
+  chartUnitsPerUnit: number;
+}
+
+export interface ChartReferenceImage {
+  /** Stable private reference asset. New cloud-authored charts use this. */
+  assetId?: string;
+  /** Legacy/self-contained source. Optional when assetId is present. */
+  url?: string;
+  center: Point;
+  /** Rendered width in chart units (height follows the cropped image aspect). */
+  width: number;
+  opacity: number;
+  rotation?: number;
+  visible?: boolean;
+  layer?: 'below' | 'above';
+  locked?: boolean;
+  /** Normalized source crop; defaults to the full image. */
+  crop?: { x: number; y: number; width: number; height: number };
+  calibration?: ReferenceCalibration;
+  /** Server-derived semantic calibration without source-image coordinates. */
+  derivedScale?: ReferenceDerivedScale;
+}
+
 export interface ChartDoc {
   version: 1;
   name: string;
@@ -389,14 +581,7 @@ export interface ChartDoc {
   floors?: Floor[];
   objects: ChartObject[];
   /** Floor-plan photo the organizer traces over (designer-only aid, also rendered dimly in picker if kept). */
-  backgroundImage?: {
-    url: string;
-    center: Point;
-    /** Rendered width in chart units (height follows the image aspect). */
-    width: number;
-    opacity: number;
-    locked?: boolean;
-  };
+  backgroundImage?: ChartReferenceImage;
   /** Brand/venue theming (colors); categories carry their own colors separately. */
   theme?: ChartTheme;
   /** Parametric-template provenance: present ⇒ the chart came from a capacity-
@@ -505,6 +690,115 @@ export interface RendererOptions extends RendererCallbacks {
   marqueeSelect?: boolean;
 }
 
+export type RenderedLabelHiddenReason =
+  | 'below-minimum-size'
+  | 'outside-viewport'
+  | 'dimmed-or-unavailable'
+  | 'clutter-or-fit'
+  | 'renderer-hidden';
+
+/** Browser-renderer evidence used by visual QA and catalog release gates. */
+export interface RenderedBookableLabelEvidence {
+  seatId: string;
+  label: string;
+  kind: 'seat' | 'booth';
+  categoryKey: string;
+  sectionId?: string;
+  zoneId?: string;
+  status: SeatStatus;
+  selected: boolean;
+  visible: boolean;
+  renderedFontPx: number;
+  fill: string;
+  ink: string;
+  opacity: number;
+  /** Direct Konva shape bounds and the production near-miss rescue combined. */
+  pointerTarget: {
+    active: boolean;
+    directWidthPx: number;
+    directHeightPx: number;
+    effectiveMinimumPx: number;
+  };
+  /** Centre of the painted unit, even when its text is intentionally hidden. */
+  screenCenter: { x: number; y: number };
+  screenBox?: { x: number; y: number; width: number; height: number };
+  hiddenReason?: RenderedLabelHiddenReason;
+}
+
+export interface RenderedHierarchyLabelEvidence {
+  id: string;
+  kind: 'section' | 'zone';
+  role: 'name' | 'availability' | 'price';
+  label: string;
+  visible: boolean;
+  renderedFontPx: number;
+  opacity: number;
+  fill: string;
+  ink: string;
+  /** Independent geometric containment check for section-owned text. */
+  fitsContainer?: boolean;
+  screenBox?: { x: number; y: number; width: number; height: number };
+}
+
+export interface RenderedFreeTextEvidence {
+  objectId: string;
+  kind: 'free-text' | 'stage' | 'table' | 'decor' | 'ga-label' | 'ga-capacity';
+  text: string;
+  visible: boolean;
+  renderedFontPx: number;
+  ink: string;
+  background: string;
+  opacity: number;
+  screenBox?: { x: number; y: number; width: number; height: number };
+  hiddenReason?: 'below-minimum-size' | 'outside-viewport' | 'renderer-hidden';
+}
+
+export interface RenderedGAAreaEvidence {
+  areaId: string;
+  label: string;
+  capacity: number;
+  categoryKey: string;
+  /** Owning logical section when the rendered GA surface is section-contained. */
+  sectionId?: string;
+  visible: boolean;
+  interactive: boolean;
+  opacity: number;
+  fill: string;
+  effectiveBackground: string;
+  screenBox?: { x: number; y: number; width: number; height: number };
+}
+
+export interface RendererQualityEvidence {
+  viewport: { width: number; height: number };
+  canvasBackground: string;
+  effectiveScale: number;
+  rung: LodRung;
+  minimumVisibleLabelPx: number;
+  totalLabelledBookableUnits: number;
+  visibleLabels: number;
+  hiddenLabels: number;
+  /** Seats/table-seats/booths plus the full GA capacity. */
+  totalBookableUnits: number;
+  selectionRingSeatIds: string[];
+  selectionRingColor: string;
+  focusedSectionId: string | null;
+  focusBackdropVisible: boolean;
+  categoryFilterKeys: string[] | null;
+  /** Exact scene-graph proof for the clean section-first overview contract. */
+  overviewStyle: {
+    visibleSectionShells: number;
+    categoryPaintedSectionShells: number;
+    visibleCategoryDetailOutlines: number;
+    visibleSectionRowHints: number;
+    visibleSectionAvailabilityLabels: number;
+    visibleSectionGADetails: number;
+  };
+  labels: RenderedBookableLabelEvidence[];
+  gaAreas: RenderedGAAreaEvidence[];
+  hierarchyLabels: RenderedHierarchyLabelEvidence[];
+  freeTextLabels: RenderedFreeTextEvidence[];
+}
+
 export interface ISeatmapRenderer {
   /** Replace the chart. Resets selection and statuses, zooms to fit.
    *  `opts.floorId` picks which floor to render on a multi-floor chart (Batch 5). */
@@ -568,6 +862,8 @@ export interface ISeatmapRenderer {
    */
   selectAllSelectable?(): ExpandedSeat[];
   selectByLabels?(labels: string[]): ExpandedSeat[];
+  /** Exact-render QA only: select one server-chosen unit without label ambiguity. */
+  setEvidenceSelection?(seatId: string): boolean;
   /** Selectable seats belonging to a section OR zone id (no selection side-effect). */
   getSelectableInSection?(sectionId: string): ExpandedSeat[];
   /** Programmatic deselect of specific seats (e.g. chip × in the cart). */
@@ -578,13 +874,21 @@ export interface ISeatmapRenderer {
    * delta. Purely visual; no state change. `color` overrides the default.
    */
   flashSeat(seatId: string, color?: string): void;
+  /**
+   * Brief organizer attention pulse around a whole section. This is a visual
+   * overlay only: it never changes section geometry, hit targets, selection, or
+   * the active camera. Useful for grouped realtime operations at venue overview.
+   */
+  flashSection?(sectionId: string, color?: string): void;
   zoomToFit(): void;
   /** Zoom in one step about the viewport center, clamped to the usual zoom bounds. */
   zoomIn(): void;
   /** Zoom out one step about the viewport center, clamped to the usual zoom bounds. */
   zoomOut(): void;
-  /** Total seat count of the current chart. */
+  /** Individually status-managed seats/table-seats/booths; excludes GA capacity. */
   seatCount(): number;
+  /** Seats/table-seats/booths plus the full capacity of rendered GA areas. */
+  bookableCount(): number;
   /**
    * Maps a chart-space point (or a seat, by its x/y) to container-relative
    * screen pixels, using the current stage scale/position. Lets host UI anchor
@@ -670,6 +974,9 @@ export interface ISeatmapRenderer {
   getRung?(): LodRung;
   /** Jump the camera to a rung's zoom band, centred on the chart (glided). */
   setRung?(rung: LodRung): void;
+  /** Read actual browser-rendered label visibility, size, fill, ink and state.
+   *  Pure diagnostic: it never changes chart or renderer state. */
+  getRenderedQualityEvidence(): RendererQualityEvidence;
   destroy(): void;
 }
 

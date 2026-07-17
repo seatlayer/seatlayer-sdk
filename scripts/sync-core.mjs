@@ -27,6 +27,12 @@ const appRepo = process.env.SEATMAP_REPO
 // app src path -> core package path (structure preserved)
 const FILES = [
   ['src/core/types.ts', 'packages/core/src/core/types.ts'],
+  // Geometry and rendering rules are transitive dependencies of layout and
+  // SeatmapRenderer. Keep them in the mirror manifest so a successful sync is
+  // also a buildable dependency closure.
+  ['src/core/complexGeometry.ts', 'packages/core/src/core/complexGeometry.ts'],
+  ['src/core/sectionPath.ts', 'packages/core/src/core/sectionPath.ts'],
+  ['src/core/chartRenderRules.ts', 'packages/core/src/core/chartRenderRules.ts'],
   ['src/core/layout.ts', 'packages/core/src/core/layout.ts'],
   ['src/core/ga.ts', 'packages/core/src/core/ga.ts'],
   ['src/core/sections.ts', 'packages/core/src/core/sections.ts'],
