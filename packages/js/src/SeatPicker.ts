@@ -165,6 +165,12 @@ export interface SeatPickerOptions {
   currency?: string;
   /** Colorblind-safe rendering (Okabe-Ito palette, hollow booked seats). */
   colorblindSafe?: boolean;
+  /**
+   * Hide the "Powered by SeatLayer" attribution badge in the side panel foot.
+   * The chart theme's own `hideBadge` flag (paid orgs) also hides it — the badge
+   * is shown only when BOTH this option and the theme flag are unset/false.
+   */
+  hideBadge?: boolean;
   /** Host theme overrides — see SeatPickerTheme. */
   theme?: SeatPickerTheme;
   /**
@@ -554,6 +560,39 @@ const CSS = `
 .sl-booked.on .sl-booked-title{animation-delay:.22s}
 .sl-booked.on .sl-booked-sub{animation-delay:.3s}
 
+/* sold-out overlay — every SEATED category's live availability is 0. Centered
+   over the map; a stub (disabled) "Join waitlist" button, exactly like the page.
+   Suppressed when GA areas exist (GA capacity isn't seat-counted). Clears live
+   the moment WS frees a seat up. */
+.sl-soldout{position:absolute;inset:0;z-index:10;display:none;flex-direction:column;align-items:center;
+  justify-content:center;text-align:center;gap:8px;padding:24px;
+  background:color-mix(in srgb,var(--sl-bg) 82%,transparent);backdrop-filter:blur(4px)}
+.sl-soldout.on{display:flex}
+.sl-soldout-eyebrow{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--sl-accent);font-weight:800}
+.sl-soldout-title{font-size:32px;font-weight:800;color:var(--sl-text);line-height:1.05}
+.sl-soldout-copy{max-width:360px;font-size:13px;color:var(--sl-muted);line-height:1.5}
+.sl-picker .sl-soldout-btn{margin-top:10px;min-height:40px;padding:10px 18px;border-radius:var(--sl-r-sm);
+  background:var(--sl-surface);color:var(--sl-muted);border:1px solid var(--sl-line);font-weight:800;font-size:13px;
+  cursor:not-allowed;opacity:.85}
+
+/* sales-closed pill (header) — persistent read-only state when the event's sales
+   window is closed at load or closes live mid-session. Neutral (not accent) so it
+   reads as "unavailable", distinct from the accent hold pill next to it. */
+.sl-closed-pill{display:none;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;flex:none;
+  background:color-mix(in srgb,var(--sl-text) 12%,var(--sl-surface));color:var(--sl-text);
+  font-weight:700;font-size:12px;white-space:nowrap}
+.sl-closed-pill.on{display:inline-flex}
+.sl-closed-pill svg{width:13px;height:13px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+
+/* "Powered by SeatLayer" attribution badge (side-panel foot) — the small gold
+   rounded logo mark + wordmark. Hidden when the host opts out or the org's paid
+   theme sets hideBadge. */
+.sl-powered{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:10px;
+  font-size:11px;letter-spacing:.03em;color:var(--sl-muted)}
+.sl-powered-mark{width:16px;height:16px;border-radius:4px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:var(--sl-accent);color:var(--sl-accent-ink)}
+.sl-powered-mark svg{width:11px;height:11px;fill:currentColor}
+
 /* a11y filter chips (flow within the top-left region) */
 .sl-chips{display:flex;gap:6px;flex-wrap:wrap}
 .sl-chip-f{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:700;
@@ -773,6 +812,29 @@ function resolveTokens(chart: ChartTheme | undefined, host: SeatPickerTheme | un
   };
 }
 
+/**
+ * Colorblind-safe preference is a SHARED buyer preference across every SeatLayer
+ * surface (the bespoke public page persists it too), so the widget reads/writes
+ * the SAME localStorage key. All access is guarded — private-mode/SSR safe.
+ */
+const CB_STORAGE_KEY = 'seatmap.a11y.cb';
+function readStoredColorblind(): boolean | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    const raw = window.localStorage.getItem(CB_STORAGE_KEY);
+    return raw == null ? null : raw === '1';
+  } catch {
+    return null;
+  }
+}
+function writeStoredColorblind(on: boolean): void {
+  try {
+    window.localStorage.setItem(CB_STORAGE_KEY, on ? '1' : '0');
+  } catch {
+    /* private mode / storage disabled — preference is best-effort */
+  }
+}
+
 export class SeatPicker {
   private readonly opts: SeatPickerOptions;
   private readonly api: PickerTransport;
@@ -816,6 +878,13 @@ export class SeatPicker {
   private baCat = '';
   private bestAvailableConfirm = false;
   private releasingHold = false;
+  /** Event sales window is closed (read-only load state / live close). */
+  private salesClosed = false;
+  /** Every seated category's live availability is 0 (sold-out overlay is up). */
+  private soldOut = false;
+  private soldoutEl: HTMLDivElement | null = null;
+  /** Resolved colorblind-safe state — stored preference wins over the option. */
+  private cbSafe = false;
 
   // arena / multi-floor / seat-view chrome
   private rungsEl: HTMLDivElement | null = null;
@@ -935,13 +1004,16 @@ export class SeatPicker {
     this.apiBase = (options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
     this.api = options.transport ?? new PubApi(this.apiBase);
     this.maxTickets = Math.max(1, Math.floor(options.maxSelection ?? DEFAULT_MAX_SELECTION));
+    // Colorblind preference: the stored (cross-surface) value wins over the
+    // option; the option is only the initial default when nothing is stored.
+    this.cbSafe = readStoredColorblind() ?? !!options.colorblindSafe;
     this.controller = new PickerController({
       transport: this.api,
       eventKey: options.event,
       maxSelection: this.maxTickets,
       currency: options.currency,
       flashOnLiveChange: true,
-      colorblindSafe: options.colorblindSafe,
+      colorblindSafe: this.cbSafe,
       onSelectionChange: () => {
         this.syncTray();
         // Seat-picking has begun — collapse the section card out of the way.
@@ -969,6 +1041,13 @@ export class SeatPicker {
       },
       confirmSelection: this.opts.confirmSelection,
       onSelect: (seat) => {
+        // Sales-closed is a read-only state — refuse the pick (the controller
+        // doesn't gate tapping; server would 409 the eventual hold anyway).
+        if (this.salesClosed) {
+          this.controller.deselect([seat.id]);
+          this.toast(this.tf('picker.salesClosedToast', 'Sales are closed for this event.'), 'warning');
+          return;
+        }
         this.flashPickedSeat(seat.id);
         if (this.opts.confirmSelection) this.showConfirm(seat);
       },
@@ -991,6 +1070,9 @@ export class SeatPicker {
       onHint: (m) => {
         if (m) this.toast(m);
       },
+      // Server declared the event closed mid-session (409 event_closed) — keep
+      // the toast (raised by handleCta), and add the persistent read-only state.
+      onSalesClosed: () => this.setSalesClosed(true),
       onError: (err) => this.opts.onError?.(err),
     });
   }
@@ -1032,6 +1114,10 @@ export class SeatPicker {
           <div class="sl-head-meta" data-ref="meta"></div>
         </div>
         <span class="sl-hold-pill" data-ref="hold"></span>
+        <span class="sl-closed-pill" data-ref="closedPill" role="status">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          <span data-ref="closedPillText"></span>
+        </span>
         <button type="button" class="sl-close" data-ref="close" aria-label="Close">
           <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
@@ -1187,6 +1273,8 @@ export class SeatPicker {
       return this;
     }
     this.els.boot.remove();
+    // Read-only load state: the chart() payload carries salesClosed.
+    this.salesClosed = !!info.salesClosed;
 
     // Feature 6: anchor regions for all persistent map chrome, then move the
     // pre-built zoom column + toast into their regions (both were in the skeleton).
@@ -1218,6 +1306,10 @@ export class SeatPicker {
       ? new Date(info.startsAt).toLocaleString(this.opts.locale, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
       : '';
     this.els.meta.textContent = [info.venue, when].filter(Boolean).join(' · ');
+
+    // "Powered by SeatLayer" attribution badge — hidden when the host opts out
+    // OR the org's paid chart theme sets hideBadge (either being true hides it).
+    this.buildBadge(chartTheme);
 
     // Accessibility filter chips — only for types actually present in the chart.
     const present = new Set<AccessibilityType>();
@@ -1256,14 +1348,16 @@ export class SeatPicker {
     cb.className = 'sl-cbbtn';
     this.cbEl = cb;
     cb.setAttribute('aria-label', 'Toggle colorblind-friendly colors');
-    cb.setAttribute('aria-pressed', String(!!this.opts.colorblindSafe));
+    // Rehydrated from the shared preference (constructor read stored → this.cbSafe).
+    cb.setAttribute('aria-pressed', String(this.cbSafe));
     cb.innerHTML = '<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
     this.els.zfit.parentElement!.appendChild(cb);
-    let cbOn = !!this.opts.colorblindSafe;
     cb.addEventListener('click', () => {
-      cbOn = !cbOn;
-      cb.setAttribute('aria-pressed', String(cbOn));
-      this.controller.setColorblindSafe(cbOn);
+      this.cbSafe = !this.cbSafe;
+      cb.setAttribute('aria-pressed', String(this.cbSafe));
+      this.controller.setColorblindSafe(this.cbSafe);
+      // Persist under the SAME key the public page uses (cross-surface preference).
+      writeStoredColorblind(this.cbSafe);
     });
 
     // Screen-reader announcements for keyboard seat focus.
@@ -1285,6 +1379,7 @@ export class SeatPicker {
     // the whole widget). Both appended post-render for the same wipe reason.
     this.buildExtendPrompt();
     this.buildBookedOverlay();
+    this.buildSoldoutOverlay();
 
     // Dock layout-dependent chrome (a11y chips + colorblind toggle) for the
     // CURRENT layout — the initial applyLayout ran before these were built.
@@ -1293,6 +1388,9 @@ export class SeatPicker {
     await this.restoreRememberedHold();
     if (this.destroyed) return this;
 
+    // Reflect the read-only load state (pill + disabled CTA/controls) with no
+    // toast — a fresh mount into a closed event is not a live "just closed" event.
+    if (this.salesClosed) this.applySalesClosed();
     this.syncPrices();
     this.syncTray();
     return this;
@@ -1351,6 +1449,100 @@ export class SeatPicker {
     this.root!.appendChild(el);
     this.bookedEl = el;
     this.els.bookedSub = el.querySelector('[data-ref="bookedSub"]') as HTMLElement;
+  }
+
+  /**
+   * Localized string with a literal fallback. `t()` returns the key itself for
+   * unknown keys, so this collapses that to `fallback` — while still honoring a
+   * host `messages` override (which makes `t()` return the override, not the key).
+   */
+  private tf(key: string, fallback: string): string {
+    const v = t(key);
+    return v === key ? fallback : v;
+  }
+
+  /** Sold-out overlay — centered over the map, disabled waitlist stub (Gap 2). */
+  private buildSoldoutOverlay(): void {
+    if (!this.els.map) return;
+    const el = document.createElement('div');
+    el.className = 'sl-soldout';
+    el.setAttribute('role', 'status');
+    const name = (this.controller.doc?.theme?.brandName ?? this.opts.theme?.brandName ?? this.els.name?.textContent ?? this.tf('picker.soldOutEyebrow', 'This event')).toUpperCase();
+    el.innerHTML =
+      `<div class="sl-soldout-eyebrow">${name}</div>` +
+      `<div class="sl-soldout-title">${this.tf('picker.soldOutTitle', 'Sold out')}</div>` +
+      `<p class="sl-soldout-copy">${this.tf('picker.soldOutCopy', "Every seat is gone. Join the waitlist and we’ll email you if seats are released.")}</p>` +
+      `<button type="button" class="sl-soldout-btn" disabled>${this.tf('picker.waitlist', 'Join waitlist')}</button>`;
+    this.els.map.appendChild(el);
+    this.soldoutEl = el;
+  }
+
+  /**
+   * Recompute the sold-out state on every price/availability sync. Sold-out ⇔
+   * every SEATED category's live free count is 0. Suppressed when the chart has
+   * GA areas (GA capacity isn't per-seat, so seated counts would read 0 and
+   * falsely block standing room) — mirrors the public page. Clears live when WS
+   * frees a seat up.
+   */
+  private syncSoldout(categories: Array<{ key: string }>, left: Record<string, number>): void {
+    const hasGA = this.controller.getGAAreas().length > 0;
+    const soldOut = this.isSoldOut(categories, left, hasGA);
+    if (soldOut === this.soldOut) return;
+    this.soldOut = soldOut;
+    this.soldoutEl?.classList.toggle('on', soldOut);
+  }
+
+  /**
+   * Pure sold-out predicate: every SEATED category's free count is 0, there is at
+   * least one seated category, and there are no GA areas (GA capacity isn't
+   * per-seat, so seated counts read 0 and would falsely block standing room).
+   * `left` is seeded implicitly — a missing key means a fully-booked tier (0 free).
+   */
+  private isSoldOut(categories: Array<{ key: string }>, left: Record<string, number>, hasGA: boolean): boolean {
+    return !hasGA && categories.length > 0 && categories.every((c) => (left[c.key] ?? 0) === 0);
+  }
+
+  /**
+   * Sales-closed read-only state (Gap 3): persistent header pill, disabled CTA
+   * with a closed label, and frozen best-available / GA controls. `setSalesClosed`
+   * is the reactive entry (live 409 event_closed); `applySalesClosed` is the
+   * idempotent DOM apply used at load and on transition.
+   */
+  private setSalesClosed(closed: boolean): void {
+    if (this.salesClosed === closed) return;
+    this.salesClosed = closed;
+    this.applySalesClosed();
+  }
+
+  private applySalesClosed(): void {
+    const pill = this.els.closedPill;
+    if (pill) {
+      pill.classList.toggle('on', this.salesClosed);
+      const text = this.els.closedPillText ?? pill;
+      text.textContent = this.tf('picker.salesClosedPill', 'Sales are closed');
+    }
+    this.root?.setAttribute('data-sales-closed', String(this.salesClosed));
+    this.syncCta();
+    this.syncTray();
+  }
+
+  /** The badge is hidden when the host opts out OR the org's theme sets hideBadge. */
+  private badgeHidden(chartTheme?: ChartTheme): boolean {
+    return !!(this.opts.hideBadge || chartTheme?.hideBadge);
+  }
+
+  /** Attribution badge in the side-panel foot (Gap 7). Hidden per host/theme. */
+  private buildBadge(chartTheme: ChartTheme | undefined): void {
+    if (this.badgeHidden(chartTheme)) return;
+    const foot = this.els.foot;
+    if (!foot) return;
+    const el = document.createElement('div');
+    el.className = 'sl-powered';
+    el.innerHTML =
+      `<span class="sl-powered-mark" aria-hidden="true">` +
+      `<svg viewBox="0 0 24 24"><path d="M4 15c0-1.1.9-2 2-2h12a2 2 0 0 1 2 2v3h-3v-2H7v2H4v-3Z"/><rect x="7" y="7" width="10" height="5" rx="1.6"/></svg>` +
+      `</span><span>${this.tf('picker.poweredBy', 'Powered by SeatLayer')}</span>`;
+    foot.appendChild(el);
   }
 
   // ---- Feature 6: chrome anchor regions -------------------------------------
@@ -1492,6 +1684,11 @@ export class SeatPicker {
   private syncCta(count = this.lastTrayCount, pending = this.pendingSelectionCount()): void {
     const cta = this.els.cta as HTMLButtonElement | undefined;
     if (!cta) return;
+    if (this.salesClosed) {
+      cta.disabled = true;
+      cta.textContent = this.tf('picker.salesClosedCta', 'Sales closed');
+      return;
+    }
     if (this.confirmSeat) {
       cta.disabled = true;
       cta.textContent = 'Confirm or cancel this seat';
@@ -2366,6 +2563,7 @@ export class SeatPicker {
     if (!doc || !this.els.prices) return;
     const left = this.controller.categoryAvailability();
     this.narrateAvailability(doc.categories, left);
+    this.syncSoldout(doc.categories, left);
     this.els.prices.innerHTML = doc.categories
       .map((c) => {
         const price = this.catPrice(c);
@@ -2664,6 +2862,15 @@ export class SeatPicker {
       });
     });
 
+    // Sales closed: freeze the best-available + GA controls (read-only state).
+    if (this.salesClosed) {
+      this.els.tray
+        .querySelectorAll<HTMLButtonElement | HTMLSelectElement>('.sl-ba-go,[data-ba],[data-ba-cat],[data-ba-replace],.sl-ga button')
+        .forEach((el) => {
+          el.disabled = true;
+        });
+    }
+
     // totals + CTA (held lines + fresh selections + GA)
     const gaTotal = this.pendingGATotal(gaAreas);
     const gaCount = this.pendingGACount();
@@ -2790,6 +2997,7 @@ export class SeatPicker {
   }
 
   private async handleCta(): Promise<void> {
+    if (this.salesClosed) return;
     if (this.totalTicketCount() > this.maxTickets) {
       this.toast(`Remove tickets until your order has ${this.maxTickets} or fewer.`, 'warning');
       return;
@@ -2841,6 +3049,10 @@ export class SeatPicker {
       this.opts.onError?.(err);
       const problem = err as { reason?: string; conflicts?: Array<{ label?: string }> };
       const labels = (problem.conflicts ?? []).map((conflict) => conflict.label).filter(Boolean).slice(0, 3);
+      // The CTA's controller.hold() path doesn't surface onSalesClosed — apply the
+      // persistent read-only state here (the toast below stays). book/bestAvailable
+      // paths reach it via the onSalesClosed callback.
+      if (problem.reason === 'event_closed') this.setSalesClosed(true);
       const message = problem.reason === 'event_closed'
         ? 'Seat sales have closed for this event.'
         : labels.length
@@ -3078,7 +3290,7 @@ export class SeatPicker {
   }
 
   async bestAvailable(qty: number, categoryKey?: string): Promise<HoldResult | null> {
-    if (this.bestAvailableBusy) return null;
+    if (this.salesClosed || this.bestAvailableBusy) return null;
     qty = Math.max(1, Math.min(this.maxTickets, Math.floor(qty)));
     if (this.confirmSeat) this.cancelConfirm();
     this.bestAvailableConfirm = false;
