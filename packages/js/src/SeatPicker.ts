@@ -106,6 +106,14 @@ export interface CheckoutHandoff {
   total: number;
 }
 
+/** Host-authoritative pricing — see {@link SeatPickerOptions.pricing}. */
+export interface SeatPickerPricing {
+  /** Unit prices by category key: a flat number, or `{ base, tiers: { tierId: price } }`. */
+  prices?: Record<string, number | { base?: number; tiers?: Record<string, number> }>;
+  /** Custom money renderer (e.g. `(n) => n + '€'`). Defaults to Intl currency formatting. */
+  formatter?: (amount: number, currency: string) => string;
+}
+
 /** Host theme overrides — any subset; unset keys fall back to the org's chart theme, then defaults. */
 export interface SeatPickerTheme {
   /** Brand accent (CTA, active chips, hold pill). */
@@ -153,6 +161,15 @@ export interface SeatPickerOptions {
   colorblindSafe?: boolean;
   /** Host theme overrides — see SeatPickerTheme. */
   theme?: SeatPickerTheme;
+  /**
+   * Host-authoritative pricing. When your shop charges different prices than
+   * the chart's stored category prices, pass them here so the buyer sees the
+   * price they will actually pay — on the map tooltip, confirm popover, price
+   * panel, tray, totals, and in the checkout handoff's line items. Keyed by
+   * category key; per-tier overrides nest under `tiers`. Unlisted categories
+   * fall back to the chart price.
+   */
+  pricing?: SeatPickerPricing;
   /** Hold TTL in ms passed to hold(); server clamps to its own limits. */
   holdTtlMs?: number;
   /**
@@ -1465,7 +1482,7 @@ export class SeatPicker {
       heldGA.set(item.objectId, (heldGA.get(item.objectId) ?? 0) + (item.quantity ?? 1));
     }
     return gaAreas.reduce(
-      (sum, area) => sum + area.price * Math.max(0, (this.gaQty.get(area.id) ?? 0) - (heldGA.get(area.id) ?? 0)),
+      (sum, area) => sum + this.paidPrice(area.categoryKey, null, area.price) * Math.max(0, (this.gaQty.get(area.id) ?? 0) - (heldGA.get(area.id) ?? 0)),
       0,
     );
   }
@@ -1763,9 +1780,11 @@ export class SeatPicker {
 
   // ---- F4 price-band filter -------------------------------------------------
 
-  /** Effective price of a category (first tier when tiered, else base price). */
-  private catPrice(c: { price?: number; tiers?: { price: number }[] }): number | undefined {
-    return c.tiers?.length ? c.tiers[0].price : c.price;
+  /** Effective display price of a category: host pricing override → first tier → base. */
+  private catPrice(c: { key?: string; price?: number; tiers?: { id?: string; price: number }[] }): number | undefined {
+    const chart = c.tiers?.length ? c.tiers[0].price : c.price;
+    if (chart === undefined || !c.key) return chart;
+    return this.paidPrice(c.key, c.tiers?.[0]?.id ?? null, chart);
   }
 
   /** Derive price bands: one chip per distinct price (≤5), else quantile ranges. */
@@ -1937,10 +1956,17 @@ export class SeatPicker {
   private renderSectionCard(summary: SectionSummary): void {
     if (!this.els.map) return;
     this.secCardEl?.remove();
+    // min/max over the section's categories at the price the buyer will PAY
+    // (host pricing override aware) — not the chart's stored range.
+    const paid = summary.categories.length
+      ? summary.categories.map((c) => this.paidPrice(c.key, null, c.price))
+      : [summary.priceMin, summary.priceMax];
+    const paidMin = Math.min(...paid);
+    const paidMax = Math.max(...paid);
     const priceLabel =
-      summary.priceMin === summary.priceMax
-        ? this.money(summary.priceMin)
-        : `${this.money(summary.priceMin)}–${this.money(summary.priceMax)}`;
+      paidMin === paidMax
+        ? this.money(paidMin)
+        : `${this.money(paidMin)}–${this.money(paidMax)}`;
     const leftLabel = tCount('picker.seatsLeftInSection', summary.seatsLeft);
     const xBtn = `<button type="button" class="sl-seccard-x" aria-label="${t('picker.closeSectionSummary')}">✕</button>`;
     const card = document.createElement('div');
@@ -1985,7 +2011,7 @@ export class SeatPicker {
           const dim = this.priceBandKeys != null && !this.priceBandKeys.has(c.key);
           return (
             `<span class="sl-seccard-mix-item${dim ? ' sl-dim' : ''}"><span class="sl-seccard-mix-dot" style="background:${c.color}"></span>` +
-            `${c.label} <span class="sl-seccard-mix-price">${this.money(c.price)}</span></span>`
+            `${c.label} <span class="sl-seccard-mix-price">${this.money(this.paidPrice(c.key, null, c.price))}</span></span>`
           );
         })
         .join('');
@@ -2068,7 +2094,7 @@ export class SeatPicker {
     const cat = this.controller.doc?.categories.find((c) => c.key === seat.categoryKey);
     const status = this.controller.getStatus(seat.id) ?? 'free';
     const statusText = status === 'free' ? 'available' : status === 'held' ? 'on hold' : 'taken';
-    const price = cat?.tiers?.length ? cat.tiers[0].price : cat?.price;
+    const price = cat ? this.catPrice(cat) : undefined;
     this.srEl.textContent = `Seat ${seat.label}, ${cat?.label ?? seat.categoryKey}${
       price != null ? `, ${this.money(price)}` : ''
     }, ${statusText}`;
@@ -2087,7 +2113,10 @@ export class SeatPicker {
     if (this.tipEl) this.tipEl.style.display = 'none';
     const details = this.controller.seatDetails(seat.id);
     const cat = this.controller.doc?.categories.find((c) => c.key === seat.categoryKey);
-    const price = details?.price ?? (cat?.tiers?.length ? cat.tiers[0].price : cat?.price);
+    const chartPrice = details?.price ?? (cat?.tiers?.length ? cat.tiers[0].price : cat?.price);
+    const price = chartPrice != null
+      ? this.paidPrice(seat.categoryKey, details?.tierId ?? cat?.tiers?.[0]?.id ?? null, chartPrice)
+      : undefined;
     const safe = (value: unknown): string => String(value ?? '—').replace(/[&<>"]/g, (char) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
     })[char]!);
@@ -2309,11 +2338,27 @@ export class SeatPicker {
   // ---- chrome sync ----------------------------------------------------------
 
   private money(n: number): string {
+    const formatter = this.opts.pricing?.formatter;
+    if (formatter) return formatter(n, this.currency);
     try {
       return new Intl.NumberFormat(this.opts.locale, { style: 'currency', currency: this.currency }).format(n);
     } catch {
       return `${n} ${this.currency}`;
     }
+  }
+
+  /**
+   * The price the buyer will actually pay for a category (+tier): the host's
+   * `pricing` override when present, else the chart's stored price. Every
+   * price the widget DISPLAYS or hands off must flow through here — a map
+   * that shows one price while checkout charges another destroys trust.
+   */
+  private paidPrice(categoryKey: string | undefined, tierId: string | null | undefined, fallback: number): number {
+    const entry = categoryKey ? this.opts.pricing?.prices?.[categoryKey] : undefined;
+    if (entry === undefined) return fallback;
+    if (typeof entry === 'number') return entry;
+    if (tierId && entry.tiers?.[tierId] !== undefined) return entry.tiers[tierId];
+    return entry.base ?? fallback;
   }
 
   private syncPrices(): void {
@@ -2323,7 +2368,7 @@ export class SeatPicker {
     this.narrateAvailability(doc.categories, left);
     this.els.prices.innerHTML = doc.categories
       .map((c) => {
-        const price = c.tiers?.length ? c.tiers[0].price : c.price;
+        const price = this.catPrice(c);
         const dim = this.priceBandKeys != null && !this.priceBandKeys.has(c.key);
         return (
           `<div class="sl-price-row${dim ? ' sl-dim' : ''}" data-cat="${c.key}"><span class="sl-dot" style="background:${c.color}"></span>` +
@@ -2481,7 +2526,7 @@ export class SeatPicker {
           `<span class="sl-ticket-state held" aria-label="Held for you" title="Held for you">` +
           `<svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>` +
           `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>` +
-          `<span class="amt">${this.money(item.unitPrice * (item.quantity ?? 1))}</span>` +
+          `<span class="amt">${this.money(this.paidPrice(item.categoryKey, item.tierId, item.unitPrice) * (item.quantity ?? 1))}</span>` +
           `</div></div>` +
           iconRail(`Remove held ticket ${item.label}`, canView ? item.label : null) +
           `</div>`,
@@ -2498,7 +2543,7 @@ export class SeatPicker {
         s.tiers && s.tiers.length
           ? `<select class="tier" data-tier="${s.id}" aria-label="${t('picker.ticketTierFor', { label: s.label })}">` +
             s.tiers
-              .map((ti) => `<option value="${ti.id}"${ti.id === s.tierId ? ' selected' : ''}>${ti.name} · ${this.money(ti.price)}</option>`)
+              .map((ti) => `<option value="${ti.id}"${ti.id === s.tierId ? ' selected' : ''}>${ti.name} · ${this.money(this.paidPrice(s.categoryKey, ti.id, ti.price))}</option>`)
               .join('') +
             `</select>`
           : '';
@@ -2510,7 +2555,7 @@ export class SeatPicker {
           `<span class="sl-ticket-state" aria-label="Selected" title="Selected">` +
           `<svg viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></svg></span>` +
           `<span class="cat">${cat?.label ?? s.categoryKey}</span>${tierSelect}` +
-          `<span class="amt">${this.money(s.price)}</span>` +
+          `<span class="amt">${this.money(this.paidPrice(s.categoryKey, s.tierId ?? null, s.price))}</span>` +
           `</div></div>` +
           iconRail(`Remove ${s.label}`, canView ? s.label : null) +
           `</div>`,
@@ -2522,7 +2567,7 @@ export class SeatPicker {
       parts.push(
         `<div class="sl-ga" data-ga="${area.id}"><div class="sl-ga-info">` +
           `<div class="sl-ga-name">${area.label}</div>` +
-          `<div class="sl-ga-sub">${this.money(area.price)} · ${area.available} left</div></div>` +
+          `<div class="sl-ga-sub">${this.money(this.paidPrice(area.categoryKey, null, area.price))} · ${area.available} left</div></div>` +
           `<div class="sl-ga-qty">` +
           `<button type="button" data-d="-1" aria-label="Fewer">−</button><span>${qty}</span>` +
           `<button type="button" data-d="1" aria-label="More">+</button></div></div>`,
@@ -2622,10 +2667,10 @@ export class SeatPicker {
     // totals + CTA (held lines + fresh selections + GA)
     const gaTotal = this.pendingGATotal(gaAreas);
     const gaCount = this.pendingGACount();
-    const heldTotal = heldItems.reduce((sum, item) => sum + item.unitPrice * (item.quantity ?? 1), 0);
+    const heldTotal = heldItems.reduce((sum, item) => sum + this.paidPrice(item.categoryKey, item.tierId, item.unitPrice) * (item.quantity ?? 1), 0);
     const heldCount = heldItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
     const freshSeats = seats.filter((seat) => !heldLabels.has(seat.label));
-    const total = freshSeats.reduce((sum, s) => sum + s.price, 0) + gaTotal + heldTotal;
+    const total = freshSeats.reduce((sum, s) => sum + this.paidPrice(s.categoryKey, s.tierId ?? null, s.price), 0) + gaTotal + heldTotal;
     const count = freshSeats.length + gaCount + heldCount;
     const pendingCount = this.pendingSelectionCount();
     const previousCount = this.lastTrayCount;
@@ -2914,13 +2959,15 @@ export class SeatPicker {
   /** Assemble the stable {@link CheckoutHandoff} from a hold's server line items. */
   private buildHandoff(hold: HoldResult): CheckoutHandoff {
     const items = hold.items ?? [];
+    // Host `pricing` overrides win in the handoff too — the host gets back the
+    // prices it will actually charge, so map display and order total agree.
     const lineItems: CheckoutLineItem[] = items.map((it: HoldLineItem) => ({
       label: it.label,
       objectId: it.objectId,
       objectType: it.objectType,
       categoryKey: it.categoryKey,
       tierId: it.tierId,
-      unitPrice: it.unitPrice,
+      unitPrice: this.paidPrice(it.categoryKey, it.tierId, it.unitPrice),
       currency: it.currency ?? this.currency,
       quantity: it.quantity ?? 1,
     }));
@@ -3003,7 +3050,7 @@ export class SeatPicker {
       `<div style="display:flex;align-items:center;gap:6px;margin-top:4px">` +
       `<span style="width:9px;height:9px;border-radius:50%;flex:none;background:${details.categoryColor}"></span>` +
       `<span style="opacity:.75">${details.categoryLabel}</span>` +
-      `<span style="margin-left:auto;font-weight:800">${this.money(details.price)}</span></div>` +
+      `<span style="margin-left:auto;font-weight:800">${this.money(this.paidPrice(details.categoryKey, details.tierId ?? null, details.price))}</span></div>` +
       statusLine;
     this.tipEl.style.display = 'block';
     this.placeTooltip();
