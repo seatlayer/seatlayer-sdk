@@ -36,7 +36,6 @@ import {
   type SectionSummary,
 } from '@seatlayer/core';
 import { PubApi, type HoldLineItem, type HoldResult } from './api';
-import type { GAAreaAvailability } from './SeatingChart';
 
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
 const DEFAULT_MAX_SELECTION = 10;
@@ -813,7 +812,6 @@ export class SeatPicker {
   private confirmEl: HTMLDivElement | null = null;
   private confirmSeat: ExpandedSeat | null = null;
   private srEl: HTMLDivElement | null = null;
-  private a11yFilter: AccessibilityType | 'all' = 'all';
   private baQty = 2;
   private baCat = '';
   private bestAvailableConfirm = false;
@@ -828,14 +826,12 @@ export class SeatPicker {
   private allSeatsCache: ExpandedSeat[] | null = null;
 
   // F3 minimap
-  private miniEl: HTMLDivElement | null = null;
   private miniCanvas: HTMLCanvasElement | null = null;
   private miniBase: HTMLCanvasElement | null = null;
   private miniTf: { scale: number; offX: number; offY: number; dpr: number } | null = null;
 
   // F4 price-band filter — active band's category keys (null = all prices)
   private priceBandKeys: Set<string> | null = null;
-  private priceFilterEl: HTMLSelectElement | null = null;
   /** Last surfaced section summary (re-rendered when the price band changes). */
   private lastSection: SectionSummary | null = null;
   /** Section card collapsed to its slim pill (seat-picking has begun). */
@@ -1247,7 +1243,6 @@ export class SeatPicker {
       chips.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
         btn.addEventListener('click', () => {
           const f = btn.dataset.f as AccessibilityType | 'all';
-          this.a11yFilter = f;
           chips.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === btn));
           this.controller.setAccessibilityFilter(f === 'all' ? null : [f]);
         });
@@ -1659,7 +1654,6 @@ export class SeatPicker {
     canvas.style.height = `${h}px`;
     wrap.appendChild(canvas);
     (this.regions['bottom-left'] ?? this.els.map).appendChild(wrap);
-    this.miniEl = wrap;
     this.miniCanvas = canvas;
 
     // world → minimap (device px), contain + centre — matches thumb.ts.
@@ -1843,7 +1837,6 @@ export class SeatPicker {
       .map((band) => `<option value="${band.id}">${band.label}</option>`)
       .join('');
     this.els.pricesSec.appendChild(select);
-    this.priceFilterEl = select;
     select.addEventListener('change', () => {
       const band = bands.find((candidate) => candidate.id === select.value);
       const keys = band?.keys ?? null;
