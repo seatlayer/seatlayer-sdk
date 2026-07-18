@@ -129,6 +129,27 @@ export function accessibilityMeta(key: AccessibilityType): AccessibilityMeta | u
   return ACCESSIBILITY_LABEL.get(key);
 }
 
+/**
+ * Outer-ring colour per accommodation. Shared by the buyer picker and the
+ * designer canvas so an accessible seat reads with the same hue in both — the
+ * seat's first-listed type wins. `wheelchair` blue is the default fallback.
+ */
+export const ACCESSIBILITY_RING_COLOR: Record<AccessibilityType, string> = {
+  wheelchair: '#3b82f6',
+  companion: '#8b5cf6',
+  'semi-ambulatory': '#0ea5e9',
+  hearing: '#14b8a6',
+  'sign-language': '#f59e0b',
+  'plus-size': '#ec4899',
+  'lift-armrest': '#22c55e',
+};
+
+/** Ring colour for a seat's accessibility set (first-listed type wins). */
+export function accessibilityRingColor(types: AccessibilityType[] | undefined): string {
+  const primary = types?.[0];
+  return (primary && ACCESSIBILITY_RING_COLOR[primary]) || '#3b82f6';
+}
+
 export interface SeatOverride {
   /** 0-based seat index within the row. */
   index: number;
@@ -139,26 +160,71 @@ export interface SeatOverride {
   dy?: number;
   /** Replace the computed label entirely. */
   label?: string;
+  /** Buyer-facing copy only. Booking/API identity remains row id + slot index
+   * internally and the legacy `label` externally for backwards compatibility. */
+  displayLabel?: string;
   categoryKey?: string;
   /** @deprecated legacy flag — read as `['wheelchair']`; write `accessibility`. */
   accessible?: boolean;
   /** Accessibility accommodations of this seat (empty/absent = none). */
   accessibility?: AccessibilityType[];
+  /** Commercial selling/view attributes are deliberately not accessibility. */
+  commercial?: SeatCommercialAttributes;
+  /** Seat-specific view photo; falls back to the row photo. */
+  viewFromSeatUrl?: string;
+}
+
+export interface SeatCommercialAttributes {
+  restrictedView?: boolean;
+  obstructedView?: boolean;
+  premium?: boolean;
+  note?: string;
+}
+
+/**
+ * Per-object label ink + size overrides layered on top of the chart-wide Theme
+ * defaults (rowLabelColor / textColor for rows, the section-name ink for
+ * sections). Both fields are optional: an absent field means "inherit the theme
+ * default". `color` is a preferred hex — renderers still pass it through the
+ * shared auto-contrast rule (`stateAwareBookableLabelInk`), so a choice that
+ * would be illegible over the seat/section background is switched to black or
+ * white at paint time. `size` is a font size in chart units, clamped to
+ * LABEL_STYLE_MIN_SIZE..LABEL_STYLE_MAX_SIZE by the shared ops.
+ */
+export interface LabelStyle {
+  size?: number;
+  color?: string;
+}
+
+/** Clamp bounds for a per-object label `size`, shared by ops, MCP, and UI. */
+export const LABEL_STYLE_MIN_SIZE = 8;
+export const LABEL_STYLE_MAX_SIZE = 24;
+
+export interface LabelPresentation {
+  visible?: boolean;
+  /** Exact Designer-owned label anchor; public semantic MCP schemas omit it. */
+  position?: Point;
+  rotation?: number;
+  style?: 'plain' | 'pill';
+  /** Per-object size/color override for this row's or section's label. */
+  labelStyle?: LabelStyle;
 }
 
 /** Brand/venue theming — applied by the renderer in both designer and picker. */
 export interface ChartTheme {
   /** Canvas background color (default dark: #0e1117-ish radial). */
   background?: string;
-  /** Seat label text color (default dark ink #0b1220). */
+  /** Preferred text color for the numbers inside seat markers. */
   seatLabelColor?: string;
+  /** Preferred color for row identifiers such as A, B, C. Falls back to textColor. */
+  rowLabelColor?: string;
   /** Selection ring / accent color (default white ring + brand accent). */
   selectionColor?: string;
   /** Décor (stage/shape) default fill. */
   decorFill?: string;
   /** Free-text color default. */
   textColor?: string;
-  /** Font family (CSS stack) for all rendered text — seat labels, sections, décor text. */
+  /** Font family (CSS stack) for all rendered text — row labels, seat numbers, sections, décor text. */
   fontFamily?: string;
   /** Seat size multiplier on the base radius (0.7–1.6, default 1) — bigger seats fit longer labels. */
   seatScale?: number;
@@ -180,6 +246,9 @@ export interface RowObject {
   id: string;
   /** Row label, e.g. "A". Seat labels are `${label}-${n}`. */
   label: string;
+  /** Buyer-facing row name. `label` remains the legacy inventory prefix. */
+  displayLabel?: string;
+  labelPresentation?: LabelPresentation;
   /** Position of the FIRST seat. */
   origin: Point;
   /** Degrees, clockwise. 0 = seats laid out along +x. */
@@ -201,6 +270,31 @@ export interface RowObject {
    * inventory. It enables revision-safe replacement without touching manually
    * authored rows or accepting client coordinates. */
   referenceInventorySource?: ReferenceInventorySource;
+  /** Semantic parameters for a row produced by the shared Arc/Fan operation.
+   * Designer can reopen these parameters while every segment in the group
+   * still carries the same generation signature. Public MCP tools never accept
+   * the stored center/angles as arbitrary model-authored coordinates. */
+  arcFanGeneration?: {
+    kind: 'arc-fan-v1';
+    groupId: string;
+    center: Point;
+    innerRadius: number;
+    rowCount: number;
+    rowGap: number;
+    startAngle: number;
+    endAngle: number;
+    seatPitch: number;
+    fit: 'seat-pitch' | 'fixed-count';
+    seatsPerRow?: number;
+    facing: 'inward' | 'outward';
+    taperDegrees: number;
+    skewDegrees: number;
+    aisleGaps: { left: number; center: number; right: number };
+    rowLabelStart: number;
+    seatLabelStart: number;
+    rowIndex: number;
+    segmentIndex: number;
+  };
   /** First seat number (default 1). */
   seatLabelStart?: number;
   /** Seat numbering within the row (default ltr, step 1). */
@@ -223,6 +317,8 @@ export interface RowObject {
    * generates a synthetic panorama from chart geometry.
    */
   viewFromSeatUrl?: string;
+  /** Default commercial attributes inherited by seats without an override. */
+  commercial?: SeatCommercialAttributes;
 }
 
 export interface GAAreaObject {
@@ -371,6 +467,9 @@ export interface SectionObject {
   type: 'section';
   id: string;
   label: string;
+  /** Buyer-facing section name; logical/id fields remain stable. */
+  displayLabel?: string;
+  labelPresentation?: LabelPresentation;
   /**
    * Stable management/inventory identity shared by disconnected visual
    * components of one logical section. When absent, `id` is the logical id.
@@ -378,6 +477,9 @@ export interface SectionObject {
    * editing, measured diffs, and source restoration remain exact.
    */
   logicalSectionId?: string;
+  /** Shared semantic Arc/Fan group wrapped by this section. The section id is
+   * preserved when the fan parameters are reopened and regenerated. */
+  arcFanGroupId?: string;
   /** Closed polygon, chart units. */
   outline: Point[];
   /** Optional true line/arc/cubic boundary. `outline` is a deterministic sample
@@ -599,6 +701,8 @@ export interface ExpandedSeat {
   id: string;
   /** Public label: `${rowLabel}-${seatNumber}` */
   label: string;
+  /** Buyer-facing copy; absent on legacy charts, where `label` is displayed. */
+  displayLabel?: string;
   x: number;
   y: number;
   rowId: string;
@@ -609,6 +713,7 @@ export interface ExpandedSeat {
   accessible?: boolean;
   /** Specific accessibility accommodations (absent = none) — picker badges/filters these. */
   accessibility?: AccessibilityType[];
+  commercial?: SeatCommercialAttributes;
   /** Organizer-supplied view-from-seat image (inherited from the row). */
   viewUrl?: string;
 }

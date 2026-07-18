@@ -40,6 +40,7 @@ import type {
   SectionOutlinePath,
   SectionObject,
 } from '../core/types';
+import { accessibilityRingColor } from '../core/types';
 import { chartBounds, expandChart, floorsOf, pointInPolygonWithHoles, polygonLabelPoint, stackFloors } from '../core/layout';
 import {
   BOOTH_LABEL_FONT_SIZE,
@@ -145,17 +146,6 @@ const FOCUS_BACKDROP_FILL = 'rgba(244,246,248,0.06)';
 /** Okabe-Ito colorblind-safe hues (black dropped — unreadable on dark charts).
  *  Categories map to these by their doc order when colorblind mode is on. */
 const CB_PALETTE = ['#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7'];
-
-/** Outer-ring colour per accommodation (a seat's first-listed type wins). */
-const ACCESS_RING: Record<AccessibilityType, string> = {
-  wheelchair: '#3b82f6',
-  companion: '#8b5cf6',
-  'semi-ambulatory': '#0ea5e9',
-  hearing: '#14b8a6',
-  'sign-language': '#f59e0b',
-  'plus-size': '#ec4899',
-  'lift-armrest': '#22c55e',
-};
 
 /** Does a seat satisfy a filter? `[]` means "any accessible seat". */
 function seatMatchesAccess(seat: ExpandedSeat, filter: AccessibilityType[]): boolean {
@@ -498,6 +488,12 @@ interface SectionRender {
   nameLabel: Text;
   /** Availability retained for focused/detail UI, never painted on the overview shell. */
   subLabel: Text;
+  /** Preferred name ink (labelStyle.color or the overview default) fed through
+   *  auto-contrast each frame so an authored colour survives the block melt. */
+  preferredInk: string;
+  /** labelStyle.size relative to the default (1 = default), scaling the fitted
+   *  screen-px band so a larger authored label reads larger in the overview. */
+  labelScale: number;
   /** Responsive fit decisions for the current stage scale and local polygon span. */
   nameLabelFits: boolean;
   subLabelFits: boolean;
@@ -1821,13 +1817,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // Accessible seats get a static 2px outer ring, coloured by their primary
       // accommodation (few per chart, so the extra node is cheap).
       if (seat.accessible) {
-        const primary = seat.accessibility?.[0];
         target.add(
           new Circle({
             x: seat.x,
             y: seat.y,
             radius: this.seatR + 1,
-            stroke: (primary && ACCESS_RING[primary]) || '#3b82f6',
+            stroke: accessibilityRingColor(seat.accessibility),
             strokeWidth: 2,
             listening: false,
             perfectDrawEnabled: false,
@@ -1862,7 +1857,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const t = new Text({
       x: seat.x,
       y: seat.y,
-      text: seat.label,
+      text: seat.displayLabel ?? seat.label,
       fontSize: BOOTH_LABEL_FONT_SIZE,
       fontStyle: '600',
       fontFamily: this.labelFont(),
@@ -1887,12 +1882,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     return CB_PALETTE[(idx >= 0 ? idx : 0) % CB_PALETTE.length];
   }
 
-  /** Authored free fills retain the chart's validated ink. Renderer-owned
-   * transient fills choose an ink against the paint that is actually visible. */
-  private renderedBookableLabelInk(id: string, shape: Shape): string {
+  /** Resolve label ink against the paint that is actually visible. The theme
+   * ink remains preferred, but mixed category palettes cannot always share one
+   * accessible text colour, so every free and transient state gets the same
+   * deterministic dark/light fallback used by Designer. */
+  private renderedBookableLabelInk(shape: Shape): string {
     const preferred = this.theme.seatLabelColor ?? DEF_SEAT_LABEL;
-    const status = this.statusById.get(id) ?? 'free';
-    if (status === 'free' && !this.selection.has(id)) return preferred;
     const fill = shape.fill();
     return stateAwareBookableLabelInk(typeof fill === 'string' ? fill : '', preferred);
   }
@@ -2011,7 +2006,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (this.selectionFocusId && id !== this.selectionFocusId) c.opacity(Math.min(c.opacity(), 0.16));
     const bookableLabel = this.boothLabelById.get(id) ?? this.seatLabelById.get(id);
     if (bookableLabel) {
-      bookableLabel.fill(this.renderedBookableLabelInk(id, c));
+      bookableLabel.fill(this.renderedBookableLabelInk(c));
       bookableLabel.visible(
         isBookableLabelLegibleAtScale(bookableLabel.fontSize(), this.effScale())
         && c.opacity() >= 0.5,
@@ -2630,14 +2625,22 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     }, obj.outlinePath);
     bgTarget.add(blockPoly);
 
+    // Per-section label overrides (size/color) layered on the overview defaults.
+    // color becomes the preferred ink the block-melt loop auto-contrasts each
+    // frame; size scales the fitted screen-px band (default section size = 18).
+    const labelStyle = obj.labelPresentation?.labelStyle;
+    const preferredInk = labelStyle?.color ?? palette.sectionInk;
+    const labelScale = (labelStyle?.size ?? 18) / 18;
     const nameLabel = new Text({
-      x: centroid.x,
-      y: centroid.y,
-      text: obj.label,
-      fontSize: 22,
+      x: obj.labelPresentation?.position?.x ?? centroid.x,
+      y: obj.labelPresentation?.position?.y ?? centroid.y,
+      text: obj.displayLabel ?? obj.label,
+      rotation: obj.labelPresentation?.rotation ?? 0,
+      visible: obj.labelPresentation?.visible !== false,
+      fontSize: 22 * labelScale,
       fontStyle: '700',
       fontFamily: this.labelFont(),
-      fill: palette.sectionInk,
+      fill: stateAwareBookableLabelInk(palette.sectionFill, preferredInk),
       listening: false,
       perfectDrawEnabled: false,
     });
@@ -2663,7 +2666,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const sec: SectionRender = {
       id: obj.id,
       logicalId: obj.logicalSectionId ?? obj.id,
-      label: obj.label,
+      label: obj.displayLabel ?? obj.label,
       outline: obj.outline,
       ...(obj.outlinePath ? { outlinePath: obj.outlinePath } : {}),
       holes: obj.holes ?? [],
@@ -2679,6 +2682,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       blockPoly,
       nameLabel,
       subLabel,
+      preferredInk,
+      labelScale,
       nameLabelFits: true,
       subLabelFits: true,
       elevation,
@@ -2888,7 +2893,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const sectionFill = sec.blockPoly.fill();
       const sectionInk = stateAwareBookableLabelInk(
         typeof sectionFill === 'string' ? sectionFill : sec.baseFill,
-        palette.sectionInk,
+        sec.preferredInk,
       );
       sec.nameLabel.fill(sectionInk);
       sec.subLabel.fill(sectionInk);
@@ -3002,7 +3007,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private fitSectionRungLabels(sec: SectionRender, sx: number): void {
     const paddingPx = 8;
     sec.subLabelFits = false;
-    for (let fontPx = SECTION_LABEL_PX; fontPx >= MIN_SECTION_LABEL_PX; fontPx -= 1) {
+    // Scale the fitted screen-px band by the section's authored label size so a
+    // larger override reads larger; the step still shrinks to fit the polygon.
+    const maxPx = SECTION_LABEL_PX * sec.labelScale;
+    const minPx = MIN_SECTION_LABEL_PX * sec.labelScale;
+    for (let fontPx = maxPx; fontPx >= minPx; fontPx -= 1) {
       for (const rotation of [0, -90]) {
         sec.nameLabel.rotation(rotation);
         this.sizeLabel(sec.nameLabel, fontPx / sx, sec.nameLabel.y());
@@ -4064,7 +4073,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         continue;
       }
       measure.fontSize(SEAT_LABEL_FONT_SIZE);
-      measure.text(bookableMarkerLabel(seat.label));
+      measure.text(bookableMarkerLabel(seat.displayLabel ?? seat.label));
       const fitted = measure.width() > maxWidth
         ? Math.max(MIN_FITTED_SEAT_LABEL_FONT_SIZE, (SEAT_LABEL_FONT_SIZE * maxWidth) / measure.width())
         : SEAT_LABEL_FONT_SIZE;
@@ -4246,11 +4255,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const t = new Text({
         x: seat.x,
         y: seat.y,
-        text: bookableMarkerLabel(seat.label),
+        text: bookableMarkerLabel(seat.displayLabel ?? seat.label),
         fontSize: SEAT_LABEL_FONT_SIZE,
         fontStyle: '600',
         fontFamily: this.labelFont(),
-        fill: shape ? this.renderedBookableLabelInk(seat.id, shape) : (this.theme.seatLabelColor ?? DEF_SEAT_LABEL),
+        fill: shape ? this.renderedBookableLabelInk(shape) : (this.theme.seatLabelColor ?? DEF_SEAT_LABEL),
         listening: false,
         perfectDrawEnabled: false,
       });

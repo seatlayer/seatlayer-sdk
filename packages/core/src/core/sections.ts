@@ -104,7 +104,7 @@ export function computeSections(doc: ChartDoc): {
     }
     nodes.set(logicalId, {
       id: logicalId,
-      label: s.label || 'Section',
+      label: s.displayLabel || s.label || 'Section',
       zone: s.zone,
       seatCount: 0,
       objectIds: [],

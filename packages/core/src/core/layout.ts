@@ -100,10 +100,13 @@ export interface RowSeatSlot {
   x: number;
   y: number;
   label: string;
+  displayLabel: string;
   categoryKey: string;
   skipped: boolean;
   accessible: boolean;
   accessibility: AccessibilityType[];
+  commercial?: RowObject['commercial'];
+  viewUrl?: string;
 }
 
 export function expandRowSlots(row: RowObject): RowSeatSlot[] {
@@ -127,15 +130,21 @@ export function expandRowSlots(row: RowObject): RowSeatSlot[] {
   return rowSeatPositions(row).map((p, i) => {
     const o = ov.get(i);
     const accessibility = overrideAccessibility(o);
+    const inventoryLabel = o?.label ?? `${row.label}-${seatNumber(i)}`;
+    const displayPrefix = row.displayLabel ?? row.label;
+    const commercial = { ...row.commercial, ...o?.commercial };
     return {
       index: i,
       x: p.x + (o?.dx ?? 0),
       y: p.y + (o?.dy ?? 0),
-      label: o?.label ?? `${row.label}-${seatNumber(i)}`,
+      label: inventoryLabel,
+      displayLabel: o?.displayLabel ?? `${displayPrefix}-${seatNumber(i)}`,
       categoryKey: o?.categoryKey ?? row.categoryKey,
       skipped: !!o?.skip,
       accessible: accessibility.length > 0,
       accessibility,
+      commercial: Object.values(commercial).some((value) => value !== undefined && value !== false && value !== '') ? commercial : undefined,
+      viewUrl: o?.viewFromSeatUrl ?? row.viewFromSeatUrl,
     };
   });
 }
@@ -147,13 +156,15 @@ export function expandRow(row: RowObject): ExpandedSeat[] {
     seats.push({
       id: `${row.id}:${slot.index}`,
       label: slot.label,
+      displayLabel: slot.displayLabel === slot.label ? undefined : slot.displayLabel,
       x: slot.x,
       y: slot.y,
       rowId: row.id,
       categoryKey: slot.categoryKey,
       accessible: slot.accessible || undefined,
       accessibility: slot.accessibility.length ? slot.accessibility : undefined,
-      viewUrl: row.viewFromSeatUrl,
+      commercial: slot.commercial,
+      viewUrl: slot.viewUrl,
     });
   }
   return seats;

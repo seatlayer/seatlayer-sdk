@@ -106,9 +106,9 @@ export function compositeHexOver(
 }
 
 /**
- * Transient status/selection fills are renderer-owned, so their label ink must
- * be renderer-owned too. Authored free/category fills keep their validated ink;
- * changed state fills choose the strongest normal-text candidate.
+ * Bookable fills can vary per category and per transient state, while a chart
+ * exposes only one preferred label token. Preserve that preference whenever it
+ * passes, then deterministically choose the strongest normal-text candidate.
  */
 export function stateAwareBookableLabelInk(fill: string, preferred: string): string {
   const preferredContrast = renderedTextContrast(preferred, fill);
