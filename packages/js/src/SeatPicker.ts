@@ -22,6 +22,7 @@ import {
   PickerController,
   expandChart,
   generateSeatPanorama,
+  generateSeatThumb,
   loadLocale,
   setStringOverrides,
   t,
@@ -502,6 +503,8 @@ const CSS = `
 
 /* zoom column (flows within the bottom-right region) */
 .sl-zoom{display:flex;flex-direction:column;gap:6px}
+/* CSS-fallback full screen (iOS Safari has no element fullscreen API) */
+.sl-picker.sl-fs{position:fixed;inset:0;z-index:2147483000;width:auto;height:auto;max-height:none;border-radius:0}
 .sl-zoom button{width:36px;height:36px;border-radius:999px;background:var(--sl-surface);border:1px solid var(--sl-line);
   color:var(--sl-text);font-size:17px;font-weight:700;display:flex;align-items:center;justify-content:center;transition:border-color .15s}
 .sl-zoom button:hover{border-color:var(--sl-muted)}
@@ -725,6 +728,14 @@ const CSS = `
 .sl-seccard-hint{font-size:10.5px;color:var(--sl-muted)}
 
 /* view-from-seat button on the confirm popover */
+/* Eager sightline preview inside the confirm card */
+.sl-confirm-thumbwrap{position:relative;display:block;width:100%;height:74px;margin:0 0 8px;padding:0!important;
+  border-radius:9px;overflow:hidden;border:1px solid var(--sl-line);cursor:pointer}
+.sl-confirm-thumb{display:block;width:100%;height:100%;object-fit:cover}
+.sl-confirm-thumb-badge{position:absolute;right:7px;top:7px;display:inline-flex;align-items:center;gap:5px;
+  font-size:10px;font-weight:700;color:#fff;background:rgba(10,14,22,0.72);border-radius:12px;padding:4px 9px;backdrop-filter:blur(3px)}
+.sl-confirm-sight{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--sl-muted);margin-bottom:2px}
+.sl-confirm-sight span{color:#22a06b;font-weight:800}
 .sl-confirm-view{width:100%;margin-top:9px;padding:8px;border-radius:8px;border:1px solid var(--sl-line);
   color:var(--sl-text);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;gap:7px}
 .sl-confirm-view:hover{border-color:var(--sl-muted)}
@@ -920,6 +931,75 @@ export class SeatPicker {
   private ctaPhase: 'idle' | 'holding' | 'checkout' = 'idle';
   // narrow-layout chrome that docks into the sheet's Filters row on mobile
   private a11yChipsEl: HTMLDivElement | null = null;
+  private fsFallback = false;
+  private fsChangeHandler: (() => void) | null = null;
+  private fsEscHandler: ((e: KeyboardEvent) => void) | null = null;
+
+  /**
+   * Eager sightline preview for the confirm card: a cheap generated forward
+   * view (or the organizer's real photo) plus a "Nm to stage · clear
+   * sightline" line — the premium at-a-glance moment; click opens the 360.
+   */
+  private confirmThumbHtml(seat: ExpandedSeat): string {
+    const doc = this.controller.doc;
+    if (!doc) return '';
+    let url = seat.viewUrl ?? '';
+    let distance: number | null = null;
+    if (!url) {
+      try {
+        const thumb = generateSeatThumb(seat, doc.focalPoint);
+        url = thumb.url;
+        distance = thumb.distanceM ?? null;
+      } catch {
+        return '';
+      }
+    }
+    const sight = distance != null
+      ? `${distance}${this.tf('picker.sightline', 'm to stage · clear sightline')}`
+      : this.tf('picker.sightlineClear', 'Clear sightline');
+    return (
+      `<button type="button" class="sl-confirm-view sl-confirm-thumbwrap" aria-label="${t('picker.viewFromSeat', { label: seat.label })}">` +
+      `<img class="sl-confirm-thumb" src="${url}" alt="" />` +
+      `<span class="sl-confirm-thumb-badge">🔭 ${this.tf('picker.viewFromHere', 'View from here')}</span>` +
+      `</button>` +
+      `<div class="sl-confirm-sight"><span aria-hidden="true">✓</span>${sight}</div>`
+    );
+  }
+
+  /** Full screen via the native API, falling back to a fixed-position overlay (iOS Safari). */
+  private toggleFullscreen(): void {
+    const root = this.root;
+    if (!root) return;
+    const active = !!document.fullscreenElement || this.fsFallback;
+    if (!active) {
+      if (root.requestFullscreen) {
+        root.requestFullscreen().catch(() => this.setFsFallback(true));
+      } else {
+        this.setFsFallback(true);
+      }
+    } else if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {});
+    } else {
+      this.setFsFallback(false);
+    }
+  }
+
+  private setFsFallback(on: boolean): void {
+    if (this.fsFallback === on) return;
+    this.fsFallback = on;
+    this.root?.classList.toggle('sl-fs', on);
+    this.els.zfs?.setAttribute('aria-pressed', String(on || !!document.fullscreenElement));
+    if (on && !this.fsEscHandler) {
+      this.fsEscHandler = (e: KeyboardEvent): void => {
+        if (e.key === 'Escape' && !document.fullscreenElement) this.setFsFallback(false);
+      };
+      window.addEventListener('keydown', this.fsEscHandler);
+    } else if (!on && this.fsEscHandler) {
+      window.removeEventListener('keydown', this.fsEscHandler);
+      this.fsEscHandler = null;
+    }
+    requestAnimationFrame(() => this.controller.zoomToFit());
+  }
   private cbEl: HTMLButtonElement | null = null;
 
   // modal plumbing (set by open())
@@ -1131,6 +1211,9 @@ export class SeatPicker {
             <button type="button" aria-label="Fit to screen" data-ref="zfit">
               <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
             </button>
+            <button type="button" aria-label="Full screen" aria-pressed="false" data-ref="zfs">
+              <svg viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+            </button>
           </div>
           <div class="sl-boot" data-ref="boot"><span class="sl-boot-spin"></span>Loading seat map…</div>
           <div class="sl-toast" data-ref="toast" role="status" aria-live="polite"></div>
@@ -1192,6 +1275,16 @@ export class SeatPicker {
     this.els.zin.addEventListener('click', () => this.controller.zoomIn());
     this.els.zout.addEventListener('click', () => this.controller.zoomOut());
     this.els.zfit.addEventListener('click', () => this.controller.zoomToFit());
+    // Full screen: native API with a CSS-fallback overlay for iOS Safari
+    // (which has no element fullscreen). Esc exits both paths; the renderer's
+    // ResizeObserver re-fits, plus an explicit zoomToFit for a crisp frame.
+    this.els.zfs.addEventListener('click', () => this.toggleFullscreen());
+    this.fsChangeHandler = (): void => {
+      if (!document.fullscreenElement) this.setFsFallback(false);
+      this.els.zfs?.setAttribute('aria-pressed', String(!!document.fullscreenElement || this.fsFallback));
+      requestAnimationFrame(() => this.controller.zoomToFit());
+    };
+    document.addEventListener('fullscreenchange', this.fsChangeHandler);
 
     // Mobile bottom sheet: swipe/tap on the sheet HEAD only (never the map host,
     // so the map's raw-pointer gesture pipeline is untouched). Swipe up → open
@@ -1332,11 +1425,26 @@ export class SeatPicker {
           .join('');
       this.regions['top-left'].appendChild(chips);
       this.a11yChipsEl = chips;
+      // Multi-select OR semantics (parity with the buyer page): each type chip
+      // toggles independently; the active filter is the union; "All seats"
+      // clears. A buyer needing wheelchair AND companion seats combines both.
+      const active = new Set<AccessibilityType>();
+      const syncChips = (): void => {
+        chips.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
+          const f = b.dataset.f as AccessibilityType | 'all';
+          const on = f === 'all' ? active.size === 0 : active.has(f);
+          b.classList.toggle('on', on);
+          b.setAttribute('aria-pressed', String(on));
+        });
+        this.controller.setAccessibilityFilter(active.size ? [...active] : null);
+      };
       chips.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
         btn.addEventListener('click', () => {
           const f = btn.dataset.f as AccessibilityType | 'all';
-          chips.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === btn));
-          this.controller.setAccessibilityFilter(f === 'all' ? null : [f]);
+          if (f === 'all') active.clear();
+          else if (active.has(f)) active.delete(f);
+          else active.add(f);
+          syncChips();
         });
       });
     }
@@ -2333,11 +2441,7 @@ export class SeatPicker {
       `<span class="sl-confirm-cat-name">${safe(details?.categoryLabel ?? cat?.label ?? seat.categoryKey)}</span>` +
       (price != null ? `<span class="sl-confirm-price">${this.money(price)}</span>` : '') + `</div>` +
       `<div class="sl-confirm-body">` +
-      (this.seatViewEnabled()
-        ? `<button type="button" class="sl-confirm-view">` +
-          `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>` +
-          `${t('picker.open360')}</button>`
-        : '') +
+      (this.seatViewEnabled() ? this.confirmThumbHtml(seat) : '') +
       `<div class="sl-confirm-row">` +
       `<button type="button" class="sl-confirm-cancel">Cancel</button>` +
       `<button type="button" class="sl-confirm-add"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4 4L19 7"/></svg>Select</button></div></div>`;
@@ -3385,6 +3489,8 @@ export class SeatPicker {
     this.ro?.disconnect();
     this.ro = null;
     if (this.escHandler) document.removeEventListener('keydown', this.escHandler);
+    if (this.fsChangeHandler) document.removeEventListener('fullscreenchange', this.fsChangeHandler);
+    if (this.fsEscHandler) window.removeEventListener('keydown', this.fsEscHandler);
     this.controller.destroy();
     this.root?.remove();
     this.root = null;
