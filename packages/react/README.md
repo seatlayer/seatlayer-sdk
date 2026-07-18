@@ -111,6 +111,10 @@ export function VenueEditor({ session }: { session: {
       onPublished={({ chartId }) => refreshVenue(chartId)}
       onClose={() => closeVenueEditor()}
       onError={({ code, message }) => showError(code ?? message)}
+      onRequestRelaunch={async () => {
+        const next = await mintDesignerSession(session.chartId);
+        setDesignerUrl(next.designerUrl); // a new designerUrl recreates the iframe
+      }}
     />
   );
 }
@@ -118,3 +122,19 @@ export function VenueEditor({ session }: { session: {
 
 Changing `designerUrl` replaces the iframe, so a newly-minted fragment token never
 continues an earlier session. See [the embedded Designer guide](https://docs.seatlayer.io/guides/embedded-designer/).
+
+### Built-in loading, error, and expiry states
+
+The component paints a branded loading skeleton inside its container until the
+Designer reports `ready`, then removes it. On an expired session, identity
+mismatch, iframe error, or a load timeout it shows a dark **"Try again"** card
+with cause-specific copy. The skeleton honors `prefers-reduced-motion`.
+
+| Prop | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `showLoadingState` | `boolean?` | `true` | Render the built-in skeleton and error card. Set `false` to supply your own chrome. |
+| `loadingTimeoutMs` | `number?` | `20000` | Show the error card if `ready` never arrives within this window. |
+| `onRequestRelaunch` | `() => void` | — | Called by **"Try again"**. Mint a fresh session and set a new `designerUrl` (which recreates the iframe and returns to loading). When omitted, "Try again" reloads the current URL. |
+
+All three props are optional and additive — existing integrations keep working
+unchanged.

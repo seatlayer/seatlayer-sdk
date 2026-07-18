@@ -87,6 +87,11 @@ const designer = new EmbeddedDesigner({
   onPublished: ({ chartId }) => refreshVenue(chartId),
   onClose: () => closeVenueEditor(),
   onError: ({ code, message }) => showError(code ?? message),
+  // Mint a fresh session when the user retries an expired/failed editor:
+  onRequestRelaunch: async () => {
+    const next = await mintDesignerSession(session.chartId);
+    designer.setDesignerUrl(next.designerUrl);
+  },
 });
 designer.mount();
 
@@ -98,6 +103,24 @@ designer.destroy();
 
 Give the container a height, for example `min-height: 760px`. Keep the default
 `referrerPolicy: 'origin'`; the Designer uses it to verify the parent origin.
+
+### Built-in loading, error, and expiry states
+
+By default the host paints a lightweight, branded skeleton inside the container
+while the Designer boots, then removes it the moment the iframe reports `ready`.
+If the session expires, the identity check fails, the iframe reports an error, or
+it never becomes ready, the host swaps in a dark **"Try again"** card with copy
+matched to the cause. The skeleton respects `prefers-reduced-motion` and adds no
+CSS files or external assets.
+
+| Option | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `showLoadingState` | `boolean` | `true` | Render the built-in skeleton and error card. Set `false` when you draw your own chrome. |
+| `loadingTimeoutMs` | `number` | `20000` | If `ready` never arrives within this window, show the error card with a timeout message. |
+| `onRequestRelaunch` | `() => void` | — | Called by **"Try again"**. Mint a fresh session and call `setDesignerUrl()`; the iframe recreates and returns to loading. When omitted, "Try again" reloads the current URL in place. |
+
+`setDesignerUrl()` always returns the host to the loading state, so a relaunch
+flow needs no extra bookkeeping.
 
 ## API
 
