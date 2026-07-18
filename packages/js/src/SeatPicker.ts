@@ -31,6 +31,7 @@ import {
   type ExpandedSeat,
   type LodRung,
   type PickerSeat,
+  type PickerTransport,
   type SeatHoverDetails,
   type SectionSummary,
 } from '@seatlayer/core';
@@ -147,6 +148,12 @@ export interface SeatPickerOptions {
   event: string;
   /** API origin. Defaults to https://api.seatlayer.io. */
   apiBase?: string;
+  /**
+   * Custom data transport. Defaults to the CORS-trivial PubApi against
+   * `apiBase`. Inject to run the widget against another backend adapter (the
+   * SeatLayer dashboard's own transport) or a fully local mock (demos).
+   */
+  transport?: PickerTransport;
   /** Reserved for future authenticated rendering. */
   publicKey?: string;
   /** Max seats selectable at once (default 10). */
@@ -769,7 +776,7 @@ function resolveTokens(chart: ChartTheme | undefined, host: SeatPickerTheme | un
 
 export class SeatPicker {
   private readonly opts: SeatPickerOptions;
-  private readonly api: PubApi;
+  private readonly api: PickerTransport;
   private readonly apiBase: string;
   private readonly controller: PickerController;
   private readonly maxTickets: number;
@@ -930,7 +937,7 @@ export class SeatPicker {
     if (!options.container) throw new Error('seatmap: `container` is required (or use SeatPicker.open())');
     this.opts = { ...options, confirmSelection: options.confirmSelection ?? true };
     this.apiBase = (options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
-    this.api = new PubApi(this.apiBase);
+    this.api = options.transport ?? new PubApi(this.apiBase);
     this.maxTickets = Math.max(1, Math.floor(options.maxSelection ?? DEFAULT_MAX_SELECTION));
     this.controller = new PickerController({
       transport: this.api,
