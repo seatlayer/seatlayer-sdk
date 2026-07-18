@@ -172,6 +172,10 @@ export interface SeatOverride {
   commercial?: SeatCommercialAttributes;
   /** Seat-specific view photo; falls back to the row photo. */
   viewFromSeatUrl?: string;
+  /** Per-seat label size/color override; falls back to the row/theme default.
+   *  Size is clamped to LABEL_STYLE_MIN_SIZE..MAX_SIZE; color is passed through
+   *  the shared auto-contrast rule at paint time (see {@link LabelStyle}). */
+  labelStyle?: LabelStyle;
 }
 
 export interface SeatCommercialAttributes {
@@ -716,6 +720,8 @@ export interface ExpandedSeat {
   commercial?: SeatCommercialAttributes;
   /** Organizer-supplied view-from-seat image (inherited from the row). */
   viewUrl?: string;
+  /** Per-seat label size/color override; absent = inherit the row/theme default. */
+  labelStyle?: LabelStyle;
 }
 
 export type SeatStatus = 'free' | 'held' | 'booked' | 'not_for_sale';

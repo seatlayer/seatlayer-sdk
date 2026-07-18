@@ -10,6 +10,7 @@ import type {
   ChartObject,
   ExpandedSeat,
   Floor,
+  LabelStyle,
   Point,
   RowObject,
   SeatOverride,
@@ -107,6 +108,7 @@ export interface RowSeatSlot {
   accessibility: AccessibilityType[];
   commercial?: RowObject['commercial'];
   viewUrl?: string;
+  labelStyle?: LabelStyle;
 }
 
 export function expandRowSlots(row: RowObject): RowSeatSlot[] {
@@ -145,6 +147,7 @@ export function expandRowSlots(row: RowObject): RowSeatSlot[] {
       accessibility,
       commercial: Object.values(commercial).some((value) => value !== undefined && value !== false && value !== '') ? commercial : undefined,
       viewUrl: o?.viewFromSeatUrl ?? row.viewFromSeatUrl,
+      labelStyle: o?.labelStyle,
     };
   });
 }
@@ -165,6 +168,7 @@ export function expandRow(row: RowObject): ExpandedSeat[] {
       accessibility: slot.accessibility.length ? slot.accessibility : undefined,
       commercial: slot.commercial,
       viewUrl: slot.viewUrl,
+      labelStyle: slot.labelStyle,
     });
   }
   return seats;

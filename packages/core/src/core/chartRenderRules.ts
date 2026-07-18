@@ -118,3 +118,66 @@ export function stateAwareBookableLabelInk(fill: string, preferred: string): str
   if (darkContrast === 0 && lightContrast === 0) return preferred;
   return darkContrast >= lightContrast ? DARK_BOOKABLE_LABEL_INK : LIGHT_BOOKABLE_LABEL_INK;
 }
+
+const OPAQUE_HEX = /^#[0-9a-f]{6}$/i;
+
+/** Is a solid hex fill light enough to read as a light surface? Feedback helpers
+ * use this to pick the neutral section shell a label sits on. */
+export function isLightFill(fill: string): boolean {
+  const value = luminance(fill);
+  return value != null && value > 0.5;
+}
+
+/**
+ * Neutral section shell fills the renderer paints when a section has no custom
+ * colour, mirrored here so contrast feedback can evaluate uncoloured sections.
+ */
+export const LIGHT_NEUTRAL_SECTION_FILL = '#e5e7eb';
+export const DARK_NEUTRAL_SECTION_FILL = '#273142';
+export function neutralSectionFill(canvasBackground: string): string {
+  return isLightFill(canvasBackground) ? LIGHT_NEUTRAL_SECTION_FILL : DARK_NEUTRAL_SECTION_FILL;
+}
+
+export interface LabelInkContrastSummary {
+  /** Backgrounds that could be evaluated (valid preferred + valid fill hex). */
+  total: number;
+  /** Backgrounds where the preferred ink is auto-swapped for legibility. */
+  overridden: number;
+  /** `applies` = preferred survives everywhere; `overridden` = swapped
+   * everywhere; `mixed` = some of each; `none` = nothing evaluable. */
+  status: 'applies' | 'overridden' | 'mixed' | 'none';
+  /** Fallback ink chosen where the preferred was overridden (black/white), or
+   * null when nothing was overridden — names the swap in user-facing copy. */
+  overrideInk: string | null;
+}
+
+/**
+ * Feedback-only companion to {@link stateAwareBookableLabelInk}: does a preferred
+ * label ink survive across a set of backgrounds, or does the shared auto-contrast
+ * rule silently swap it for black/white on some of them? Reuses the exact same
+ * per-fill decision so a report can never disagree with what the renderer paints.
+ */
+export function summarizeLabelInkContrast(
+  preferred: string,
+  backgrounds: Iterable<string>,
+): LabelInkContrastSummary {
+  const preferredValid = OPAQUE_HEX.test(preferred.trim());
+  const preferredHex = preferred.trim().toLowerCase();
+  let total = 0;
+  let overridden = 0;
+  let overrideInk: string | null = null;
+  for (const fill of backgrounds) {
+    if (!preferredValid || !OPAQUE_HEX.test(fill.trim())) continue;
+    total += 1;
+    const ink = stateAwareBookableLabelInk(fill, preferred);
+    if (ink.toLowerCase() !== preferredHex) {
+      overridden += 1;
+      overrideInk = ink;
+    }
+  }
+  const status = total === 0 ? 'none'
+    : overridden === 0 ? 'applies'
+      : overridden === total ? 'overridden'
+        : 'mixed';
+  return { total, overridden, status, overrideInk };
+}

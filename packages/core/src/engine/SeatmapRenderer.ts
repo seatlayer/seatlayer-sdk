@@ -1882,14 +1882,24 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     return CB_PALETTE[(idx >= 0 ? idx : 0) % CB_PALETTE.length];
   }
 
-  /** Resolve label ink against the paint that is actually visible. The theme
-   * ink remains preferred, but mixed category palettes cannot always share one
-   * accessible text colour, so every free and transient state gets the same
-   * deterministic dark/light fallback used by Designer. */
-  private renderedBookableLabelInk(shape: Shape): string {
-    const preferred = this.theme.seatLabelColor ?? DEF_SEAT_LABEL;
+  /** Per-seat authored label size relative to the neutral default (1 = default),
+   * mirroring the section convention (labelStyle.size ?? 18) / 18. Only real
+   * seats carry labelStyle, so booths and unstyled seats resolve to 1. */
+  private seatLabelScale(seat: ExpandedSeat): number {
+    return (seat.labelStyle?.size ?? 18) / 18;
+  }
+
+  /** Preferred label ink for a seat: the authored per-seat colour when set,
+   * otherwise today's theme default. Fed through auto-contrast by seatLabelInk. */
+  private seatPreferredLabelInk(seat: ExpandedSeat): string {
+    return seat.labelStyle?.color ?? this.theme.seatLabelColor ?? DEF_SEAT_LABEL;
+  }
+
+  /** Resolve a seat's label ink against the paint actually visible, honouring an
+   * authored per-seat colour through the same auto-contrast rule as sections. */
+  private seatLabelInk(seat: ExpandedSeat, shape: Shape): string {
     const fill = shape.fill();
-    return stateAwareBookableLabelInk(typeof fill === 'string' ? fill : '', preferred);
+    return stateAwareBookableLabelInk(typeof fill === 'string' ? fill : '', this.seatPreferredLabelInk(seat));
   }
 
   /** Apply fill/stroke/opacity for a seat's current status + selection. */
@@ -2006,7 +2016,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (this.selectionFocusId && id !== this.selectionFocusId) c.opacity(Math.min(c.opacity(), 0.16));
     const bookableLabel = this.boothLabelById.get(id) ?? this.seatLabelById.get(id);
     if (bookableLabel) {
-      bookableLabel.fill(this.renderedBookableLabelInk(c));
+      // Booths carry no labelStyle, so seatLabelInk resolves to today's theme
+      // ink for them; real seats get their authored colour auto-contrasted.
+      bookableLabel.fill(this.seatLabelInk(seat, c));
       bookableLabel.visible(
         isBookableLabelLegibleAtScale(bookableLabel.fontSize(), this.effScale())
         && c.opacity() >= 0.5,
@@ -3720,7 +3732,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const labels: RenderedBookableLabelEvidence[] = this.seats.map((seat) => {
       const shape = this.circleById.get(seat.id);
       const label = this.boothLabelById.get(seat.id) ?? this.seatLabelById.get(seat.id);
-      const authoredFontSize = seat.kind === 'booth' ? BOOTH_LABEL_FONT_SIZE : SEAT_LABEL_FONT_SIZE;
+      const authoredFontSize = seat.kind === 'booth'
+        ? BOOTH_LABEL_FONT_SIZE
+        : SEAT_LABEL_FONT_SIZE * this.seatLabelScale(seat);
       const renderedFontPx = rounded((label?.fontSize() ?? authoredFontSize) * effectiveScale);
       const screen = this.worldToScreen(seat);
       const outside = screen.x < 0 || screen.x > viewport.width || screen.y < 0 || screen.y > viewport.height;
@@ -4072,11 +4086,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         minimumFont = Math.min(minimumFont, BOOTH_LABEL_FONT_SIZE);
         continue;
       }
-      measure.fontSize(SEAT_LABEL_FONT_SIZE);
+      const authoredFontSize = SEAT_LABEL_FONT_SIZE * this.seatLabelScale(seat);
+      measure.fontSize(authoredFontSize);
       measure.text(bookableMarkerLabel(seat.displayLabel ?? seat.label));
       const fitted = measure.width() > maxWidth
-        ? Math.max(MIN_FITTED_SEAT_LABEL_FONT_SIZE, (SEAT_LABEL_FONT_SIZE * maxWidth) / measure.width())
-        : SEAT_LABEL_FONT_SIZE;
+        ? Math.max(MIN_FITTED_SEAT_LABEL_FONT_SIZE, (authoredFontSize * maxWidth) / measure.width())
+        : authoredFontSize;
       minimumFont = Math.min(minimumFont, fitted);
     }
     measure.destroy();
@@ -4252,14 +4267,17 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         if (++count >= MAX_LABELS) break;
         continue;
       }
+      // Authored per-seat size scales the neutral default BEFORE auto-fit, so
+      // the fit/shrink/legibility logic below still runs on top of it.
+      const authoredFontSize = SEAT_LABEL_FONT_SIZE * this.seatLabelScale(seat);
       const t = new Text({
         x: seat.x,
         y: seat.y,
         text: bookableMarkerLabel(seat.displayLabel ?? seat.label),
-        fontSize: SEAT_LABEL_FONT_SIZE,
+        fontSize: authoredFontSize,
         fontStyle: '600',
         fontFamily: this.labelFont(),
-        fill: shape ? this.renderedBookableLabelInk(shape) : (this.theme.seatLabelColor ?? DEF_SEAT_LABEL),
+        fill: shape ? this.seatLabelInk(seat, shape) : this.seatPreferredLabelInk(seat),
         listening: false,
         perfectDrawEnabled: false,
       });
@@ -4267,7 +4285,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // the seat circle. Down to a legibility floor; below that the label is
       // dropped rather than rendered as an unreadable speck.
       const maxW = this.seatR * 2 - 3;
-      if (t.width() > maxW) t.fontSize(Math.max(MIN_FITTED_SEAT_LABEL_FONT_SIZE, (SEAT_LABEL_FONT_SIZE * maxW) / t.width()));
+      if (t.width() > maxW) t.fontSize(Math.max(MIN_FITTED_SEAT_LABEL_FONT_SIZE, (authoredFontSize * maxW) / t.width()));
       // The minimum fitted font can still be wider than the physical marker
       // for verbose row labels. Never let text spill across adjacent seats;
       // keep the seat interactive and let the picker/tooltip expose its label.
