@@ -31,6 +31,23 @@ export interface EmbeddedDesignerProps {
   iframeStyle?: Partial<CSSStyleDeclaration>;
   allow?: string;
   referrerPolicy?: ReferrerPolicy;
+  /**
+   * Show the built-in branded loading skeleton and error/expiry card inside the
+   * container while the Designer boots. Defaults to `true`. Set `false` when you
+   * render your own loading and error chrome.
+   */
+  showLoadingState?: boolean;
+  /**
+   * If the Designer never posts `ready` within this many milliseconds, the host
+   * shows the error card with a timeout message. Defaults to `20000`.
+   */
+  loadingTimeoutMs?: number;
+  /**
+   * Called when the user presses "Try again" on the error card. Mint a fresh
+   * session and set the new `designerUrl` (recreating the iframe returns it to
+   * the loading state). When omitted, "Try again" reloads the current URL.
+   */
+  onRequestRelaunch?: () => void;
   onReady?: (message: EmbeddedDesignerMessage) => void;
   onSaved?: (message: EmbeddedDesignerMessage) => void;
   onPublished?: (message: EmbeddedDesignerMessage) => void;
@@ -63,6 +80,13 @@ export const EmbeddedDesigner = forwardRef<EmbeddedDesignerHandle, EmbeddedDesig
         style: props.iframeStyle,
         allow: props.allow,
         referrerPolicy: props.referrerPolicy,
+        showLoadingState: props.showLoadingState,
+        loadingTimeoutMs: props.loadingTimeoutMs,
+        // Only forward a relaunch hook when the host supplied one, so the core's
+        // "reload the same URL in place" fallback still applies otherwise.
+        onRequestRelaunch: props.onRequestRelaunch
+          ? () => callbacks.current.onRequestRelaunch?.()
+          : undefined,
         onReady: (message) => callbacks.current.onReady?.(message),
         onSaved: (message) => callbacks.current.onSaved?.(message),
         onPublished: (message) => callbacks.current.onPublished?.(message),
@@ -78,7 +102,7 @@ export const EmbeddedDesigner = forwardRef<EmbeddedDesignerHandle, EmbeddedDesig
       // Session/chart identity changes must recreate the iframe. Callback changes are
       // picked up from the ref without reloading an in-progress Designer session.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [props.designerUrl, props.expectedChartId, props.expectedWorkspaceId, props.title, props.iframeClassName, props.iframeStyle, props.allow, props.referrerPolicy]);
+    }, [props.designerUrl, props.expectedChartId, props.expectedWorkspaceId, props.title, props.iframeClassName, props.iframeStyle, props.allow, props.referrerPolicy, props.showLoadingState, props.loadingTimeoutMs]);
 
     useImperativeHandle(ref, () => ({
       setDesignerUrl: (designerUrl) => { designerRef.current?.setDesignerUrl(designerUrl); },
