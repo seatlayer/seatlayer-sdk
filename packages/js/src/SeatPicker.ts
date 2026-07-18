@@ -361,26 +361,43 @@ const CSS = `
 .sl-tray{flex:1;padding:10px 14px 14px;display:flex;flex-direction:column;gap:7px;min-height:0;overflow-y:auto;
   overscroll-behavior:contain;scrollbar-gutter:stable}
 .sl-tray-hint{font-size:12.5px;color:var(--sl-muted);line-height:1.5}
-.sl-chip{position:relative;display:grid;grid-template-columns:24px minmax(0,1fr) auto 30px;align-items:center;gap:8px;
-  min-height:53px;padding:7px 7px 7px 9px;border:1px solid var(--sl-line);border-radius:var(--sl-r-sm);
+.sl-chip{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 34px;align-items:stretch;
+  min-height:53px;border:1px solid var(--sl-line);border-radius:var(--sl-r-sm);overflow:hidden;
   background:var(--sl-surface);font-size:13px;transform-origin:center;transition:border-color .15s,background .15s}
 .sl-chip:hover{border-color:color-mix(in srgb,var(--sl-accent) 38%,var(--sl-line))}
 .sl-chip.sl-enter{animation:slChipIn .38s cubic-bezier(.2,.8,.2,1) both}
 .sl-chip.sl-leave{pointer-events:none;animation:slChipOut .16s ease-in both}
 .sl-chip.sl-held{border-color:var(--sl-line);background:color-mix(in srgb,var(--sl-accent) 7%,var(--sl-surface));
   box-shadow:inset 3px 0 0 color-mix(in srgb,var(--sl-accent) 72%,transparent)}
-.sl-ticket-state{width:23px;height:23px;border-radius:999px;display:flex;align-items:center;justify-content:center;
+.sl-ticket-state{width:17px;height:17px;border-radius:999px;flex:none;display:flex;align-items:center;justify-content:center;
   background:var(--sl-accent);color:var(--sl-accent-ink)}
 .sl-ticket-state.held{background:color-mix(in srgb,var(--sl-accent) 18%,var(--sl-surface));color:var(--sl-accent)}
-.sl-ticket-state svg{width:13px;height:13px;stroke:currentColor;stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
-.sl-chip-main{min-width:0}
-.sl-chip b{display:block;font-weight:800;min-width:max-content;white-space:nowrap}
-.sl-chip-sub{display:flex;align-items:center;gap:5px;min-width:0;margin-top:2px}
+.sl-ticket-state svg{width:10px;height:10px;stroke:currentColor;stroke-width:2.6;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.sl-chip-main{min-width:0;padding:8px 10px 8px 11px;display:flex;flex-direction:column;justify-content:center;gap:5px}
+.sl-chip-id{display:flex;gap:12px;min-width:0}
+.sl-chip-id .fld{min-width:0}
+.sl-chip-id .fld.sec{flex:1}
+.sl-chip-id .fld.mid{flex:none;text-align:center}
+.sl-chip-eb{display:block;font-size:8px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--sl-muted);margin-bottom:1px}
+.sl-chip-id .val{display:block;font-weight:800;font-size:13px;line-height:1.25;white-space:nowrap}
+.sl-chip-id .fld.sec .val{overflow:hidden;text-overflow:ellipsis}
+.sl-chip-sub{display:flex;align-items:center;gap:6px;min-width:0}
 .sl-chip .cat{color:var(--sl-muted);font-size:10.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sl-chip .amt{font-weight:700;font-variant-numeric:tabular-nums;flex:none;white-space:nowrap}
-.sl-chip .rm{width:29px;height:29px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--sl-muted)}
-.sl-chip .rm:hover,.sl-chip .rm:focus-visible{color:var(--sl-accent);background:color-mix(in srgb,var(--sl-accent) 10%,transparent)}
+.sl-chip-rail{display:flex;flex-direction:column;border-left:1px solid var(--sl-line)}
+.sl-chip .rm,.sl-chip .view{flex:1;min-height:26px;border-radius:0;display:flex;align-items:center;justify-content:center;
+  color:var(--sl-muted);transition:color .15s,background .15s}
+.sl-chip .view{border-top:1px solid var(--sl-line)}
+.sl-chip .rm:hover,.sl-chip .rm:focus-visible{color:#e5484d;background:color-mix(in srgb,#e5484d 9%,transparent)}
+.sl-chip .view:hover,.sl-chip .view:focus-visible{color:var(--sl-text);background:color-mix(in srgb,var(--sl-accent) 10%,transparent)}
 .sl-chip .rm svg{width:11px;height:11px;stroke:currentColor;stroke-width:2.4;fill:none;stroke-linecap:round}
+.sl-chip .view svg{width:13px;height:13px;stroke:currentColor;stroke-width:1.8;fill:none}
+/* live-activity strip — narrates WS availability deltas (social proof + urgency) */
+.sl-live{display:flex;align-items:center;gap:7px;margin:10px 14px 0;padding:7px 9px;flex:none;
+  border:1px solid var(--sl-line);border-radius:8px;background:color-mix(in srgb,var(--sl-accent) 4%,var(--sl-surface));
+  font-size:11px;color:var(--sl-muted)}
+.sl-live .dot{width:6px;height:6px;border-radius:999px;background:#22a06b;box-shadow:0 0 6px rgba(34,160,107,.75);flex:none}
+.sl-live span:last-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* GA rows */
 .sl-ga{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px dashed var(--sl-line);border-radius:var(--sl-r-sm)}
@@ -589,12 +606,6 @@ const CSS = `
 /* per-seat ticket-tier select + view-from-seat button in tray chips */
 .sl-chip .tier{background:var(--sl-bg);color:var(--sl-text);border:1px solid var(--sl-line);border-radius:6px;
   font:inherit;font-size:10px;padding:2px 4px;min-width:0;max-width:100%;cursor:pointer}
-.sl-chip .view{width:20px;height:20px;border-radius:999px;flex:none;display:flex;align-items:center;justify-content:center;
-  color:var(--sl-muted);opacity:.36;transition:color .15s,opacity .15s}
-.sl-chip .view:hover{color:var(--sl-text)}
-.sl-chip:hover .view,.sl-chip .view:focus-visible{opacity:1;color:var(--sl-text)}
-.sl-chip .view svg{width:12px;height:12px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
-@media(pointer:coarse){.sl-chip .view{opacity:.58}}
 
 /* arena: LOD rung pills (flow within the top-center region) */
 .sl-rungs{display:none;background:var(--sl-surface);border:1px solid var(--sl-line);border-radius:999px;padding:3px}
@@ -1032,6 +1043,7 @@ export class SeatPicker {
           <div class="sl-filters" data-ref="filters"></div>
           <div class="sl-sec sl-prices-sec" data-ref="pricesSec"><span>Ticket prices</span></div>
           <div class="sl-prices" data-ref="prices"></div>
+          <div class="sl-live" data-ref="live" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><span data-ref="liveText">Live availability — seats update in real time</span></div>
           <div class="sl-sec sl-seats-sec"><span>Your seats</span><span class="sl-seat-summary" data-ref="seatSummary"></span></div>
           <div class="sl-tray" data-ref="tray"></div>
           <div class="sl-foot" data-ref="foot">
@@ -2308,6 +2320,7 @@ export class SeatPicker {
     const doc = this.controller.doc;
     if (!doc || !this.els.prices) return;
     const left = this.controller.categoryAvailability();
+    this.narrateAvailability(doc.categories, left);
     this.els.prices.innerHTML = doc.categories
       .map((c) => {
         const price = c.tiers?.length ? c.tiers[0].price : c.price;
@@ -2335,6 +2348,31 @@ export class SeatPicker {
       row.addEventListener('mouseleave', () => this.controller.getRenderer()?.setCategoryHighlight?.(null));
     });
   }
+
+  /**
+   * Live-activity strip: turn WS availability deltas into one quiet line of
+   * social proof ("2 seats just taken in VIP · 118 left"). Diffs per-category
+   * counts on every status change — no per-seat payload needed. Skips the very
+   * first computation (initial load is not "activity").
+   */
+  private narrateAvailability(
+    categories: Array<{ key: string; label: string }>,
+    left: Record<string, number>,
+  ): void {
+    const textEl = this.els.liveText;
+    const prev = this.lastCatAvail;
+    this.lastCatAvail = { ...left };
+    if (!textEl || !prev) return;
+    for (const cat of categories) {
+      const before = prev[cat.key];
+      const now = left[cat.key] ?? 0;
+      if (before === undefined || now >= before) continue;
+      const taken = before - now;
+      textEl.textContent = `${taken} seat${taken === 1 ? '' : 's'} just taken in ${cat.label} · ${now} left`;
+      return;
+    }
+  }
+  private lastCatAvail: Record<string, number> | null = null;
 
   /** A live delta took one of OUR selected (not yet held) seats — evict + tell the buyer. */
   private evictTakenSelections(): void {
@@ -2400,26 +2438,52 @@ export class SeatPicker {
     // Held line items (best-available, completed, or restored). Tier is
     // server-committed, but each item can be released without discarding the
     // rest of the hold.
+    // Ticket-card identity grid: SECTION | ROW | SEAT, echoing the confirm
+    // popover so the buyer meets the same identity pattern at confirm and in
+    // the cart. Falls back to the raw label when spatial context is missing
+    // (GA lines, legacy labels).
+    const idGrid = (seatId: string | null, label: string): string => {
+      const d = seatId ? this.controller.seatDetails(seatId) : null;
+      if (!d?.sectionLabel && !d?.rowLabel && !d?.seatNumber) {
+        return `<div class="sl-chip-id"><span class="fld sec"><span class="sl-chip-eb">Seat</span><span class="val">${label}</span></span></div>`;
+      }
+      return (
+        `<div class="sl-chip-id">` +
+        `<span class="fld sec"><span class="sl-chip-eb">Section</span><span class="val">${d.sectionLabel ?? '—'}</span></span>` +
+        (d.rowLabel ? `<span class="fld mid"><span class="sl-chip-eb">Row</span><span class="val">${d.rowLabel}</span></span>` : '') +
+        (d.seatNumber ? `<span class="fld mid"><span class="sl-chip-eb">Seat</span><span class="val">${d.seatNumber}</span></span>` : '') +
+        `</div>`
+      );
+    };
+    // Right icon rail per the canonical mock: remove on top, seat view below.
+    const iconRail = (rmAria: string, viewLabel: string | null): string =>
+      `<div class="sl-chip-rail">` +
+      `<button type="button" class="rm" aria-label="${rmAria}">` +
+      `<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>` +
+      (viewLabel
+        ? `<button type="button" class="view" data-view-label="${viewLabel}" aria-label="${t('picker.viewFromSeat', { label: viewLabel })}">` +
+          `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`
+        : '') +
+      `</div>`;
+
     for (const item of heldItems) {
       const itemKey = `held:${item.label}`;
       nextTrayKeys.add(itemKey);
       const cat = this.controller.doc?.categories.find((c) => c.key === item.categoryKey);
       const tierName = item.tierId ? cat?.tiers?.find((ti) => ti.id === item.tierId)?.name : undefined;
-      const canView = this.seatViewEnabled() && item.objectType !== 'ga' && !!this.controller.seatByLabel(item.label);
-      const viewBtn = canView
-        ? `<button type="button" class="view" data-view-label="${item.label}" aria-label="${t('picker.viewFromSeat', { label: item.label })}">` +
-          `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`
-        : '';
+      const heldSeat = item.objectType !== 'ga' ? this.controller.seatByLabel(item.label) : null;
+      const canView = this.seatViewEnabled() && !!heldSeat;
       parts.push(
-        `<div class="sl-chip sl-held${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-held="${encodeURIComponent(item.label)}">` +
+        `<div class="sl-chip sl-held${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-held="${encodeURIComponent(item.label)}"${heldSeat ? ` data-locate="${heldSeat.id}"` : ''}>` +
+          `<div class="sl-chip-main">` +
+          idGrid(heldSeat?.id ?? null, item.label) +
+          `<div class="sl-chip-sub">` +
           `<span class="sl-ticket-state held" aria-label="Held for you" title="Held for you">` +
           `<svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>` +
-          `<div class="sl-chip-main"><b>${item.label}</b><div class="sl-chip-sub">` +
-          `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>${viewBtn}</div></div>` +
+          `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>` +
           `<span class="amt">${this.money(item.unitPrice * (item.quantity ?? 1))}</span>` +
-          `<button type="button" class="rm" aria-label="Remove held ticket ${item.label}">` +
-          `<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` +
-          `</button>` +
+          `</div></div>` +
+          iconRail(`Remove held ticket ${item.label}`, canView ? item.label : null) +
           `</div>`,
       );
     }
@@ -2438,20 +2502,18 @@ export class SeatPicker {
               .join('') +
             `</select>`
           : '';
-      const viewBtn = canView
-        ? `<button type="button" class="view" data-view-label="${s.label}" aria-label="${t('picker.viewFromSeat', { label: s.label })}">` +
-          `<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`
-        : '';
       parts.push(
-        `<div class="sl-chip${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-seat="${s.id}">` +
+        `<div class="sl-chip${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-seat="${s.id}" data-locate="${s.id}">` +
+          `<div class="sl-chip-main">` +
+          idGrid(s.id, s.label) +
+          `<div class="sl-chip-sub">` +
           `<span class="sl-ticket-state" aria-label="Selected" title="Selected">` +
           `<svg viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></svg></span>` +
-          `<div class="sl-chip-main"><b>${s.label}</b><div class="sl-chip-sub">` +
-          `<span class="cat">${cat?.label ?? s.categoryKey}</span>${tierSelect}${viewBtn}</div></div>` +
+          `<span class="cat">${cat?.label ?? s.categoryKey}</span>${tierSelect}` +
           `<span class="amt">${this.money(s.price)}</span>` +
-          `<button type="button" class="rm" aria-label="Remove ${s.label}">` +
-          `<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` +
-          `</button></div>`,
+          `</div></div>` +
+          iconRail(`Remove ${s.label}`, canView ? s.label : null) +
+          `</div>`,
       );
     }
 
@@ -2504,7 +2566,7 @@ export class SeatPicker {
           return;
         }
         const id = chip.dataset.seat!;
-        const label = chip.querySelector('b')?.textContent ?? 'Seat';
+        const label = this.controller.getSelection().find((sel) => sel.id === id)?.label ?? 'Seat';
         const remove = (): void => {
           this.controller.deselect([id]);
           this.toast(`${label} removed.`, 'neutral', {
@@ -2536,6 +2598,13 @@ export class SeatPicker {
         const seat = this.controller.seatByLabel(btn.dataset.viewLabel!);
         if (seat) this.openSeatView(seat);
       });
+    });
+    // Card ↔ map linkage: hovering (or keyboard-focusing) a ticket card pulses
+    // its seat on the map so the buyer can locate what they picked.
+    this.els.tray.querySelectorAll<HTMLElement>('.sl-chip[data-locate]').forEach((chip) => {
+      const locate = (): void => this.controller.flashSeat(chip.dataset.locate!, this.cssVar('--sl-accent') || '#f4b740');
+      chip.addEventListener('mouseenter', locate);
+      chip.addEventListener('focusin', locate);
     });
     this.els.tray.querySelectorAll<HTMLElement>('.sl-ga button').forEach((btn) => {
       btn.addEventListener('click', () => {
