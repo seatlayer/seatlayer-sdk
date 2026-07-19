@@ -1217,6 +1217,16 @@ export class PickerController {
     }
   }
 
+  /**
+   * Re-pull the status snapshot on demand. Live surfaces rarely need this (the
+   * socket keeps them fresh); local/mock transports with no socket call it
+   * after they mutate state (e.g. the demo books a hold) so the renderer and
+   * every onStatusChange consumer repaint from the new truth.
+   */
+  async refresh(): Promise<void> {
+    await this.resnapshot();
+  }
+
   // ---- realtime socket ------------------------------------------------------
 
   /**
@@ -1255,9 +1265,13 @@ export class PickerController {
 
   private connect(): void {
     if (this.closed) return;
+    // A transport may be fully local (demo/mock) — an empty socketUrl means
+    // "no live feed"; skip the connection instead of retrying forever.
+    const url = this.api.socketUrl(this.key);
+    if (!url) return;
     let ws: WebSocket;
     try {
-      ws = new WebSocket(this.api.socketUrl(this.key));
+      ws = new WebSocket(url);
     } catch {
       this.scheduleReconnect();
       return;
