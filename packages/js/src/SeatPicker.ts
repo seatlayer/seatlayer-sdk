@@ -392,7 +392,7 @@ const CSS = `
   overscroll-behavior:contain;scrollbar-gutter:stable}
 .sl-tray-hint{font-size:12.5px;color:var(--sl-muted);line-height:1.5}
 .sl-chip{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 34px;align-items:stretch;
-  min-height:53px;border:1px solid var(--sl-line);border-radius:var(--sl-r-sm);overflow:hidden;
+  flex:none;min-height:53px;border:1px solid var(--sl-line);border-radius:var(--sl-r-sm);overflow:hidden;
   background:var(--sl-surface);font-size:13px;transform-origin:center;transition:border-color .15s,background .15s}
 .sl-chip:hover{border-color:color-mix(in srgb,var(--sl-accent) 38%,var(--sl-line))}
 .sl-chip.sl-enter{animation:slChipIn .38s cubic-bezier(.2,.8,.2,1) both}
@@ -409,7 +409,7 @@ const CSS = `
 .sl-chip-id .fld.sec{flex:1}
 .sl-chip-id .fld.mid{flex:none;text-align:center}
 .sl-chip-eb{display:block;font-size:8px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--sl-muted);margin-bottom:1px}
-.sl-chip-id .val{display:block;font-weight:800;font-size:13px;line-height:1.25;white-space:nowrap}
+.sl-chip-id .val{display:block;font-weight:600;font-size:13px;line-height:1.25;white-space:nowrap}
 .sl-chip-id .fld.sec .val{overflow:hidden;text-overflow:ellipsis}
 .sl-chip-sub{display:flex;align-items:center;gap:6px;min-width:0}
 .sl-chip .cat{color:var(--sl-muted);font-size:10.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -635,7 +635,7 @@ const CSS = `
   transform:translateX(-50%);animation:slConfirmMobileIn .24s cubic-bezier(.2,.8,.2,1) both}
 
 /* Best available is a first-class shortcut, not an anonymous utility row. */
-.sl-ba{position:relative;overflow:hidden;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:7px;
+.sl-ba{position:relative;flex:none;overflow:hidden;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:7px;
   padding:13px;border:1px solid color-mix(in srgb,var(--sl-accent) 34%,var(--sl-line));border-radius:13px;
   background:linear-gradient(135deg,color-mix(in srgb,var(--sl-accent) 5%,var(--sl-surface)),color-mix(in srgb,var(--sl-accent) 11%,var(--sl-surface)))}
 .sl-ba::after{content:'✦';position:absolute;right:10px;top:3px;color:color-mix(in srgb,var(--sl-accent) 20%,transparent);font-size:42px;line-height:1}
