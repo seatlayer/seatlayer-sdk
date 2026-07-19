@@ -22,6 +22,9 @@ export type {
   CheckoutHandoff,
   CheckoutLineItem,
 } from './SeatPicker';
+// Host helper for iframe picker embeds: auto-height + fullscreen pin/restore.
+export { attachPickerFrame } from './attachPickerFrame';
+export type { AttachPickerFrameOptions } from './attachPickerFrame';
 // Organizer control room: Monitor + Inspect + bulk Block/unblock on one renderer.
 export { SeatManager } from './SeatManager';
 export type {

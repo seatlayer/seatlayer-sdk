@@ -17,11 +17,11 @@ function mountDesigner(overrides: Partial<ConstructorParameters<typeof EmbeddedD
 }
 
 /** Dispatch a message that passes the core's origin + source identity checks. */
-function postFromFrame(designer: EmbeddedDesigner, data: Record<string, unknown>) {
+function postFromFrame(designer: EmbeddedDesigner, data: Record<string, unknown>, origin = DESIGNER_ORIGIN) {
   const frame = designer.getIframe();
   if (!frame) throw new Error('no iframe mounted');
   const event = new MessageEvent('message', { data });
-  Object.defineProperty(event, 'origin', { value: DESIGNER_ORIGIN, configurable: true });
+  Object.defineProperty(event, 'origin', { value: origin, configurable: true });
   Object.defineProperty(event, 'source', { value: frame.contentWindow, configurable: true });
   window.dispatchEvent(event);
 }
@@ -133,5 +133,88 @@ describe('EmbeddedDesigner loading state machine', () => {
     designer.destroy();
     expect(container.querySelector('iframe')).toBeNull();
     expect(overlay()).toBeNull();
+  });
+});
+
+describe('EmbeddedDesigner resize + fullscreen protocol', () => {
+  it('grows the iframe to the reported height', () => {
+    const designer = mountDesigner();
+    postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 640 });
+    expect(designer.getIframe()!.style.height).toBe('640px');
+    postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 812.6 });
+    expect(designer.getIframe()!.style.height).toBe('813px');
+  });
+
+  it('ignores resize when autoResize is disabled', () => {
+    const designer = mountDesigner({ autoResize: false });
+    const before = designer.getIframe()!.style.height;
+    postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 640 });
+    expect(designer.getIframe()!.style.height).toBe(before);
+  });
+
+  it('ignores non-positive / non-finite heights', () => {
+    const designer = mountDesigner();
+    const before = designer.getIframe()!.style.height;
+    postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 0 });
+    postFromFrame(designer, { type: 'seatlayer.designer.resize', px: -50 });
+    postFromFrame(designer, { type: 'seatlayer.designer.resize', px: Number.NaN });
+    expect(designer.getIframe()!.style.height).toBe(before);
+  });
+
+  it('pins the iframe fullscreen and restores on off', () => {
+    const designer = mountDesigner();
+    const frame = designer.getIframe()!;
+    postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: true });
+    expect(frame.style.position).toBe('fixed');
+    expect(frame.style.width).toBe('100vw');
+    expect(frame.style.height).toBe('100vh');
+    expect(document.documentElement.style.overflow).toBe('hidden');
+
+    postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: false });
+    expect(frame.style.position).toBe('');
+    expect(frame.style.width).toBe('100%');
+    expect(document.documentElement.style.overflow).toBe('');
+  });
+
+  it('re-applies the auto-height reported while pinned, on unpin', () => {
+    const designer = mountDesigner();
+    const frame = designer.getIframe()!;
+    postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 500 });
+    postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: true });
+    // pinned iframe fills the viewport, not the reported height
+    expect(frame.style.height).toBe('100vh');
+    postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 700 });
+    expect(frame.style.height).toBe('100vh');
+    postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: false });
+    expect(frame.style.height).toBe('700px');
+  });
+
+  it('exits host-pinned fullscreen on Escape', () => {
+    const designer = mountDesigner();
+    const frame = designer.getIframe()!;
+    postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: true });
+    expect(frame.style.position).toBe('fixed');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(frame.style.position).toBe('');
+    expect(document.documentElement.style.overflow).toBe('');
+  });
+
+  it('restores the scroll lock on destroy while pinned', () => {
+    const designer = mountDesigner();
+    postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: true });
+    expect(document.documentElement.style.overflow).toBe('hidden');
+    designer.destroy();
+    expect(document.documentElement.style.overflow).toBe('');
+  });
+
+  it('ignores resize + fullscreen from the wrong origin', () => {
+    const designer = mountDesigner();
+    const frame = designer.getIframe()!;
+    const before = frame.style.height;
+    postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 640 }, 'https://evil.example');
+    postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: true }, 'https://evil.example');
+    expect(frame.style.height).toBe(before);
+    expect(frame.style.position).toBe('');
+    expect(document.documentElement.style.overflow).toBe('');
   });
 });

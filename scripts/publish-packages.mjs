@@ -93,6 +93,14 @@ for (const pkg of releasePackages()) {
   }
   const result = spawnSync('pnpm', args, { cwd: repoRoot, stdio: 'inherit' });
   if (result.status !== 0) throw new Error(`npm publish failed for ${pkg.name}@${version}`);
-  if (npmVersion(pkg.name) !== version) throw new Error(`npm did not expose ${pkg.name}@${version} after publish`);
+  // npm's read-after-write lag can hide a successful publish for a while; poll
+  // instead of failing on the first look (previously forced one CI re-run per package).
+  const deadline = Date.now() + 3 * 60_000;
+  let exposed = npmVersion(pkg.name) === version;
+  while (!exposed && Date.now() < deadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10_000);
+    exposed = npmVersion(pkg.name) === version;
+  }
+  if (!exposed) throw new Error(`npm did not expose ${pkg.name}@${version} within 3m of publish`);
   console.log(`✓ published ${pkg.name}@${version}`);
 }

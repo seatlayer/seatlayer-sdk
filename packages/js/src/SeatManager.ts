@@ -24,10 +24,12 @@ import {
   expandChart,
   computeSections,
   UNGROUPED_ID,
+  type AvailabilityRule,
   type ChartDoc,
   type ChartTheme,
   type ExpandedSeat,
   type SeatStatus,
+  type SectionNode,
 } from '@seatlayer/core';
 import {
   ManageApi,
@@ -38,7 +40,64 @@ import {
   type ReportResult,
 } from './manageApi';
 
-export type SeatManagerMode = 'view' | 'inspect' | 'block';
+export type SeatManagerMode = 'view' | 'inspect' | 'block' | 'sections';
+
+/** The select-state of a Sections-mode availability row. An absent rule is
+ *  `open` (on sale); otherwise the rule's own mode. */
+export type AvailabilityMode = 'open' | 'closed' | 'hidden' | 'timed' | 'threshold';
+
+/** One row of the Sections rail — a zone header or a single section. */
+interface SectionRow {
+  kind: 'zone' | 'section';
+  id: string;
+  label: string;
+  seatCount: number;
+  /** Seat labels the id governs (sent as the rule's `labels`). */
+  seatLabels: string[];
+  rule: AvailabilityRule | null;
+  /** Effective-hidden right now (manual hide, or a timed/threshold window not yet due). */
+  hidden: boolean;
+  /** Effective-closed right now — visible to buyers but off sale. */
+  closed: boolean;
+  /** A section whose parent zone carries a rule — its own control is a muted "Follows zone". */
+  followsZone: boolean;
+}
+
+/** Map an availability rule to its Sections-rail select value (null rule = on sale). */
+export function availabilityModeOf(rule: AvailabilityRule | null | undefined): AvailabilityMode {
+  return rule ? rule.mode : 'open';
+}
+
+/**
+ * Build the rule a chosen select mode implies for a set of seat labels, reusing
+ * an existing rule's tuning where it carries over (a timed reveal time, a
+ * threshold percent). `open` clears the rule (returns null → id dropped from the
+ * map). Wire-identical to the EventDO's accepted rule shapes.
+ */
+export function availabilityRuleForMode(
+  mode: AvailabilityMode,
+  seatLabels: string[],
+  prev?: AvailabilityRule | null,
+): AvailabilityRule | null {
+  switch (mode) {
+    case 'open':
+      return null;
+    case 'hidden':
+      return { mode: 'hidden', labels: seatLabels };
+    case 'closed':
+      return { mode: 'closed', labels: seatLabels };
+    case 'timed':
+      return { mode: 'timed', revealAt: prev?.revealAt ?? Date.now() + 3_600_000, labels: seatLabels };
+    case 'threshold':
+      return { mode: 'threshold', thresholdPct: prev?.thresholdPct ?? 80, labels: seatLabels };
+  }
+}
+
+/** epoch ms → a `datetime-local` input value (local time, minute precision). */
+function toLocalInput(ms: number): string {
+  const d = new Date(ms - new Date().getTimezoneOffset() * 60_000);
+  return d.toISOString().slice(0, 16);
+}
 
 /** DO seat status — 'blocked' has no engine analogue (→ 'not_for_sale'). */
 type DoStatus = 'free' | 'held' | 'booked' | 'blocked';
@@ -328,6 +387,32 @@ const CSS = `
 .slm-momentumhelp[hidden]{display:none}.slm-momentumscale{display:flex;align-items:center;gap:7px;color:var(--slm-muted);font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.07em}
 .slm-momentumgradient{height:6px;min-width:64px;flex:1;border-radius:999px;background:linear-gradient(90deg,#f4b740,#ef4444)}
 .slm-momentumcopy{margin-top:7px;color:var(--slm-muted);font-size:11px;line-height:1.45}
+/* sections: availability windows */
+.slm-availlist{display:flex;flex-direction:column;gap:8px;margin:2px 0 12px}
+.slm-availrow{padding:10px;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface);transition:border-color .15s ease,opacity .15s ease}
+.slm-availrow.zone{background:color-mix(in srgb,var(--slm-surface) 82%,#000)}
+.slm-availrow.hidden{opacity:.62}.slm-availrow.closed{opacity:.82}
+.slm-availhead{display:flex;align-items:center;gap:8px}
+.slm-availlabel{display:flex;align-items:center;gap:5px;flex:1;min-width:0;font-size:12.5px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slm-availcaret{flex:none;color:var(--slm-muted);font-size:10px}
+.slm-availcount{flex:none;font-size:11px;font-weight:700;color:var(--slm-muted);font-variant-numeric:tabular-nums}
+.slm-availbadge{flex:none;font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:2px 6px;border-radius:999px}
+.slm-availbadge.hidden{background:rgba(139,148,172,.18);color:#c2c9d8}
+.slm-availbadge.closed{background:rgba(244,183,64,.16);color:#f7ca6b}
+.slm-availselwrap{position:relative;flex:none;display:inline-flex}
+.slm-availmode{width:auto;max-width:190px;padding:6px 8px;font-size:11.5px;font-weight:700;cursor:pointer}
+.slm-availmode.on{border-color:var(--slm-accent);color:var(--slm-text)}
+.slm-availmode:disabled{opacity:.55;cursor:progress}
+.slm-availfollows{flex:none;padding:5px 10px;border:1px solid var(--slm-line);border-radius:7px;background:var(--slm-surface);color:var(--slm-muted);font-size:11px;font-weight:600;white-space:nowrap}
+.slm-availdetail{display:flex;align-items:center;gap:8px;margin-top:9px}
+.slm-availdetail .slm-input{flex:1}
+.slm-availpct{max-width:74px;flex:none!important}
+.slm-availpctlabel{font-size:11px;color:var(--slm-muted);font-weight:600;white-space:nowrap}
+.slm-availsummary{display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--slm-line);border-radius:9px;color:var(--slm-muted);font-size:12.5px}
+.slm-availdot{width:9px;height:9px;border-radius:50%;flex:none;background:#22a06b}.slm-availdot.warn{background:#f4b740}
+.slm-availcallout{display:flex;align-items:flex-start;gap:8px;margin-top:10px;padding:10px 12px;border:1px solid rgba(244,183,64,.45);border-radius:9px;background:rgba(244,183,64,.1)}
+.slm-availstar{flex:none;margin-top:1px;color:#f4b740;font-size:13px;line-height:1}
+.slm-availcallout p{font-size:11.5px;line-height:1.55;color:#f4d58a}.slm-availcallout b{color:#ffe4a3;font-weight:800}
 .slm-inspect-card{padding:16px;border:1px solid var(--slm-line);border-radius:12px;background:var(--slm-surface)}
 .slm-inspect-label{font-size:24px;font-weight:850;letter-spacing:-.02em;line-height:1.1}
 .slm-inspect-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px;margin-top:18px}
@@ -453,6 +538,13 @@ export class SeatManager {
   private tokenRefreshInFlight = false;
   private sectionByObject = new Map<string, string>();
   private sectionLabelById = new Map<string, string>();
+  private sectionsBase: ReturnType<typeof computeSections> | null = null;
+  // Sections mode (availability windows): organizer rules + the live effective
+  // hidden/closed sets from the snapshot + WS (a timed/threshold rule fires DO-side).
+  private availabilityRules: Record<string, AvailabilityRule> = {};
+  private effectiveHidden = new Set<string>();
+  private effectiveClosed = new Set<string>();
+  private availabilitySaving = false;
   private lastSyncedAt: number | null = null;
   private blockedQuery = '';
   private blockedSection = '';
@@ -473,6 +565,7 @@ export class SeatManager {
     if (key === 'm') this.setMode('view');
     else if (key === 'i') this.setMode('inspect');
     else if (key === 'b') this.setMode('block');
+    else if (key === 's') this.setMode('sections');
     else if (key === 'f') this.toggleFullscreen();
     else return;
     event.preventDefault();
@@ -520,6 +613,7 @@ export class SeatManager {
       const [, controlRoom] = await Promise.all([
         this.resnapshot(),
         this.refreshControlRoom().catch((err) => this.opts.onError?.(err)),
+        this.refreshAvailability(),
       ]);
       // Restore recent activity through the view-safe control-room projection.
       // Older workers lack this field, so privileged/secret-key hosts retain the
@@ -548,6 +642,7 @@ export class SeatManager {
     if (changed) this.renderer?.clearSelection();
     this.paintModeTabs();
     this.paintRail();
+    this.applySectionCanvasTreatment();
     if (changed) this.opts.onModeChange?.(mode);
   }
 
@@ -877,6 +972,7 @@ export class SeatManager {
       this.attempt = 0;
       this.setLive(true);
       void this.resnapshot().then(() => this.scheduleRevenueRefresh(0));
+      void this.refreshAvailability();
     };
     ws.onmessage = (e) => this.onMessage(e);
     ws.onclose = () => {
@@ -907,7 +1003,14 @@ export class SeatManager {
       changes?: { label: string; status: string }[];
       shoppingSessions?: number;
       activeHolds?: number;
+      hidden?: string[];
+      closed?: string[];
     };
+    // Availability state (effective hidden/closed) can ride any message and is the
+    // dedicated payload of the 'hidden' broadcast — keep the Sections rail + canvas fresh.
+    if (Array.isArray(m.hidden) || Array.isArray(m.closed)) {
+      this.updateEffectiveAvailability(m.hidden, m.closed);
+    }
     if (m.type === 'presence') {
       if (
         this.controlRoomSnapshot &&
@@ -961,6 +1064,7 @@ export class SeatManager {
     try {
       const objs = await this.api.objects(this.key);
       this.applySnapshot(objs.seats);
+      this.updateEffectiveAvailability(objs.hidden, objs.closed);
     } catch {
       /* transient — the delta stream keeps us fresh */
     }
@@ -1290,6 +1394,7 @@ export class SeatManager {
           <button class="slm-mode" role="tab" data-mode="view" title="Monitor (M)" aria-keyshortcuts="M">Monitor</button>
           <button class="slm-mode" role="tab" data-mode="inspect" title="Inspect (I)" aria-keyshortcuts="I">Inspect</button>
           <button class="slm-mode" role="tab" data-mode="block" title="Block (B)" aria-keyshortcuts="B">Block</button>
+          <button class="slm-mode" role="tab" data-mode="sections" title="Sections (S)" aria-keyshortcuts="S">Sections</button>
         </div>
         <span class="slm-live"><span class="slm-live-dot"></span><span data-ref="livetext">CONNECTING</span></span>
         <div class="slm-bar-actions">
@@ -1353,6 +1458,7 @@ export class SeatManager {
     if (!this.doc) return;
     try {
       const secs = computeSections(this.doc);
+      this.sectionsBase = secs;
       this.sectionOptions = [];
       this.sectionByObject = new Map(secs.objectToSection);
       this.sectionLabelById.clear();
@@ -1496,6 +1602,7 @@ export class SeatManager {
   private paintRail(): void {
     if (this.mode === 'view') this.renderViewRail();
     else if (this.mode === 'inspect') this.renderInspectRail(this.getSelection());
+    else if (this.mode === 'sections') this.renderSectionsRail();
     else this.renderBlockRail();
     this.updateZoomHint();
   }
@@ -1627,6 +1734,276 @@ export class SeatManager {
           <div><span>Section revenue</span><b>${sectionMetric && this.controlRoomSnapshot ? fmtMoney(sectionMetric.bookedRevenue, this.controlRoomSnapshot.currency) : '—'}</b></div>
         </div>
       </div>`;
+  }
+
+  // ---- sections: availability windows --------------------------------------
+
+  /** Pull the organizer's availability rules (event:view). Called on load and on
+   *  every WS (re)connect, mirroring how the other panels re-hydrate. `closed` is
+   *  deterministic from the rules; `hidden` (which folds in already-due timed /
+   *  threshold windows) comes from the snapshot + WS effective set. */
+  private async refreshAvailability(): Promise<void> {
+    try {
+      const res = await this.withAuthRetry(() => this.api.availability(this.key));
+      this.availabilityRules = res.rules ?? {};
+      this.effectiveClosed = new Set(this.closedIdsFromRules(this.availabilityRules));
+      if (this.mode === 'sections') this.renderSectionsRail();
+      this.applySectionCanvasTreatment();
+    } catch (err) {
+      this.opts.onError?.(err);
+    }
+  }
+
+  /** Run a token-authed op; on a 401 re-mint via onTokenRefresh and retry once. */
+  private async withAuthRetry<T>(op: () => Promise<T>): Promise<T> {
+    try {
+      return await op();
+    } catch (err) {
+      if (err instanceof ManageApiError && err.status === 401 && this.opts.onTokenRefresh && !this.tokenRefreshInFlight) {
+        await this.rotateToken();
+        return op();
+      }
+      throw err;
+    }
+  }
+
+  private closedIdsFromRules(rules: Record<string, AvailabilityRule>): string[] {
+    return Object.entries(rules).filter(([, r]) => r.mode === 'closed').map(([id]) => id);
+  }
+
+  /** Adopt a new effective hidden/closed set (from a snapshot or WS broadcast) and
+   *  repaint the rail + canvas when it actually moves. */
+  private updateEffectiveAvailability(hidden?: string[], closed?: string[]): void {
+    let changed = false;
+    if (Array.isArray(hidden)) {
+      this.effectiveHidden = new Set(hidden.filter((x): x is string => typeof x === 'string'));
+      changed = true;
+    }
+    if (Array.isArray(closed)) {
+      this.effectiveClosed = new Set(closed.filter((x): x is string => typeof x === 'string'));
+      changed = true;
+    }
+    if (!changed) return;
+    if (this.mode === 'sections') this.renderSectionsRail();
+    this.applySectionCanvasTreatment();
+  }
+
+  /** Canvas read of the availability state: dim hidden sections to a whisper,
+   *  half-light closed sections, leave open sections normal. Only in Sections mode;
+   *  cleared in every other tool. */
+  private applySectionCanvasTreatment(): void {
+    if (!this.renderer) return;
+    if (this.mode === 'sections') {
+      this.renderer.setDimmedSections([...this.effectiveHidden]);
+      this.renderer.setClosedSections([...this.effectiveClosed]);
+    } else {
+      this.renderer.setDimmedSections(null);
+      this.renderer.setClosedSections(null);
+    }
+  }
+
+  /** Zone-grouped render tree: each zone header then its sections (which follow the
+   *  zone window), then loose sections + the ungrouped bucket. Effective hidden /
+   *  closed come from the live sets, rules from the organizer map. */
+  private buildSectionRows(): { rows: SectionRow[]; hiddenSections: number; closedSections: number } {
+    const base = this.sectionsBase;
+    if (!base) return { rows: [], hiddenSections: 0, closedSections: 0 };
+    const zones = this.doc?.zones ?? [];
+    const byZone = new Map<string, SectionNode[]>();
+    const loose: SectionNode[] = [];
+    for (const s of base.sections) {
+      if (s.zone && zones.some((z) => z.id === s.zone)) {
+        const list = byZone.get(s.zone) ?? [];
+        list.push(s);
+        byZone.set(s.zone, list);
+      } else {
+        loose.push(s);
+      }
+    }
+    const rows: SectionRow[] = [];
+    let hiddenSections = 0;
+    let closedSections = 0;
+    const push = (
+      kind: 'zone' | 'section',
+      node: { id: string; label: string; seatCount: number; seatLabels: string[] },
+      zoneRuled: boolean,
+      parentClosed = false,
+    ): void => {
+      const rule = this.availabilityRules[node.id] ?? null;
+      const effClosed = this.effectiveClosed.has(node.id) || parentClosed;
+      // A closed section stays visible-but-off-sale, never counted as hidden.
+      const effHidden = this.effectiveHidden.has(node.id) || (zoneRuled && !effClosed);
+      if (kind === 'section' && effHidden) hiddenSections += 1;
+      if (kind === 'section' && effClosed) closedSections += 1;
+      rows.push({
+        kind, id: node.id, label: node.label, seatCount: node.seatCount, seatLabels: node.seatLabels,
+        rule, hidden: effHidden, closed: effClosed, followsZone: kind === 'section' && zoneRuled,
+      });
+    };
+    for (const z of zones) {
+      const secs = byZone.get(z.id);
+      if (!secs || !secs.length) continue;
+      const zoneNode = {
+        id: z.id,
+        label: z.label || 'Zone',
+        seatCount: secs.reduce((sum, s) => sum + s.seatCount, 0),
+        seatLabels: secs.flatMap((s) => s.seatLabels),
+      };
+      const zoneRuled = !!this.availabilityRules[z.id];
+      const zoneClosed = this.availabilityRules[z.id]?.mode === 'closed';
+      push('zone', zoneNode, false);
+      for (const s of secs) push('section', s, zoneRuled, zoneClosed);
+    }
+    for (const s of loose) push('section', s, false);
+    if (base.ungrouped) {
+      const u = base.ungrouped;
+      push('section', { id: UNGROUPED_ID, label: u.label, seatCount: u.seatCount, seatLabels: u.seatLabels }, false);
+    }
+    return { rows, hiddenSections, closedSections };
+  }
+
+  private renderSectionsRail(): void {
+    const { rows, hiddenSections, closedSections } = this.buildSectionRows();
+    if (!rows.length) {
+      this.els.rail.innerHTML = `
+        <p class="slm-eyebrow">Availability windows</p>
+        <p class="slm-hint">Draw sections or zones in the designer to schedule availability per area. This chart has none yet.</p>
+        <div class="slm-empty">No sections on this chart.</div>`;
+      return;
+    }
+    const parts: string[] = [];
+    if (hiddenSections) parts.push(`${hiddenSections} hidden`);
+    if (closedSections) parts.push(`${closedSections} closed`);
+    const summary = parts.length ? parts.join(' · ') : 'All sections open and on sale';
+    const warn = hiddenSections > 0 || closedSections > 0;
+    this.els.rail.innerHTML = `
+      <p class="slm-eyebrow">Availability windows</p>
+      <p class="slm-hint">Control when each zone or section goes on sale. Keep it hidden, reveal it at a set time, or <b>auto-reveal once the rest sells past a threshold</b>. Hidden seats vanish for buyers; closed seats stay on the map (flat grey) but can't be bought.</p>
+      <div class="slm-availlist" data-ref="availlist">${rows.map((row) => this.sectionRowHtml(row)).join('')}</div>
+      <div class="slm-availsummary">
+        <span class="slm-availdot${warn ? ' warn' : ''}"></span>
+        <span>${esc(summary)}</span>
+      </div>
+      <div class="slm-availcallout">
+        <span class="slm-availstar" aria-hidden="true">✦</span>
+        <p><b>Auto-reveal at % sold</b> is our differentiator — demand-triggered release: the balcony opens itself the moment the stalls hit the threshold. Neither seats.io nor Ticketmaster ships this.</p>
+      </div>`;
+    this.wireSectionRail();
+    this.applySectionCanvasTreatment();
+  }
+
+  private sectionRowHtml(row: SectionRow): string {
+    const mode = availabilityModeOf(row.rule);
+    const cls = `slm-availrow${row.kind === 'zone' ? ' zone' : ''}${row.hidden ? ' hidden' : ''}${row.closed ? ' closed' : ''}`;
+    const disabled = this.availabilitySaving ? ' disabled' : '';
+    const option = (value: AvailabilityMode, text: string): string =>
+      `<option value="${value}"${mode === value ? ' selected' : ''}>${text}</option>`;
+    const control = row.followsZone
+      ? '<span class="slm-availfollows">Follows zone</span>'
+      : `<span class="slm-availselwrap">
+          <select class="slm-select slm-availmode${mode !== 'open' ? ' on' : ''}" data-avail-id="${esc(row.id)}"${disabled} aria-label="Availability for ${esc(row.label)}">
+            ${option('open', 'Open — on sale')}
+            ${option('closed', 'Closed — visible, not on sale')}
+            ${option('hidden', 'Hidden — off the buyer map')}
+            ${option('timed', 'Reveal at a time')}
+            ${option('threshold', 'Auto-reveal at % sold')}
+          </select>
+        </span>`;
+    let detail = '';
+    if (!row.followsZone && mode === 'timed') {
+      const value = row.rule?.revealAt ? esc(toLocalInput(row.rule.revealAt)) : '';
+      detail = `<div class="slm-availdetail">
+        <input type="datetime-local" class="slm-input" data-avail-reveal="${esc(row.id)}" value="${value}"${disabled} aria-label="Reveal time for ${esc(row.label)}" />
+      </div>`;
+    } else if (!row.followsZone && mode === 'threshold') {
+      const pct = row.rule?.thresholdPct ?? 80;
+      detail = `<div class="slm-availdetail">
+        <span class="slm-availpctlabel">Reveal at</span>
+        <input type="number" min="1" max="100" class="slm-input slm-availpct" data-avail-pct="${esc(row.id)}" value="${esc(pct)}"${disabled} aria-label="Percent sold to reveal ${esc(row.label)}" />
+        <span class="slm-availpctlabel">% sold</span>
+      </div>`;
+    }
+    const badge = row.closed
+      ? '<span class="slm-availbadge closed">Closed</span>'
+      : row.hidden ? '<span class="slm-availbadge hidden">Hidden</span>' : '';
+    const caret = row.kind === 'zone' ? `<span class="slm-availcaret" aria-hidden="true">${row.hidden ? '▸' : '▾'}</span>` : '';
+    return `<div class="${cls}">
+      <div class="slm-availhead">
+        <span class="slm-availlabel">${caret}${esc(row.label)}</span>
+        ${badge}
+        <span class="slm-availcount">${row.seatCount.toLocaleString()}</span>
+        ${control}
+      </div>
+      ${detail}
+    </div>`;
+  }
+
+  private wireSectionRail(): void {
+    const rail = this.els.rail;
+    if (!rail) return;
+    rail.querySelectorAll<HTMLSelectElement>('[data-avail-id]').forEach((select) => {
+      select.addEventListener('change', () => this.setSectionMode(select.dataset.availId!, select.value as AvailabilityMode));
+    });
+    rail.querySelectorAll<HTMLInputElement>('[data-avail-reveal]').forEach((input) => {
+      input.addEventListener('change', () => {
+        const ms = new Date(input.value).getTime();
+        if (Number.isFinite(ms)) this.setSectionRulePatch(input.dataset.availReveal!, { revealAt: ms });
+      });
+    });
+    rail.querySelectorAll<HTMLInputElement>('[data-avail-pct]').forEach((input) => {
+      input.addEventListener('change', () => {
+        const pct = Math.max(1, Math.min(100, Number(input.value) || 0));
+        this.setSectionRulePatch(input.dataset.availPct!, { thresholdPct: pct });
+      });
+    });
+  }
+
+  /** Change one row's availability mode. A zone rule subsumes its child section
+   *  rules, so those are dropped from the map (the zone window is the truth). */
+  private setSectionMode(id: string, mode: AvailabilityMode): void {
+    const row = this.buildSectionRows().rows.find((r) => r.id === id);
+    const seatLabels = row?.seatLabels ?? this.availabilityRules[id]?.labels ?? [];
+    const next = { ...this.availabilityRules };
+    const rule = availabilityRuleForMode(mode, seatLabels, this.availabilityRules[id]);
+    if (rule) next[id] = rule;
+    else delete next[id];
+    if (row?.kind === 'zone' && this.sectionsBase) {
+      for (const s of this.sectionsBase.sections) if (s.zone === id) delete next[s.id];
+    }
+    void this.persistAvailability(next);
+  }
+
+  /** Edit a timed reveal time / threshold percent on an existing row rule. */
+  private setSectionRulePatch(id: string, patch: Partial<AvailabilityRule>): void {
+    const cur = this.availabilityRules[id];
+    if (!cur) return;
+    const row = this.buildSectionRows().rows.find((r) => r.id === id);
+    const labels = row?.seatLabels ?? cur.labels ?? [];
+    void this.persistAvailability({ ...this.availabilityRules, [id]: { ...cur, ...patch, labels } });
+  }
+
+  /** Optimistically adopt the new rules, then reconcile with the server-cleaned
+   *  map + effective hidden/closed sets. Rolls back the rules on failure. */
+  private async persistAvailability(next: Record<string, AvailabilityRule>): Promise<void> {
+    const prev = this.availabilityRules;
+    this.availabilityRules = next;
+    this.availabilitySaving = true;
+    if (this.mode === 'sections') this.renderSectionsRail();
+    try {
+      const res = await this.withAuthRetry(() => this.api.setAvailability(this.key, next));
+      this.availabilityRules = res.rules;
+      this.effectiveHidden = new Set(res.hidden);
+      this.effectiveClosed = new Set(this.closedIdsFromRules(res.rules));
+      this.availabilitySaving = false;
+      if (this.mode === 'sections') this.renderSectionsRail();
+      this.applySectionCanvasTreatment();
+    } catch (err) {
+      this.availabilityRules = prev;
+      this.availabilitySaving = false;
+      if (this.mode === 'sections') this.renderSectionsRail();
+      this.toastErr("Couldn't update availability. Try again.");
+      this.opts.onError?.(err);
+    }
   }
 
   private paintLegend(t: SeatManagerTallies): void {

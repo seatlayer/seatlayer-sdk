@@ -18,7 +18,9 @@
  * `box-book` is intentionally omitted for M1 (box office ships in M2, and the
  * route is still session-only server-side).
  */
-import type { ChartDoc } from '@seatlayer/core';
+import type { AvailabilityRule, ChartDoc } from '@seatlayer/core';
+
+export type { AvailabilityRule } from '@seatlayer/core';
 
 export class ManageApiError extends Error {
   status: number;
@@ -234,6 +236,27 @@ export class ManageApi {
   /** Set (ms, clamped 1–60 min server-side) or clear (null) the hold TTL. */
   setHoldTtl(key: string, holdTtlMs: number | null): Promise<{ ok: true; holdTtlMs: number | null }> {
     return this.auth(`/v1/events/${encodeURIComponent(key)}/hold-ttl`, { method: 'POST', body: { holdTtlMs } });
+  }
+
+  // ---- availability windows (token) ----
+
+  /** The organizer's current per section/zone availability windows (needs
+   *  `event:view`). Ids absent from `rules` are open / on sale. */
+  availability(key: string): Promise<{ rules: Record<string, AvailabilityRule> }> {
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/availability`);
+  }
+
+  /** Replace the availability windows for a set of section/zone ids (needs
+   *  `event:block`). Ids absent from `rules` become open / on sale; a zone rule
+   *  cascades to its sections. The worker derives each id's seat labels, so
+   *  `labels` on the sent rules is best-effort. Resolves with the authoritative
+   *  effective `hidden` set (a due rule may fire at once) and the server-cleaned
+   *  `rules` map (fired timed/threshold windows dropped). */
+  setAvailability(
+    key: string,
+    rules: Record<string, AvailabilityRule>,
+  ): Promise<{ ok: true; hidden: string[]; rules: Record<string, AvailabilityRule> }> {
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/availability`, { method: 'POST', body: { rules } });
   }
 
   // ---- reports (token) ----

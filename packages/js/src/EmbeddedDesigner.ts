@@ -49,6 +49,12 @@ export interface EmbeddedDesignerOptions {
    */
   loadingTimeoutMs?: number;
   /**
+   * Auto-grow the iframe to the height the Designer reports over the resize
+   * protocol (`seatlayer.designer.resize`). Defaults to `true`. Set `false` when
+   * the host sizes the iframe itself (e.g. a fixed-height chrome).
+   */
+  autoResize?: boolean;
+  /**
    * Called when the user presses "Try again" on the error card. Use it to mint a
    * fresh Designer session and call `setDesignerUrl()` with the new URL, which
    * recreates the iframe and returns to the loading state. When omitted, "Try
@@ -119,6 +125,14 @@ export class EmbeddedDesigner {
   private timeoutTimer: ReturnType<typeof setTimeout> | null = null;
   private phase: 'loading' | 'ready' | 'error' = 'loading';
   private restoreContainerPosition: string | null = null;
+  // Host-side fullscreen pin: saved state we restore on `off`/Escape/destroy.
+  private pinned = false;
+  private frameStyleBeforeFs: string | null = null;
+  private docOverflowBeforeFs: string | null = null;
+  private bodyOverflowBeforeFs: string | null = null;
+  private fsKeyHandler: ((event: KeyboardEvent) => void) | null = null;
+  /** Latest height (px string) the Designer reported; re-applied after unpin. */
+  private lastAutoHeight = '';
 
   constructor(options: EmbeddedDesignerOptions) {
     this.options = options;
@@ -175,6 +189,7 @@ export class EmbeddedDesigner {
 
   destroy(): void {
     window.removeEventListener('message', this.handleMessage);
+    this.unpinFullscreen();
     this.clearTimeoutTimer();
     this.removeOverlay();
     this.restoreContainerStyle();
@@ -182,10 +197,75 @@ export class EmbeddedDesigner {
     this.frame = null;
     this.designerOrigin = '';
     this.phase = 'loading';
+    this.lastAutoHeight = '';
   }
 
   private loadingStateEnabled(): boolean {
     return this.options.showLoadingState !== false;
+  }
+
+  private autoResizeEnabled(): boolean {
+    return this.options.autoResize !== false;
+  }
+
+  /**
+   * Pin the iframe over the host page as a viewport-filling overlay. We save the
+   * iframe's inline style and the document scroll state so `unpinFullscreen`
+   * restores everything exactly. Escape (host-side) also exits.
+   */
+  private pinFullscreen(): void {
+    if (this.pinned || !this.frame) return;
+    this.pinned = true;
+    this.frameStyleBeforeFs = this.frame.getAttribute('style');
+    Object.assign(this.frame.style, {
+      position: 'fixed',
+      inset: '0',
+      width: '100vw',
+      height: '100vh',
+      margin: '0',
+      border: '0',
+      zIndex: '2147483000',
+      background: '#101625',
+    } satisfies Partial<CSSStyleDeclaration>);
+
+    const docEl = document.documentElement;
+    this.docOverflowBeforeFs = docEl.style.overflow;
+    docEl.style.overflow = 'hidden';
+    if (document.body) {
+      this.bodyOverflowBeforeFs = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+    }
+
+    this.fsKeyHandler = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') this.unpinFullscreen();
+    };
+    window.addEventListener('keydown', this.fsKeyHandler);
+  }
+
+  /** Undo `pinFullscreen`: restore the iframe style + scroll lock. Idempotent. */
+  private unpinFullscreen(): void {
+    if (!this.pinned) return;
+    this.pinned = false;
+    if (this.frame) {
+      if (this.frameStyleBeforeFs === null) this.frame.removeAttribute('style');
+      else this.frame.setAttribute('style', this.frameStyleBeforeFs);
+      // Re-apply any height reported while we were pinned.
+      if (this.autoResizeEnabled() && this.lastAutoHeight) this.frame.style.height = this.lastAutoHeight;
+    }
+    this.frameStyleBeforeFs = null;
+
+    if (this.docOverflowBeforeFs !== null) {
+      document.documentElement.style.overflow = this.docOverflowBeforeFs;
+      this.docOverflowBeforeFs = null;
+    }
+    if (this.bodyOverflowBeforeFs !== null && document.body) {
+      document.body.style.overflow = this.bodyOverflowBeforeFs;
+      this.bodyOverflowBeforeFs = null;
+    }
+    if (this.fsKeyHandler) {
+      window.removeEventListener('keydown', this.fsKeyHandler);
+      this.fsKeyHandler = null;
+    }
   }
 
   private clearTimeoutTimer(): void {
@@ -420,6 +500,24 @@ export class EmbeddedDesigner {
     if (!this.frame || event.origin !== this.designerOrigin || event.source !== this.frame.contentWindow) return;
     if (!event.data || typeof event.data !== 'object') return;
     const data = event.data as Record<string, unknown>;
+
+    // Layout protocol — origin-locked like everything else, but handled here
+    // rather than dispatched to the host callbacks.
+    if (data.type === 'seatlayer.designer.resize') {
+      if (this.autoResizeEnabled() && typeof data.px === 'number' && Number.isFinite(data.px) && data.px > 0) {
+        this.lastAutoHeight = `${Math.round(data.px)}px`;
+        // While pinned fullscreen the iframe fills the viewport; apply the
+        // reported height only when not pinned (it's re-applied on unpin).
+        if (!this.pinned) this.frame.style.height = this.lastAutoHeight;
+      }
+      return;
+    }
+    if (data.type === 'seatlayer.designer.fullscreen') {
+      if (data.on === true) this.pinFullscreen();
+      else if (data.on === false) this.unpinFullscreen();
+      return;
+    }
+
     if (typeof data.type !== 'string' || !TYPES.has(data.type as EmbeddedDesignerEventType)) return;
 
     const message: EmbeddedDesignerMessage = {

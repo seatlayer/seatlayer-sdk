@@ -956,6 +956,10 @@ export class SeatPicker {
   private fsFallback = false;
   private fsChangeHandler: (() => void) | null = null;
   private fsEscHandler: ((e: KeyboardEvent) => void) | null = null;
+  /** True once we've asked the host page to pin us fullscreen (framed, no native). */
+  private framedFs = false;
+  /** Last height (px) posted to a host frame; dedupes redundant reports. */
+  private lastPostedHeight = 0;
 
   /**
    * Eager sightline preview for the confirm card: a cheap generated forward
@@ -988,22 +992,103 @@ export class SeatPicker {
     );
   }
 
+  /** True when the picker is rendered inside an iframe (snippet embed at /e/:key). */
+  private isFramed(): boolean {
+    return typeof window !== 'undefined' && window.parent !== window;
+  }
+
+  /**
+   * Post a widget→host message when framed. targetOrigin is '*' because the
+   * payload carries nothing sensitive (a height number / a fullscreen flag);
+   * hosts verify `event.origin` on their side (see `attachPickerFrame`).
+   */
+  private postToHost(message: { type: string; [key: string]: unknown }): void {
+    if (!this.isFramed()) return;
+    try {
+      window.parent.postMessage(message, '*');
+    } catch {
+      /* a hostile/cross-origin parent may reject postMessage — nothing to do */
+    }
+  }
+
+  /**
+   * Height (px) to advertise to a host frame.
+   *
+   * The picker fills whatever box it's given: `.sl-picker` is `height:100%;
+   * overflow:hidden`, and the /e/:key shell mounts it `position:fixed; inset:0`.
+   * So it has no intrinsic *document* height to read — `scrollHeight` just
+   * collapses to the current viewport, which for a framed embed would echo the
+   * host's own iframe height straight back (a circular value). We therefore
+   * report a width-driven *desired* height: a pleasant landscape box on desktop,
+   * taller on narrow widths where the bottom sheet needs room, clamped to the
+   * widget's `min-height` of 420. Width is host-controlled and never moves in
+   * response to the height we report, so this cannot feedback-loop.
+   */
+  private measureFramedHeight(): number {
+    const root = this.root;
+    if (!root) return 0;
+    const width = root.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 0) || 0;
+    if (width <= 0) return 0;
+    const ratio = width < 640 ? 1.2 : 0.62;
+    return Math.max(420, Math.round(width * ratio));
+  }
+
+  /** Post `seatlayer:height` to the host when framed and the value changed. */
+  private reportFramedHeight(): void {
+    if (!this.isFramed()) return;
+    const px = this.measureFramedHeight();
+    if (px <= 0 || px === this.lastPostedHeight) return;
+    this.lastPostedHeight = px;
+    this.postToHost({ type: 'seatlayer:height', px });
+  }
+
   /** Full screen via the native API, falling back to a fixed-position overlay (iOS Safari). */
   private toggleFullscreen(): void {
     const root = this.root;
     if (!root) return;
-    const active = !!document.fullscreenElement || this.fsFallback;
+    const active = !!document.fullscreenElement || this.fsFallback || this.framedFs;
     if (!active) {
       if (root.requestFullscreen) {
-        root.requestFullscreen().catch(() => this.setFsFallback(true));
+        root.requestFullscreen().catch(() => this.enterFsFallback());
       } else {
-        this.setFsFallback(true);
+        this.enterFsFallback();
       }
     } else if (document.fullscreenElement) {
       void document.exitFullscreen().catch(() => {});
+    } else if (this.framedFs) {
+      this.setFramedFs(false);
     } else {
       this.setFsFallback(false);
     }
+  }
+
+  /**
+   * Native element-fullscreen was unavailable or rejected. When framed, a CSS
+   * `.sl-fs` overlay can't escape the iframe, so we ask the host page to pin us
+   * (`seatlayer:fullscreen`). Otherwise (iOS Safari, same document) fall back to
+   * the `.sl-fs` overlay as before.
+   */
+  private enterFsFallback(): void {
+    if (this.isFramed()) this.setFramedFs(true);
+    else this.setFsFallback(true);
+  }
+
+  /** Toggle host-driven (framed) fullscreen: post the flag + own the Esc key. */
+  private setFramedFs(on: boolean): void {
+    if (this.framedFs === on) return;
+    this.framedFs = on;
+    this.els.zfs?.setAttribute('aria-pressed', String(on || !!document.fullscreenElement));
+    this.postToHost({ type: 'seatlayer:fullscreen', on });
+    if (on && !this.fsEscHandler) {
+      this.fsEscHandler = (e: KeyboardEvent): void => {
+        if (e.key === 'Escape' && !document.fullscreenElement) this.setFramedFs(false);
+      };
+      window.addEventListener('keydown', this.fsEscHandler);
+    } else if (!on && this.fsEscHandler) {
+      window.removeEventListener('keydown', this.fsEscHandler);
+      this.fsEscHandler = null;
+    }
+    requestAnimationFrame(() => this.controller.zoomToFit());
   }
 
   private setFsFallback(on: boolean): void {
@@ -1277,6 +1362,9 @@ export class SeatPicker {
     const applyLayout = (): void => {
       const w = root.clientWidth;
       if (w <= 0) return;
+      // Report our desired height to a host frame on every size change (deduped),
+      // not just when the layout breakpoint flips below.
+      this.reportFramedHeight();
       const next = w < 640 ? 'narrow' : 'wide';
       if (root.dataset.layout === next) return;
       root.dataset.layout = next;
@@ -1303,7 +1391,7 @@ export class SeatPicker {
     this.els.zfs.addEventListener('click', () => this.toggleFullscreen());
     this.fsChangeHandler = (): void => {
       if (!document.fullscreenElement) this.setFsFallback(false);
-      this.els.zfs?.setAttribute('aria-pressed', String(!!document.fullscreenElement || this.fsFallback));
+      this.els.zfs?.setAttribute('aria-pressed', String(!!document.fullscreenElement || this.fsFallback || this.framedFs));
       requestAnimationFrame(() => this.controller.zoomToFit());
     };
     document.addEventListener('fullscreenchange', this.fsChangeHandler);
@@ -3546,6 +3634,8 @@ export class SeatPicker {
     this.motionTimers.clear();
     this.ro?.disconnect();
     this.ro = null;
+    // Don't strand a host frame pinned fullscreen across a route teardown.
+    if (this.framedFs) this.setFramedFs(false);
     if (this.escHandler) document.removeEventListener('keydown', this.escHandler);
     if (this.fsChangeHandler) document.removeEventListener('fullscreenchange', this.fsChangeHandler);
     if (this.fsEscHandler) window.removeEventListener('keydown', this.fsEscHandler);
