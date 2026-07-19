@@ -634,6 +634,28 @@ const CSS = `
 .sl-picker[data-layout="narrow"] .sl-confirm{left:50%!important;top:auto!important;bottom:14px;width:min(342px,calc(100% - 24px));
   transform:translateX(-50%);animation:slConfirmMobileIn .24s cubic-bezier(.2,.8,.2,1) both}
 
+/* hover preview — a COMPACT echo of the confirm card (deliberately smaller: it's
+   a passing preview on hover, not the click/select action surface). Reuses the
+   Section·Row·Seat identity grid so hover, confirm and the cart chip all share
+   one visual language, just at three sizes. */
+.sl-tip{position:absolute;z-index:7;pointer-events:none;display:none;width:190px;overflow:hidden;
+  background:var(--sl-surface);color:var(--sl-text);border:1px solid var(--sl-line);border-radius:11px;
+  box-shadow:0 12px 30px -14px rgba(0,0,0,.6)}
+.sl-tip-grid{display:grid;grid-template-columns:1.3fr .85fr .85fr;border-bottom:1px solid var(--sl-line)}
+.sl-tip-grid.one{grid-template-columns:1fr}
+.sl-tip-field{min-width:0;padding:6px 9px;border-right:1px solid var(--sl-line)}
+.sl-tip-field:last-child{border-right:0;text-align:center}
+.sl-tip-grid:not(.one) .sl-tip-field:nth-child(2){text-align:center}
+.sl-tip-key{display:block;font-size:7.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--sl-muted);font-weight:800}
+.sl-tip-val{display:block;margin-top:2px;color:var(--sl-text);font-size:13px;line-height:1.1;font-weight:750;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sl-tip-cat{display:flex;align-items:center;gap:7px;padding:6px 10px;font-size:11px;
+  background:color-mix(in srgb,var(--sl-cat) 12%,var(--sl-surface))}
+.sl-tip-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.sl-tip-name{color:var(--sl-muted);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sl-tip-amt{margin-left:auto;font-weight:800;color:var(--sl-text);font-variant-numeric:tabular-nums;font-size:12px}
+.sl-tip-status{padding:5px 10px 7px;font-size:8.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:700;color:var(--sl-muted)}
+
 /* Best available is a first-class shortcut, not an anonymous utility row. */
 .sl-ba{position:relative;flex:none;overflow:hidden;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:7px;
   padding:13px;border:1px solid color-mix(in srgb,var(--sl-accent) 34%,var(--sl-line));border-radius:13px;
@@ -1333,9 +1355,7 @@ export class SeatPicker {
     }
     this.tipEl = document.createElement('div');
     this.tipEl.setAttribute('role', 'tooltip');
-    this.tipEl.style.cssText =
-      'position:absolute;z-index:7;pointer-events:none;display:none;max-width:240px;background:var(--sl-surface);' +
-      'color:var(--sl-text);border:1px solid var(--sl-line);border-radius:10px;padding:9px 12px;font-size:12px;line-height:1.45;';
+    this.tipEl.className = 'sl-tip';
     this.els.map.appendChild(this.tipEl);
     this.els.map.addEventListener('mousemove', (e: MouseEvent) => {
       const r = this.els.map.getBoundingClientRect();
@@ -3362,23 +3382,30 @@ export class SeatPicker {
       this.tipEl.style.display = 'none';
       return;
     }
+    const esc = (v: unknown): string =>
+      String(v ?? '—').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]!));
+    const price = this.money(this.paidPrice(details.categoryKey, details.tierId ?? null, details.price));
+    // Identity grid — the same Section·Row·Seat card the buyer meets on confirm
+    // and in the cart, just smaller. Falls back to a single field for a bare
+    // label (GA / legacy seats with no spatial context).
+    const hasLoc = details.sectionLabel || details.rowLabel || details.seatNumber;
+    const grid = hasLoc
+      ? `<div class="sl-tip-grid">` +
+        `<div class="sl-tip-field"><span class="sl-tip-key">Section</span><span class="sl-tip-val">${esc(details.sectionLabel)}</span></div>` +
+        `<div class="sl-tip-field"><span class="sl-tip-key">Row</span><span class="sl-tip-val">${esc(details.rowLabel)}</span></div>` +
+        `<div class="sl-tip-field"><span class="sl-tip-key">Seat</span><span class="sl-tip-val">${esc(details.seatNumber ?? details.label)}</span></div>` +
+        `</div>`
+      : `<div class="sl-tip-grid one"><div class="sl-tip-field"><span class="sl-tip-key">Seat</span><span class="sl-tip-val">${esc(details.label)}</span></div></div>`;
     const statusLine =
       details.status === 'free'
         ? ''
-        : `<div style="margin-top:5px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:700">${
-            details.status === 'held' ? t('map.statusHeld') : t('map.statusTaken')
-          }</div>`;
-    const location = [
-      details.sectionLabel ? `Section ${details.sectionLabel}` : '',
-      details.rowLabel ? `Row ${details.rowLabel}` : '',
-      details.seatNumber ? `Seat ${details.seatNumber}` : details.label,
-    ].filter(Boolean).join(' · ');
+        : `<div class="sl-tip-status">${details.status === 'held' ? t('map.statusHeld') : t('map.statusTaken')}</div>`;
+    this.tipEl.style.setProperty('--sl-cat', details.categoryColor);
     this.tipEl.innerHTML =
-      `<div style="font-weight:800;font-size:13px">${location}</div>` +
-      `<div style="display:flex;align-items:center;gap:6px;margin-top:4px">` +
-      `<span style="width:9px;height:9px;border-radius:50%;flex:none;background:${details.categoryColor}"></span>` +
-      `<span style="opacity:.75">${details.categoryLabel}</span>` +
-      `<span style="margin-left:auto;font-weight:800">${this.money(this.paidPrice(details.categoryKey, details.tierId ?? null, details.price))}</span></div>` +
+      grid +
+      `<div class="sl-tip-cat"><span class="sl-tip-dot" style="background:${details.categoryColor}"></span>` +
+      `<span class="sl-tip-name">${esc(details.categoryLabel)}</span>` +
+      `<span class="sl-tip-amt">${price}</span></div>` +
       statusLine;
     this.tipEl.style.display = 'block';
     this.placeTooltip();
