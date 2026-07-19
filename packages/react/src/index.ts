@@ -24,6 +24,10 @@ export type {
 } from './SeatPicker';
 // The framework-agnostic widget class — for the one-call modal (SeatPickerWidget.open()).
 export { SeatPicker as SeatPickerWidget } from '@seatlayer/js';
+// Host-side embed helper: grows the iframe on `seatlayer:height` and pins it on
+// `seatlayer:fullscreen`. React hosts depend on this package alone, so it has to
+// be reachable here rather than only from @seatlayer/js.
+export { attachPickerFrame } from '@seatlayer/js';
 
 // Organizer control room: Monitor + Inspect + bulk Block/unblock on one renderer.
 export { SeatManager } from './SeatManager';

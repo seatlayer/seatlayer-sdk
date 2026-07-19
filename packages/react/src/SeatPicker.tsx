@@ -45,7 +45,7 @@ export interface SeatPickerProps extends Omit<SeatPickerOptions, 'container'> {
  */
 export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
   function SeatPicker(props, ref) {
-    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView } = props;
+    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const pickerRef = useRef<CoreSeatPicker | null>(null);
@@ -58,22 +58,16 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
       const el = containerRef.current;
       if (!el) return;
 
+      // Forward every option the host passed. Spreading rather than naming each
+      // field keeps new core options (pricing, hideBadge, transport, …) working
+      // here the day they ship: a hand-maintained list silently drops anything
+      // it forgets, and `SeatPickerProps extends SeatPickerOptions` means such a
+      // drop still type-checks clean for the host.
+      const { className: _className, style: _style, ...options } = callbacks.current;
+
       const picker = new CoreSeatPicker({
+        ...options,
         container: el,
-        event,
-        apiBase,
-        maxSelection,
-        publicKey,
-        locale,
-        currency,
-        colorblindSafe,
-        holdTtlMs,
-        initialHoldId,
-        restoreHold,
-        confirmSelection,
-        seatView,
-        theme: callbacks.current.theme,
-        messages: callbacks.current.messages,
         onCheckout: (hold, seats, handoff) => callbacks.current.onCheckout?.(hold, seats, handoff),
         onBooked: (handoff) => callbacks.current.onBooked?.(handoff),
         onSelectionChange: (seats) => callbacks.current.onSelectionChange?.(seats),
@@ -89,9 +83,12 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         picker.destroy();
         pickerRef.current = null;
       };
-      // Rebuild only when the identity of the event/config changes.
+      // Rebuild only when the identity of the event/config changes. Object-valued
+      // options (theme, messages, pricing, transport) stay out: hosts routinely
+      // pass them as inline literals, so a new identity every render would tear
+      // the widget down mid-selection. They are read fresh at construction.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView]);
+    }, [event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView]);
 
     useImperativeHandle(
       ref,
