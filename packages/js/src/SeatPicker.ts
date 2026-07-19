@@ -370,20 +370,30 @@ const CSS = `
 .sl-prices-sec{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:13px}
 .sl-price-select{min-height:32px;max-width:130px;padding:5px 28px 5px 9px;border:1px solid var(--sl-line);border-radius:9px;
   background:var(--sl-surface);color:var(--sl-text);font:inherit;font-size:11px;font-weight:750;letter-spacing:0;text-transform:none}
-.sl-prices{padding:5px 14px 10px;border-bottom:1px solid var(--sl-line)}
+.sl-prices{display:flex;flex-direction:column;padding:4px 14px 8px;border-bottom:1px solid var(--sl-line)}
 .sl-prices-sec,.sl-prices,.sl-seats-sec{flex:none}
-.sl-price-row{display:flex;align-items:center;gap:7px;min-height:28px;font-size:12px}
+.sl-price-row{display:flex;align-items:center;gap:7px;min-height:28px;font-size:12px;
+  padding:0 6px;margin:0 -6px;border-radius:8px;cursor:pointer;transition:background .15s}
+.sl-price-row:hover,.sl-price-row:focus-visible{background:color-mix(in srgb,var(--sl-line) 40%,transparent)}
+.sl-price-row.sl-active{background:color-mix(in srgb,var(--sl-accent) 9%,transparent)}
+.sl-price-row.sl-active .sl-price-label{color:var(--sl-accent)}
 .sl-dot{width:9px;height:9px;border-radius:50%;flex:none}
 .sl-price-label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
 .sl-price-left{font-size:11px;color:var(--sl-muted);font-variant-numeric:tabular-nums}
 .sl-price-amt{font-weight:800;font-variant-numeric:tabular-nums}
-.sl-status-key{display:flex;gap:13px;flex-wrap:wrap;padding:8px 0 2px;margin-top:5px;border-top:1px solid var(--sl-line);color:var(--sl-muted);font-size:10.5px}
-.sl-status-item{display:inline-flex;align-items:center;gap:6px}
-.sl-status-icon{width:17px;height:17px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
+/* long category lists: capped by default, scroll once expanded */
+.sl-prices.sl-expanded{max-height:196px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.sl-price-more{display:flex;align-items:center;min-height:26px;padding:0;
+  color:var(--sl-muted);font-size:11px;font-weight:750;transition:color .15s}
+.sl-price-more:hover,.sl-price-more:focus-visible{color:var(--sl-text)}
+/* held/sold key — one quiet caption line; the map itself teaches these states */
+.sl-status-key{display:flex;gap:11px;flex-wrap:wrap;padding:5px 0 0;margin-top:4px;border-top:1px solid var(--sl-line);color:var(--sl-muted);font-size:10px}
+.sl-status-item{display:inline-flex;align-items:center;gap:5px}
+.sl-status-icon{width:13px;height:13px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
   color:#fff;background:#6b7280;line-height:1}
-.sl-status-icon svg{width:10px;height:10px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.sl-status-icon svg{width:8px;height:8px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
 .sl-status-icon.sold{background:#8b93a0}
-.sl-status-icon.sold svg{width:11px;height:11px;stroke-width:2.4}
+.sl-status-icon.sold svg{width:9px;height:9px;stroke-width:2.4}
 
 /* tray */
 .sl-seats-sec{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:13px}
@@ -422,12 +432,15 @@ const CSS = `
 .sl-chip .view:hover,.sl-chip .view:focus-visible{color:var(--sl-text);background:color-mix(in srgb,var(--sl-accent) 10%,transparent)}
 .sl-chip .rm svg{width:11px;height:11px;stroke:currentColor;stroke-width:2.4;fill:none;stroke-linecap:round}
 .sl-chip .view svg{width:13px;height:13px;stroke:currentColor;stroke-width:1.8;fill:none}
-/* live-activity strip — narrates WS availability deltas (social proof + urgency) */
-.sl-live{display:flex;align-items:center;gap:7px;margin:10px 14px 0;padding:7px 9px;flex:none;
+/* live-activity strip — narrates WS availability deltas (social proof + urgency).
+   Hidden until a delta actually happens: a static "seats update in real time"
+   banner is dead vertical space, a "2 seats just taken" flash is a signal. */
+.sl-live{display:none;align-items:center;gap:7px;margin:10px 14px 0;padding:7px 9px;flex:none;
   border:1px solid var(--sl-line);border-radius:8px;background:color-mix(in srgb,var(--sl-accent) 4%,var(--sl-surface));
   font-size:11px;color:var(--sl-muted)}
 .sl-live .dot{width:6px;height:6px;border-radius:999px;background:#22a06b;box-shadow:0 0 6px rgba(34,160,107,.75);flex:none}
 .sl-live span:last-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sl-live.on{display:flex;animation:slNoticeIn .38s cubic-bezier(.2,.8,.2,1) both}
 
 /* GA rows */
 .sl-ga{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px dashed var(--sl-line);border-radius:var(--sl-r-sm)}
@@ -613,13 +626,18 @@ const CSS = `
   border-radius:15px;box-shadow:0 24px 64px -18px rgba(0,0,0,.72);transform:translate(-50%,calc(-100% - 16px));
   animation:slConfirmIn .24s cubic-bezier(.2,.8,.2,1) both}
 .sl-confirm[data-placement="below"]{transform:translate(-50%,16px);animation:slConfirmBelowIn .24s cubic-bezier(.2,.8,.2,1) both}
-.sl-confirm-grid{display:grid;grid-template-columns:1.2fr .8fr .8fr;border-bottom:1px solid var(--sl-line)}
+.sl-confirm-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(52px,auto) minmax(52px,auto);border-bottom:1px solid var(--sl-line)}
 .sl-confirm-field{min-width:0;padding:12px 11px 10px;border-right:1px solid var(--sl-line)}
 .sl-confirm-field:last-child{border-right:0;text-align:center}
 .sl-confirm-field:nth-child(2){text-align:center}
 .sl-confirm-key{display:block;font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--sl-muted);font-weight:800}
 .sl-confirm-value{display:block;margin-top:4px;color:var(--sl-text);font-size:17px;line-height:1.1;font-weight:850;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Long venue section names must read in full: smaller type + up to two lines
+   beats an ellipsis at identity-confirmation time. Row/seat stay big — they're
+   short and they're what the buyer double-checks against the map. */
+.sl-confirm-field:first-child .sl-confirm-value{font-size:13.5px;line-height:1.25;white-space:normal;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .sl-confirm-cat{display:flex;align-items:center;gap:8px;padding:10px 12px;background:color-mix(in srgb,var(--sl-cat) 76%,var(--sl-surface))}
 .sl-confirm-cat .sl-dot{border:2px solid rgba(255,255,255,.78);width:11px;height:11px}
 .sl-confirm-cat-name{font-size:13.5px;font-weight:800;color:#fff;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -934,6 +952,8 @@ export class SeatPicker {
 
   // F4 price-band filter — active band's category keys (null = all prices)
   private priceBandKeys: Set<string> | null = null;
+  private focusedCatKey: string | null = null;
+  private pricesExpanded = false;
   /** Last surfaced section summary (re-rendered when the price band changes). */
   private lastSection: SectionSummary | null = null;
   /** Section card collapsed to its slim pill (seat-picking has begun). */
@@ -981,7 +1001,7 @@ export class SeatPicker {
       }
     }
     const sight = distance != null
-      ? `${distance}${this.tf('picker.sightline', 'm to stage · clear sightline')}`
+      ? t('picker.sightline', { m: distance })
       : this.tf('picker.sightlineClear', 'Clear sightline');
     return (
       `<button type="button" class="sl-confirm-view sl-confirm-thumbwrap" aria-label="${t('picker.viewFromSeat', { label: seat.label })}">` +
@@ -2265,9 +2285,14 @@ export class SeatPicker {
     select.addEventListener('change', () => {
       const band = bands.find((candidate) => candidate.id === select.value);
       const keys = band?.keys ?? null;
+      this.focusedCatKey = null; // band filter supersedes any pinned row focus
       this.priceBandKeys = keys ? new Set(keys) : null;
       this.controller.setCategoryFilter(keys);
       this.controller.focusCategoryFilter(keys);
+      // A band whose seats live on another deck switches floors — mirror it.
+      this.syncFloors();
+      this.syncRung();
+      this.refreshMinimap();
       // Reflect the band in the legend rows + any open section card.
       this.syncPrices();
       if (this.lastSection) this.showSectionCard(this.lastSection);
@@ -2788,12 +2813,24 @@ export class SeatPicker {
     const left = this.controller.categoryAvailability();
     this.narrateAvailability(doc.categories, left);
     this.syncSoldout(doc.categories, left);
-    this.els.prices.innerHTML = doc.categories
+    // Big events ship 10–20 ticket types; an uncapped list shoves "Your seats"
+    // and the CTA below the fold. Cap the closed list and expand on demand
+    // (never hide a single row behind a toggle — that costs more than it saves).
+    const PRICE_LIMIT = 5;
+    const overflow = doc.categories.length - PRICE_LIMIT;
+    const collapsed = overflow > 1 && !this.pricesExpanded;
+    const shown = collapsed ? doc.categories.slice(0, PRICE_LIMIT) : doc.categories;
+    this.els.prices.classList.toggle('sl-expanded', overflow > 1 && this.pricesExpanded);
+    this.els.prices.innerHTML = shown
       .map((c) => {
         const price = this.catPrice(c);
+        const active = this.focusedCatKey === c.key;
         const dim = this.priceBandKeys != null && !this.priceBandKeys.has(c.key);
         return (
-          `<div class="sl-price-row${dim ? ' sl-dim' : ''}" data-cat="${c.key}"><span class="sl-dot" style="background:${c.color}"></span>` +
+          `<div class="sl-price-row${dim ? ' sl-dim' : ''}${active ? ' sl-active' : ''}" data-cat="${c.key}"` +
+          ` role="button" tabindex="0" aria-pressed="${active}"` +
+          ` title="${active ? 'Show all seats' : `Show ${c.label} seats on the map`}">` +
+          `<span class="sl-dot" style="background:${c.color}"></span>` +
           `<span class="sl-price-label">${c.label}</span>` +
           `<span class="sl-price-left">${left[c.key] ?? 0} left</span>` +
           (price != null ? `<span class="sl-price-amt">${this.money(price)}</span>` : '') +
@@ -2801,6 +2838,11 @@ export class SeatPicker {
         );
       })
       .join('') +
+      (overflow > 1
+        ? `<button type="button" class="sl-price-more" aria-expanded="${!collapsed}">` +
+          (collapsed ? `Show all ${doc.categories.length} ticket types` : 'Show fewer') +
+          `</button>`
+        : '') +
       `<div class="sl-status-key" aria-label="Seat status legend">` +
       `<span class="sl-status-item"><i class="sl-status-icon" aria-hidden="true">` +
       `<svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>` +
@@ -2810,10 +2852,45 @@ export class SeatPicker {
       `</i>Sold</span>` +
       `</div>`;
     // Legend-hover highlight: dim other categories on the map while hovering a row.
+    // Click (or Enter/Space) pins that focus — filter + frame the category on
+    // the map; a second click clears it.
     this.els.prices.querySelectorAll<HTMLElement>('.sl-price-row').forEach((row) => {
       row.addEventListener('mouseenter', () => this.controller.getRenderer()?.setCategoryHighlight?.(row.dataset.cat ?? null));
       row.addEventListener('mouseleave', () => this.controller.getRenderer()?.setCategoryHighlight?.(null));
+      const toggle = () => this.focusCategory(row.dataset.cat ?? '');
+      row.addEventListener('click', toggle);
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          toggle();
+        }
+      });
     });
+    this.els.prices.querySelector<HTMLButtonElement>('.sl-price-more')?.addEventListener('click', () => {
+      this.pricesExpanded = !this.pricesExpanded;
+      this.syncPrices();
+    });
+  }
+
+  /** Tap a price row → filter + frame that category on the map; tap again to
+   *  clear. Shares `priceBandKeys` with the band selector so the row-dim state
+   *  has one source of truth (and each control resets the other). */
+  private focusCategory(key: string): void {
+    if (!key) return;
+    const next = this.focusedCatKey === key ? null : key;
+    this.focusedCatKey = next;
+    this.priceBandKeys = next ? new Set([next]) : null;
+    const select = this.els.pricesSec?.querySelector<HTMLSelectElement>('.sl-price-select');
+    if (select) select.value = 'all';
+    this.controller.setCategoryFilter(next ? [next] : null);
+    this.controller.focusCategoryFilter(next ? [next] : null);
+    // Focusing a category on another deck switches floors — mirror that onto
+    // the floor pills / rung pills / minimap, same as a manual deck switch.
+    this.syncFloors();
+    this.syncRung();
+    this.refreshMinimap();
+    this.syncPrices();
+    if (this.lastSection) this.showSectionCard(this.lastSection);
   }
 
   /**
@@ -2829,17 +2906,37 @@ export class SeatPicker {
     const textEl = this.els.liveText;
     const prev = this.lastCatAvail;
     this.lastCatAvail = { ...left };
-    if (!textEl || !prev) return;
+    // A floor switch re-baselines availability (counts are per-rendered-floor,
+    // and the post-switch status snapshot lands asynchronously a beat later).
+    // Narrating across that window produces a phantom "N seats just taken", so
+    // stay quiet until the new floor settles — only genuine WS deltas after
+    // that are news.
+    const floorId = this.controller.getActiveFloorId();
+    if (floorId !== this.lastAvailFloorId) {
+      this.lastAvailFloorId = floorId;
+      this.availQuietUntil = performance.now() + 2000;
+    }
+    if (!textEl || !prev || performance.now() < this.availQuietUntil) return;
     for (const cat of categories) {
       const before = prev[cat.key];
       const now = left[cat.key] ?? 0;
       if (before === undefined || now >= before) continue;
       const taken = before - now;
       textEl.textContent = `${taken} seat${taken === 1 ? '' : 's'} just taken in ${cat.label} · ${now} left`;
+      // Surface the strip only while it carries news, then give the space back.
+      this.els.live?.classList.remove('on');
+      // Reflow between remove/add restarts the entrance animation on repeats.
+      void (this.els.live as HTMLElement | undefined)?.offsetWidth;
+      this.els.live?.classList.add('on');
+      if (this.liveTimer) clearTimeout(this.liveTimer);
+      this.liveTimer = setTimeout(() => this.els.live?.classList.remove('on'), 8000);
       return;
     }
   }
   private lastCatAvail: Record<string, number> | null = null;
+  private lastAvailFloorId = '';
+  private availQuietUntil = 0;
+  private liveTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** A live delta took one of OUR selected (not yet held) seats — evict + tell the buyer. */
   private evictTakenSelections(): void {
@@ -2871,9 +2968,11 @@ export class SeatPicker {
       parts.push(`<div class="sl-tray-hint">Tap a seat on the map — or grab standing tickets below.</div>`);
     }
 
-    // Best available comes before manual choices: it is the fastest path for
-    // buyers who care about sitting together more than inspecting every dot.
-    if (!this.hold) {
+    // Best available is the fastest path for buyers who haven't picked yet —
+    // but the moment a seat lands in the tray, the ticket cards own this space.
+    // (Busy/confirm states stay visible so an in-flight search isn't cut off.)
+    const noPicks = !seats.length && !heldItems.length;
+    if (!this.hold && (noPicks || this.bestAvailableBusy || this.bestAvailableConfirm)) {
       const cats = this.controller.doc?.categories ?? [];
       parts.push(this.bestAvailableConfirm
         ? `<div class="sl-ba" role="alert">` +
@@ -3630,6 +3729,7 @@ export class SeatPicker {
     this.closeSeatView();
     this.stopHoldTimer();
     if (this.toastTimer) clearTimeout(this.toastTimer);
+    if (this.liveTimer) clearTimeout(this.liveTimer);
     for (const timer of this.motionTimers) clearTimeout(timer);
     this.motionTimers.clear();
     this.ro?.disconnect();

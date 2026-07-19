@@ -75,7 +75,7 @@ export const de: Dict = {
   'picker.real360': 'REAL 360°',
   'picker.preview': 'VORSCHAU',
   'picker.open360': 'Öffnen Sie die 360°-Ansicht',
-  'picker.sightline': '≈ {rows} Reihen von der Bühne · {angle}° seitlich versetzt',
+  'picker.sightline': '≈ {m} m zur Bühne · freie Sicht',
   'picker.bookedDemo': 'Gebucht! (Demo)',
   'picker.bookButton.one': '{count} Ticket buchen — {amount}',
   'picker.bookButton.other': '{count} Tickets buchen — {amount}',

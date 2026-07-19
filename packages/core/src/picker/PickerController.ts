@@ -22,6 +22,7 @@ import { t } from '../i18n';
 import type {
   CategoryTier,
   ChartDoc,
+  ChartObject,
   ExpandedSeat,
   ISeatmapRenderer,
   LodRung,
@@ -890,8 +891,36 @@ export class PickerController {
     if (!renderer) return;
     renderer.clearSectionFocus?.();
     this.opts.onSectionFocus?.(null);
+    // Multi-floor: the wanted categories may live on another deck entirely.
+    // The renderer only knows the active floor's seats, so without switching
+    // first the camera has nothing to frame and the filter is a silent no-op.
+    if (keys?.length) {
+      const target = this.floorForCategories(keys);
+      if (target) this.setFloor(target);
+    }
     if (renderer.focusCategories) renderer.focusCategories(keys);
     else renderer.zoomToFit();
+  }
+
+  /** The floor a buyer means when filtering to `keys`: the active floor when it
+   *  carries any of those categories, else the first floor that does (null =
+   *  stay put). Row overrides and GA areas count — a category can exist on a
+   *  floor only via a per-seat override. */
+  private floorForCategories(keys: string[]): string | null {
+    const doc = this._doc;
+    if (!doc?.floors || doc.floors.length < 2) return null;
+    const wanted = new Set(keys);
+    const carries = (objects: ChartObject[]): boolean =>
+      objects.some((o) =>
+        (o.type === 'row'
+          && (wanted.has(o.categoryKey)
+            || (o.overrides ?? []).some((ov) => ov.categoryKey != null && wanted.has(ov.categoryKey))))
+        || (o.type === 'gaArea' && wanted.has(o.categoryKey)),
+      );
+    const activeId = this.getActiveFloorId();
+    const active = doc.floors.find((f) => f.id === activeId);
+    if (active && carries(active.objects)) return null;
+    return doc.floors.find((f) => carries(f.objects))?.id ?? null;
   }
 
   /** World-space rect currently visible + full chart bounds (F3 minimap frame). */

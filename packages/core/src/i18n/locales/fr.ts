@@ -71,7 +71,7 @@ export const fr: Dict = {
   'picker.real360': 'VRAI 360°',
   'picker.preview': 'APERÇU',
   'picker.open360': 'Ouvrir la vue à 360°',
-  'picker.sightline': '≈ {rows} rangées de la scène · {angle}° décalé du centre',
+  'picker.sightline': '≈ {m} m de la scène · vue dégagée',
   'picker.bookedDemo': 'Réservé ! (démo)',
   'picker.bookButton.one': 'Réserver {count} billet — {amount}',
   'picker.bookButton.other': 'Réserver {count} billets — {amount}',

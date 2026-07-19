@@ -71,7 +71,7 @@ export const es: Dict = {
   'picker.real360': 'REAL 360°',
   'picker.preview': 'VISTA PREVIA',
   'picker.open360': 'Abrir vista de 360°',
-  'picker.sightline': '≈ {rows} filas del escenario · {angle}° fuera del centro',
+  'picker.sightline': '≈ {m} m al escenario · visión despejada',
   'picker.bookedDemo': '¡Reservado! (demostración)',
   'picker.bookButton.one': 'Reservar {count} entrada — {amount}',
   'picker.bookButton.other': 'Reservar {count} entradas — {amount}',
