@@ -2466,7 +2466,7 @@ export class SeatPicker {
     el.innerHTML =
       `<div class="sl-confirm-grid">` +
       `<div class="sl-confirm-field"><span class="sl-confirm-key">Section</span><span class="sl-confirm-value">${safe(details?.sectionLabel)}</span></div>` +
-      `<div class="sl-confirm-field"><span class="sl-confirm-key">Row</span><span class="sl-confirm-value">${safe(details?.rowLabel)}</span></div>` +
+      `<div class="sl-confirm-field"><span class="sl-confirm-key">Row</span><span class="sl-confirm-value">${safe(this.rowShort(details))}</span></div>` +
       `<div class="sl-confirm-field"><span class="sl-confirm-key">Seat</span><span class="sl-confirm-value">${safe(details?.seatNumber ?? seat.label)}</span></div>` +
       `</div>` +
       `<div class="sl-confirm-cat"><span class="sl-dot" style="background:${cat?.color ?? '#6e7bff'}"></span>` +
@@ -2829,7 +2829,7 @@ export class SeatPicker {
       return (
         `<div class="sl-chip-id">` +
         `<span class="fld sec"><span class="sl-chip-eb">Section</span><span class="val">${d.sectionLabel ?? '—'}</span></span>` +
-        (d.rowLabel ? `<span class="fld mid"><span class="sl-chip-eb">Row</span><span class="val">${d.rowLabel}</span></span>` : '') +
+        (d.rowLabel ? `<span class="fld mid"><span class="sl-chip-eb">Row</span><span class="val">${this.rowShort(d)}</span></span>` : '') +
         (d.seatNumber ? `<span class="fld mid"><span class="sl-chip-eb">Seat</span><span class="val">${d.seatNumber}</span></span>` : '') +
         `</div>`
       );
@@ -3376,6 +3376,25 @@ export class SeatPicker {
     this.tipEl.style.top = `${Math.max(8, y)}px`;
   }
 
+  /**
+   * Row label without the redundant section prefix. Charts commonly name row
+   * objects "104-A" while the Section column already shows "104" — so the Row
+   * cell repeats the section and, in the compact hover card, truncates to
+   * "10…". Strip a leading "<section><sep>" so Row reads a clean "A". Only when
+   * the prefix is exact (won't touch "1040-A" under section "104"); otherwise
+   * the label is shown verbatim.
+   */
+  private rowShort(details: { sectionLabel?: string; rowLabel?: string } | null | undefined): string | undefined {
+    const row = details?.rowLabel;
+    const sec = details?.sectionLabel;
+    if (!row || !sec) return row;
+    for (const sep of ['-', ' ', '·', '/', '_']) {
+      const prefix = `${sec}${sep}`;
+      if (row.startsWith(prefix) && row.length > prefix.length) return row.slice(prefix.length);
+    }
+    return row;
+  }
+
   private updateTooltip(details: SeatHoverDetails | null): void {
     if (!this.tipEl) return;
     if (!details) {
@@ -3392,7 +3411,7 @@ export class SeatPicker {
     const grid = hasLoc
       ? `<div class="sl-tip-grid">` +
         `<div class="sl-tip-field"><span class="sl-tip-key">Section</span><span class="sl-tip-val">${esc(details.sectionLabel)}</span></div>` +
-        `<div class="sl-tip-field"><span class="sl-tip-key">Row</span><span class="sl-tip-val">${esc(details.rowLabel)}</span></div>` +
+        `<div class="sl-tip-field"><span class="sl-tip-key">Row</span><span class="sl-tip-val">${esc(this.rowShort(details))}</span></div>` +
         `<div class="sl-tip-field"><span class="sl-tip-key">Seat</span><span class="sl-tip-val">${esc(details.seatNumber ?? details.label)}</span></div>` +
         `</div>`
       : `<div class="sl-tip-grid one"><div class="sl-tip-field"><span class="sl-tip-key">Seat</span><span class="sl-tip-val">${esc(details.label)}</span></div></div>`;
