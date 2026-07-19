@@ -1,7 +1,7 @@
 {
   "name": "@seatlayer/js",
-  "version": "0.18.0",
-  "description": "The SeatLayer embed SDK \u2014 render an interactive seat picker and hold seats from the browser. Works in any JS framework.",
+  "version": "0.18.1",
+  "description": "The SeatLayer embed SDK — render an interactive seat picker and hold seats from the browser. Works in any JS framework.",
   "license": "MIT",
   "homepage": "https://docs.seatlayer.io",
   "repository": {
