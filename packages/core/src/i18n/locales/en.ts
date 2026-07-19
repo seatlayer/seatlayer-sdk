@@ -1,7 +1,7 @@
 /**
  * English bundle — the reference dictionary every other locale is checked
- * against. Keys are added as pages route their strings through t() during
- * the design port (docs/design-port-plan.md); buyer-surface keys land first.
+ * against. Keys are added as pages route their strings through t();
+ * buyer-surface keys land first.
  *
  * Conventions:
  *  - flat dot-namespaced keys: "<surface>.<element>" (picker.holdSeats)
@@ -18,7 +18,7 @@ export const en: Dict = {
   'common.done': 'Done',
   'common.copied': '✓ Copied',
 
-  // buyer picker (extraction in progress — P4 of the port plan)
+  // buyer picker
   'picker.holdSeats': 'Hold seats & checkout',
   'picker.completeBooking': 'Complete booking',
   'picker.seatsHeld': 'Seats held — {time}',

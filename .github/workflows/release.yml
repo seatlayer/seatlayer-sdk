@@ -34,6 +34,8 @@ jobs:
       - run: pnpm check:sync
       - run: pnpm build
       - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm lint:packages
       - name: Build one browser bundle from the npm source tree
         run: pnpm build:cdn
         env:

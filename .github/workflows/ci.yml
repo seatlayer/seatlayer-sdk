@@ -19,6 +19,8 @@ jobs:
       - run: pnpm check:version
       - run: pnpm -r build
       - run: pnpm -r typecheck
+      - run: pnpm test
+      - run: pnpm lint:packages
       - run: pnpm build:cdn
       - run: pnpm verify:cdn
       - run: pnpm exec wrangler deploy --config cdn/wrangler.jsonc --dry-run

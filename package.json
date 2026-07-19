@@ -2,7 +2,7 @@
   "name": "seatlayer-sdk",
   "version": "0.0.0",
   "private": true,
-  "description": "SeatLayer SDK monorepo \u2014 the framework-agnostic core plus per-framework wrappers.",
+  "description": "SeatLayer SDK monorepo — the framework-agnostic core plus per-framework wrappers.",
   "type": "module",
   "scripts": {
     "sync:core": "node scripts/sync-core.mjs",
@@ -10,6 +10,7 @@
     "check:version": "node scripts/check-release-version.mjs",
     "build": "pnpm -r build",
     "test": "vitest run",
+    "lint:packages": "publint packages/core && publint packages/js && publint packages/react && attw --pack packages/core && attw --pack packages/js && attw --pack packages/react",
     "build:cdn": "vite build --config cdn/vite.config.ts && node scripts/finalize-cdn.mjs",
     "typecheck": "pnpm -r typecheck",
     "verify:cdn": "node scripts/verify-cdn-build.mjs",
@@ -19,12 +20,14 @@
     "cdn:migrate:legacy": "node scripts/migrate-legacy-cdn.mjs",
     "publish:packages": "node scripts/publish-packages.mjs",
     "clean": "pnpm -r exec rm -rf dist",
-    "release:prep": "pnpm sync:core && pnpm check:sync && pnpm check:version && pnpm build && pnpm typecheck && pnpm build:cdn && pnpm verify:cdn",
+    "release:prep": "pnpm sync:core && pnpm check:sync && pnpm check:version && pnpm build && pnpm typecheck && pnpm test && pnpm lint:packages && pnpm build:cdn && pnpm verify:cdn",
     "sync:widget": "node scripts/sync-widget.mjs",
     "check:widget-sync": "node scripts/sync-widget.mjs --check"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
     "jsdom": "^26.1.0",
+    "publint": "0.3.21",
     "typescript": "^5.9.0",
     "vite": "^8.1.4",
     "vitest": "~4.1.10",

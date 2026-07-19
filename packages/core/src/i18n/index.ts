@@ -1,9 +1,9 @@
 /**
  * i18n core — deliberately tiny and framework-free so the embed SDK can share
- * it without dragging in a runtime library (the 60KB-gzipped SDK budget is a
+ * it without dragging in a runtime library (the 150KB-gzipped complete CDN budget is a
  * product contract).
  *
- * Scope (docs/design-port-plan.md): the buyer surface (picker, public event
+ * Scope: the buyer surface (picker, public event
  * page, SDK) ships fully translated in en/es/de/fr; dashboard pages route
  * their strings through t() as they are rebuilt but ship English this round.
  *

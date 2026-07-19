@@ -2,7 +2,7 @@
  * SeatPicker — the full buyer experience as a widget.
  *
  * Where `SeatingChart` is canvas-only, SeatPicker owns the complete chrome
- * from the canonical UX (SeatmapUX/11 Buyer Picker.dc.html): branded header,
+ * from the canonical UX contract: branded header,
  * live price panel, selection tray with GA steppers, hold countdown, snipe
  * toasts and expiry recovery — all on top of the shared PickerController, so
  * every host gets the whole experience with one mount.
@@ -2426,6 +2426,7 @@ export class SeatPicker {
       // Compact strip inside the bottom sheet's peek head — never over the map.
       card.className = 'sl-seccard strip on';
       card.setAttribute('role', 'status');
+      card.setAttribute('aria-label', t('picker.sectionSummaryAria', { label: summary.label }));
       card.innerHTML =
         `<span class="sl-seccard-dot" style="background:${summary.color}"></span>` +
         `<span class="sl-seccard-name">${summary.label}</span>` +

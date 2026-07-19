@@ -2,8 +2,8 @@
  * SeatMap chart document — the single source of truth shared by the
  * Designer (authoring) and the Renderer (buyer picker).
  *
- * Mirrors docs/seatmap-build-spec.md §5. Coordinates are abstract units
- * (roughly "pixels at scale 1"); the renderer fits the chart to its container.
+ * Coordinates are abstract units (roughly "pixels at scale 1"); the renderer
+ * fits the chart to its container.
  * Rows are PARAMETRIC (origin + count + spacing + curve + rotation) — never
  * store per-seat coordinates in the document; expansion happens in layout.ts.
  */
@@ -546,7 +546,7 @@ export interface ZoneDef {
  */
 export type SelectionLayer = 'interactive' | 'background' | 'foreground' | 'surroundings';
 
-/** Derive an object's selection layer from its type (design contract, HANDOFF §03). */
+/** Derive an object's selection layer from its type. */
 export function layerOf(obj: ChartObject): SelectionLayer {
   switch (obj.type) {
     case 'row':

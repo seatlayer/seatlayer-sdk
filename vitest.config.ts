@@ -7,6 +7,7 @@ export default defineConfig({
     // jsdom does not fetch iframe subresources by default, so a mounted Designer
     // iframe never hits the network during unit tests.
     environment: 'jsdom',
+    setupFiles: ['./vitest.setup.ts'],
     include: ['packages/*/test/**/*.test.ts'],
   },
 });

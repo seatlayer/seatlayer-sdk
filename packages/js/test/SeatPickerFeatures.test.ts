@@ -25,11 +25,11 @@ const CB_KEY = 'seatmap.a11y.cb';
 beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
-  try { localStorage.removeItem(CB_KEY); } catch { /* ignore */ }
+  try { window.localStorage.removeItem(CB_KEY); } catch { /* ignore */ }
 });
 
 afterEach(() => {
-  try { localStorage.removeItem(CB_KEY); } catch { /* ignore */ }
+  try { window.localStorage.removeItem(CB_KEY); } catch { /* ignore */ }
 });
 
 describe('colorblind persistence (Gap 4)', () => {
@@ -39,14 +39,14 @@ describe('colorblind persistence (Gap 4)', () => {
   });
 
   it('stored preference wins over the option (both directions)', () => {
-    localStorage.setItem(CB_KEY, '1');
+    window.localStorage.setItem(CB_KEY, '1');
     expect(cbSafe(picker({ colorblindSafe: false }))).toBe(true);
-    localStorage.setItem(CB_KEY, '0');
+    window.localStorage.setItem(CB_KEY, '0');
     expect(cbSafe(picker({ colorblindSafe: true }))).toBe(false);
   });
 
   it('uses the SAME key the public page persists under', () => {
-    localStorage.setItem(CB_KEY, '1');
+    window.localStorage.setItem(CB_KEY, '1');
     expect(cbSafe(picker())).toBe(true);
   });
 });

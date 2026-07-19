@@ -1,6 +1,6 @@
 /**
  * Locale bundle loader — keeps non-English translations OUT of the initial
- * bundle (the 60 KB SDK budget is a product contract) and code-splits each
+ * bundle (the 150 KB complete CDN budget is a product contract) and code-splits each
  * locale so a page/SDK only downloads the language it actually uses.
  *
  * `loadLocale('de')` dynamic-imports the German dictionary, registers it via
