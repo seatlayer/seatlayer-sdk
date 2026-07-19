@@ -1436,7 +1436,19 @@ export class SeatPicker {
           b.classList.toggle('on', on);
           b.setAttribute('aria-pressed', String(on));
         });
-        this.controller.setAccessibilityFilter(active.size ? [...active] : null);
+        const filter = active.size ? [...active] : null;
+        this.controller.setAccessibilityFilter(filter);
+        // The accessibility filter dims/highlights individual SEAT dots, which
+        // only render at the 'seats' rung. Applying it from a zoomed-out rung
+        // (zones/sections) would silently dim seats the buyer can't see — so on
+        // activation jump straight to seat detail, where the matching seats
+        // stand out. Only when pills exist and we're not already there; never
+        // on clear (so "All seats" doesn't yank the zoom).
+        if (filter && this.rungsEl && this.controller.getRung() !== 'seats') {
+          this.controller.setRung('seats');
+          this.collapseSectionCard();
+          this.syncRung();
+        }
       };
       chips.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
         btn.addEventListener('click', () => {
