@@ -137,23 +137,49 @@ describe('EmbeddedDesigner loading state machine', () => {
 });
 
 describe('EmbeddedDesigner resize + fullscreen protocol', () => {
-  it('grows the iframe to the reported height', () => {
+  it('ignores the legacy resize message in fill mode (default)', () => {
     const designer = mountDesigner();
+    const before = designer.getIframe()!.style.height;
+    postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 640 });
+    // Fill mode owns the height from the viewport; the circular scrollHeight
+    // report never touches it.
+    expect(designer.getIframe()!.style.height).toBe(before);
+  });
+
+  it('fills the iframe to the viewport in fill mode', () => {
+    const designer = mountDesigner();
+    // jsdom rects report top:0, so fill == innerHeight (clamped to minHeight).
+    const expected = `${Math.max(480, window.innerHeight)}px`;
+    expect(designer.getIframe()!.style.height).toBe(expected);
+  });
+
+  it('clamps fill height to minHeight', () => {
+    const designer = mountDesigner({ minHeight: 100000 });
+    expect(designer.getIframe()!.style.height).toBe('100000px');
+  });
+
+  it('uses a fixed numeric height verbatim', () => {
+    const designer = mountDesigner({ height: 720 });
+    expect(designer.getIframe()!.style.height).toBe('720px');
+  });
+
+  it('grows a numeric-height iframe to the reported height', () => {
+    const designer = mountDesigner({ height: 300 });
     postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 640 });
     expect(designer.getIframe()!.style.height).toBe('640px');
     postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 812.6 });
     expect(designer.getIframe()!.style.height).toBe('813px');
   });
 
-  it('ignores resize when autoResize is disabled', () => {
-    const designer = mountDesigner({ autoResize: false });
+  it('ignores resize when autoResize is disabled (numeric mode)', () => {
+    const designer = mountDesigner({ height: 300, autoResize: false });
     const before = designer.getIframe()!.style.height;
     postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 640 });
     expect(designer.getIframe()!.style.height).toBe(before);
   });
 
-  it('ignores non-positive / non-finite heights', () => {
-    const designer = mountDesigner();
+  it('ignores non-positive / non-finite heights (numeric mode)', () => {
+    const designer = mountDesigner({ height: 300 });
     const before = designer.getIframe()!.style.height;
     postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 0 });
     postFromFrame(designer, { type: 'seatlayer.designer.resize', px: -50 });
@@ -176,8 +202,8 @@ describe('EmbeddedDesigner resize + fullscreen protocol', () => {
     expect(document.documentElement.style.overflow).toBe('');
   });
 
-  it('re-applies the auto-height reported while pinned, on unpin', () => {
-    const designer = mountDesigner();
+  it('re-applies the numeric auto-height reported while pinned, on unpin', () => {
+    const designer = mountDesigner({ height: 300 });
     const frame = designer.getIframe()!;
     postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 500 });
     postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: true });
@@ -187,6 +213,16 @@ describe('EmbeddedDesigner resize + fullscreen protocol', () => {
     expect(frame.style.height).toBe('100vh');
     postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: false });
     expect(frame.style.height).toBe('700px');
+  });
+
+  it('recomputes the viewport fill on unpin (fill mode)', () => {
+    const designer = mountDesigner();
+    const frame = designer.getIframe()!;
+    const filled = frame.style.height;
+    postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: true });
+    expect(frame.style.height).toBe('100vh');
+    postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: false });
+    expect(frame.style.height).toBe(filled);
   });
 
   it('exits host-pinned fullscreen on Escape', () => {

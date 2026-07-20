@@ -80,4 +80,8 @@ export const es: Dict = {
   'picker.off': 'DESACTIVADO',
   'picker.panorama360': 'Foto de 360° del lugar',
   'picker.illustrationCaption': 'ilustración · ≈ {m} m del escenario',
+  'picker.restrictedView': 'Visibilidad restringida',
+  'picker.obstructedView': 'Visibilidad obstruida',
+  'picker.premiumSeat': 'Asiento premium',
+  'picker.hideLimitedView': 'Ocultar asientos con visibilidad limitada',
 };

@@ -43,8 +43,19 @@ export interface EmbeddedDesignerProps {
    */
   loadingTimeoutMs?: number;
   /**
-   * Auto-grow the iframe to the height the Designer reports over the resize
-   * protocol. Defaults to `true`. Set `false` to size the iframe yourself.
+   * How the iframe is sized. `'fill'` (the default) keeps the Designer filling
+   * the viewport — its height tracks `window.innerHeight` minus the iframe's
+   * top offset, recomputed on resize/scroll. Pass a number for a fixed pixel
+   * height you manage yourself.
+   */
+  height?: 'fill' | number;
+  /** Lower bound for `'fill'` sizing. Defaults to `480`. */
+  minHeight?: number;
+  /**
+   * Legacy content-height auto-grow via the `seatlayer.designer.resize`
+   * protocol. Only honored when `height` is a number; with the default
+   * `height: 'fill'` the resize messages are ignored and the iframe always
+   * fills the viewport.
    */
   autoResize?: boolean;
   /**
@@ -87,6 +98,8 @@ export const EmbeddedDesigner = forwardRef<EmbeddedDesignerHandle, EmbeddedDesig
         referrerPolicy: props.referrerPolicy,
         showLoadingState: props.showLoadingState,
         loadingTimeoutMs: props.loadingTimeoutMs,
+        height: props.height,
+        minHeight: props.minHeight,
         autoResize: props.autoResize,
         // Only forward a relaunch hook when the host supplied one, so the core's
         // "reload the same URL in place" fallback still applies otherwise.

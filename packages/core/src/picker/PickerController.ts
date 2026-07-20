@@ -27,6 +27,7 @@ import type {
   ISeatmapRenderer,
   LodRung,
   RendererCallbacks,
+  SeatCommercialAttributes,
   SeatStatus,
   SectionObject,
 } from '../core/types';
@@ -45,6 +46,10 @@ export interface PickerSeat {
   tiers?: CategoryTier[];
   /** The chosen tier's id — defaults to the first tier; absent when no tiers. */
   tierId?: string;
+  /** Commercial selling/view attributes (restricted/obstructed view, premium,
+   *  note) resolved for this seat; absent when the seat carries none. Lets the
+   *  buyer cart + confirm surface flag limited-view/premium seats. */
+  commercial?: SeatCommercialAttributes;
 }
 
 /**
@@ -811,6 +816,16 @@ export class PickerController {
   setAccessibilityFilter(types: string[] | null): void {
     this.renderer?.setAccessibilityFilter?.(types as never);
   }
+  /**
+   * "Hide limited-view seats" toggle — dims free seats flagged
+   * restricted/obstructed view. Additive commercial parallel to the
+   * accessibility filter; called via the concrete renderer (not on the shared
+   * ISeatmapRenderer interface).
+   */
+  setCommercialLimitedFilter(on: boolean): void {
+    (this.renderer as { setCommercialLimitedFilter?: (on: boolean) => void } | null)
+      ?.setCommercialLimitedFilter?.(on);
+  }
 
   // ---- multi-floor (Batch 5) ------------------------------------------------
 
@@ -1033,9 +1048,10 @@ export class PickerController {
   // ---- internals ------------------------------------------------------------
 
   private toSeat(s: ExpandedSeat): PickerSeat {
+    const commercial = s.commercial ? { commercial: s.commercial } : undefined;
     const tiers = this.tiersFor(s.categoryKey);
     if (!tiers) {
-      return { id: s.id, label: s.label, categoryKey: s.categoryKey, price: this.priceFor(s.categoryKey) };
+      return { id: s.id, label: s.label, categoryKey: s.categoryKey, price: this.priceFor(s.categoryKey), ...commercial };
     }
     const chosen = tiers.find((t) => t.id === this.seatTiers.get(s.id)) ?? tiers[0];
     return {
@@ -1045,6 +1061,7 @@ export class PickerController {
       price: chosen.price,
       tiers,
       tierId: chosen.id,
+      ...commercial,
     };
   }
   /** Tooltip payload for a hovered seat — see PickerCallbacks.onSeatHover. */

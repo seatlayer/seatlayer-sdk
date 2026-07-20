@@ -85,4 +85,8 @@ export const en: Dict = {
   'picker.off': 'OFF',
   'picker.panorama360': '360° venue photo',
   'picker.illustrationCaption': 'illustration · ≈ {m} m from stage',
+  'picker.restrictedView': 'Restricted view',
+  'picker.obstructedView': 'Obstructed view',
+  'picker.premiumSeat': 'Premium seat',
+  'picker.hideLimitedView': 'Hide limited-view seats',
 };

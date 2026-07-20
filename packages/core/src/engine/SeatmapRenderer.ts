@@ -597,6 +597,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private categoryHighlight: string | null = null;
   /** Price-band filter (F4): dim free seats whose category is NOT in this set. */
   private categoryFilter: Set<string> | null = null;
+  /** Commercial "hide limited-view seats" toggle: dim free seats flagged
+   *  restrictedView/obstructedView. Parallel to the accessibility filter. */
+  private commercialLimitedFilter = false;
 
   // Section/zone overlays (bgLayer) — the 3-rung LOD: seats → section blocks →
   // zone blocks. Kept for the melt restyle and for hit-testing a zoomed-out tap.
@@ -1482,6 +1485,27 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   }
 
   /**
+   * "Hide limited-view seats" toggle (commercial): when on, dim free, unselected
+   * seats flagged restrictedView or obstructedView — the same visual dimming the
+   * accessibility filter uses, just keyed off the seat's commercial attributes.
+   */
+  setCommercialLimitedFilter(on: boolean): void {
+    if (this.commercialLimitedFilter === on) return;
+    this.commercialLimitedFilter = on;
+    for (const seat of this.seats) {
+      const c = this.circleById.get(seat.id);
+      if (c) this.paintSeat(c, seat.id);
+    }
+    this.updateLabels();
+    if (this.cached) {
+      this.seatLayer.clearCache();
+      this.cacheSeatLayer();
+    } else {
+      this.seatLayer.batchDraw();
+    }
+  }
+
+  /**
    * Price-band filter (F4): dim free, unselected seats whose category key is NOT
    * in `keys`. `null` clears the filter (all categories fully visible). The
    * widget resolves which categories fall inside the buyer's chosen band.
@@ -1976,6 +2000,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     }
     // Price-band filter (F4): dim free, unselected seats outside the chosen band.
     if (this.categoryFilter && status === 'free' && !selected && !this.categoryFilter.has(seat.categoryKey)) {
+      c.opacity(0.22);
+    }
+    // "Hide limited-view seats": dim free, unselected seats with a restricted or
+    // obstructed sightline so the clear-view seats stand out.
+    if (this.commercialLimitedFilter && status === 'free' && !selected &&
+        (seat.commercial?.restrictedView || seat.commercial?.obstructedView)) {
       c.opacity(0.22);
     }
     // Held-back inventory (organizer manager): seats in a dimmed section/zone

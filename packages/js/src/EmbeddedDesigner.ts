@@ -49,9 +49,26 @@ export interface EmbeddedDesignerOptions {
    */
   loadingTimeoutMs?: number;
   /**
+   * How to size the iframe's height. The Designer is a full application (its
+   * shell is `position:fixed; height:100dvh`), not flowing content, so it should
+   * fill the viewport rather than be measured.
+   *
+   * - `'fill'` (default): grow the iframe so its bottom edge reaches the bottom
+   *   of the viewport — `window.innerHeight - iframe.top`, clamped to `minHeight`
+   *   — recomputed (rAF-throttled) on `resize` / `orientationchange` / `scroll`.
+   *   The legacy `seatlayer.designer.resize` message is ignored in this mode: it
+   *   is circular, because the fixed-position shell just echoes the iframe height.
+   * - a number: a fixed pixel height. In this mode the legacy resize message is
+   *   still honoured (unless `autoResize` is `false`) so older hosts keep growing.
+   */
+  height?: 'fill' | number;
+  /** Minimum height (px) that `'fill'` mode clamps to. Defaults to `480`. */
+  minHeight?: number;
+  /**
    * Auto-grow the iframe to the height the Designer reports over the resize
-   * protocol (`seatlayer.designer.resize`). Defaults to `true`. Set `false` when
-   * the host sizes the iframe itself (e.g. a fixed-height chrome).
+   * protocol (`seatlayer.designer.resize`). Only applies when `height` is a fixed
+   * number; ignored in `'fill'` mode. Defaults to `true`. Set `false` when the
+   * host sizes a fixed-height iframe itself.
    */
   autoResize?: boolean;
   /**
@@ -77,6 +94,7 @@ const TYPES = new Set<EmbeddedDesignerEventType>([
 ]);
 
 const DEFAULT_LOADING_TIMEOUT_MS = 20000;
+const DEFAULT_MIN_FILL_HEIGHT = 480;
 
 /** Internal reason the error card is being shown, used to pick human copy. */
 type ErrorCause = 'expired' | 'mismatch' | 'timeout' | 'load';
@@ -133,6 +151,9 @@ export class EmbeddedDesigner {
   private fsKeyHandler: ((event: KeyboardEvent) => void) | null = null;
   /** Latest height (px string) the Designer reported; re-applied after unpin. */
   private lastAutoHeight = '';
+  // Viewport-fill sizing: pending rAF handle + whether listeners are attached.
+  private fillRaf: number | null = null;
+  private fillListening = false;
 
   constructor(options: EmbeddedDesignerOptions) {
     this.options = options;
@@ -148,11 +169,13 @@ export class EmbeddedDesigner {
 
     const frame = document.createElement('iframe');
     frame.title = this.options.title ?? 'Venue chart Designer';
-    frame.allow = this.options.allow ?? 'clipboard-write';
+    frame.allow = this.options.allow ?? 'fullscreen; clipboard-write';
     frame.referrerPolicy = this.options.referrerPolicy ?? 'origin';
     frame.src = url.toString();
     frame.style.width = '100%';
-    frame.style.height = '100%';
+    // `'fill'` (default) is computed from the viewport once the frame is in the
+    // DOM (see startFill); a numeric height is a fixed pixel box.
+    frame.style.height = typeof this.options.height === 'number' ? `${this.options.height}px` : '100%';
     frame.style.border = '0';
     Object.assign(frame.style, this.options.style);
     if (this.options.className) frame.className = this.options.className;
@@ -161,6 +184,9 @@ export class EmbeddedDesigner {
     window.addEventListener('message', this.handleMessage);
     container.append(frame);
     this.frame = frame;
+
+    // Fill mode owns the height from the viewport now the frame is measurable.
+    if (this.fillEnabled()) this.startFill();
 
     this.phase = 'loading';
     if (this.loadingStateEnabled()) {
@@ -189,6 +215,7 @@ export class EmbeddedDesigner {
 
   destroy(): void {
     window.removeEventListener('message', this.handleMessage);
+    this.stopFill();
     this.unpinFullscreen();
     this.clearTimeoutTimer();
     this.removeOverlay();
@@ -206,6 +233,54 @@ export class EmbeddedDesigner {
 
   private autoResizeEnabled(): boolean {
     return this.options.autoResize !== false;
+  }
+
+  /** Fill mode is the default; a numeric `height` opts into a fixed pixel box. */
+  private fillEnabled(): boolean {
+    return typeof this.options.height !== 'number';
+  }
+
+  /**
+   * Size the iframe so its bottom edge meets the bottom of the viewport
+   * (`window.innerHeight - top`), clamped to `minHeight`. No-op while pinned
+   * fullscreen (the pin fills the viewport itself).
+   */
+  private applyFill(): void {
+    if (!this.frame || this.pinned) return;
+    const min = this.options.minHeight ?? DEFAULT_MIN_FILL_HEIGHT;
+    const top = this.frame.getBoundingClientRect().top;
+    const target = Math.max(min, Math.round(window.innerHeight - top));
+    this.frame.style.height = `${target}px`;
+  }
+
+  /** rAF-throttled fill recompute, so a burst of scroll/resize ticks coalesces. */
+  private scheduleFill = (): void => {
+    if (this.fillRaf !== null) return;
+    this.fillRaf = requestAnimationFrame(() => {
+      this.fillRaf = null;
+      this.applyFill();
+    });
+  };
+
+  private startFill(): void {
+    this.applyFill();
+    if (this.fillListening) return;
+    this.fillListening = true;
+    window.addEventListener('resize', this.scheduleFill);
+    window.addEventListener('orientationchange', this.scheduleFill);
+    window.addEventListener('scroll', this.scheduleFill, { passive: true });
+  }
+
+  private stopFill(): void {
+    if (this.fillRaf !== null) {
+      cancelAnimationFrame(this.fillRaf);
+      this.fillRaf = null;
+    }
+    if (!this.fillListening) return;
+    this.fillListening = false;
+    window.removeEventListener('resize', this.scheduleFill);
+    window.removeEventListener('orientationchange', this.scheduleFill);
+    window.removeEventListener('scroll', this.scheduleFill);
   }
 
   /**
@@ -249,8 +324,10 @@ export class EmbeddedDesigner {
     if (this.frame) {
       if (this.frameStyleBeforeFs === null) this.frame.removeAttribute('style');
       else this.frame.setAttribute('style', this.frameStyleBeforeFs);
-      // Re-apply any height reported while we were pinned.
-      if (this.autoResizeEnabled() && this.lastAutoHeight) this.frame.style.height = this.lastAutoHeight;
+      // Restore the right height for the mode: recompute the viewport fill, or
+      // re-apply the last height the Designer reported (numeric mode).
+      if (this.fillEnabled()) this.applyFill();
+      else if (this.autoResizeEnabled() && this.lastAutoHeight) this.frame.style.height = this.lastAutoHeight;
     }
     this.frameStyleBeforeFs = null;
 
@@ -504,7 +581,11 @@ export class EmbeddedDesigner {
     // Layout protocol — origin-locked like everything else, but handled here
     // rather than dispatched to the host callbacks.
     if (data.type === 'seatlayer.designer.resize') {
-      if (this.autoResizeEnabled() && typeof data.px === 'number' && Number.isFinite(data.px) && data.px > 0) {
+      // Fill mode owns the height from the viewport; the reported scrollHeight is
+      // circular (the fixed-position shell echoes the iframe height), so ignore
+      // it. Only a fixed numeric height honours the legacy auto-grow.
+      if (!this.fillEnabled() && this.autoResizeEnabled()
+          && typeof data.px === 'number' && Number.isFinite(data.px) && data.px > 0) {
         this.lastAutoHeight = `${Math.round(data.px)}px`;
         // While pinned fullscreen the iframe fills the viewport; apply the
         // reported height only when not pinned (it's re-applied on unpin).

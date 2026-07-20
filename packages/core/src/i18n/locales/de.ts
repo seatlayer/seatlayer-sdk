@@ -84,4 +84,8 @@ export const de: Dict = {
   'picker.off': 'AUS',
   'picker.panorama360': '360°-Veranstaltungsfotos',
   'picker.illustrationCaption': 'Illustration · ≈ {m} m von der Bühne',
+  'picker.restrictedView': 'Eingeschränkte Sicht',
+  'picker.obstructedView': 'Sichtbehinderung',
+  'picker.premiumSeat': 'Premium-Platz',
+  'picker.hideLimitedView': 'Plätze mit eingeschränkter Sicht ausblenden',
 };
