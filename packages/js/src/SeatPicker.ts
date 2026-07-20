@@ -323,6 +323,11 @@ const CSS = `
 .sl-picker[data-layout="narrow"][data-has-selection="true"] .sl-filtersec,
 .sl-picker[data-layout="narrow"][data-has-selection="true"] .sl-filters,
 .sl-picker[data-layout="narrow"][data-has-selection="true"] .sl-prices-sec{display:none}
+/* Reclaim the bottom sheet once the cart has anything: the "Find best seats"
+   panel collapses too. EXCEPT the confirm ("Replace your current choices?") and
+   in-flight busy states, which legitimately show with a non-empty cart — those
+   set data-ba-active="true" (see setAttribute alongside data-has-selection). */
+.sl-picker[data-layout="narrow"][data-has-selection="true"]:not([data-ba-active="true"]) .sl-ba{display:none}
 /* touch chrome: pinch-zoom exists — hide +/− on the sheet layout (keep fit) */
 .sl-picker[data-layout="narrow"] .sl-zoom [data-ref="zin"],
 .sl-picker[data-layout="narrow"] .sl-zoom [data-ref="zout"]{display:none}
@@ -2972,7 +2977,7 @@ export class SeatPicker {
     // Best available is the fastest path for buyers who haven't picked yet —
     // but the moment a seat lands in the tray, the ticket cards own this space.
     // (Busy/confirm states stay visible so an in-flight search isn't cut off.)
-    const noPicks = !seats.length && !heldItems.length;
+    const noPicks = !seats.length && !heldItems.length && !this.pendingGACount();
     if (!this.hold && (noPicks || this.bestAvailableBusy || this.bestAvailableConfirm)) {
       const cats = this.controller.doc?.categories ?? [];
       parts.push(this.bestAvailableConfirm
@@ -3211,6 +3216,13 @@ export class SeatPicker {
       : 'No seats selected';
     this.els.total.textContent = count ? this.money(total) : '';
     this.root?.setAttribute('data-has-selection', String(count > 0));
+    // The best-available panel's confirm ("Replace your current choices?") and
+    // in-flight busy states must survive the narrow-layout collapse that hides
+    // .sl-ba once the cart is non-empty. Mark them so the CSS keeps them shown.
+    this.root?.setAttribute(
+      'data-ba-active',
+      String(this.bestAvailableConfirm || this.bestAvailableBusy),
+    );
     this.els.foot?.classList.toggle('empty', count === 0);
     if (this.els.seatSummary) {
       this.els.seatSummary.textContent = count ? `${count} selected` : '';
