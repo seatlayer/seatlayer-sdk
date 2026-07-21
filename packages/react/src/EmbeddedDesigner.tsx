@@ -43,10 +43,14 @@ export interface EmbeddedDesignerProps {
    */
   loadingTimeoutMs?: number;
   /**
-   * How the iframe is sized. `'fill'` (the default) keeps the Designer filling
-   * the viewport — its height tracks `window.innerHeight` minus the iframe's
-   * top offset, recomputed on resize/scroll. Pass a number for a fixed pixel
-   * height you manage yourself.
+   * How the iframe is sized. `'fill'` (the default) is **container-aware**: if the
+   * container has a definite height (a sized block, `flex-1 min-h-0`, a resolved
+   * `%`) the Designer fills 100% of it and tracks its size via a `ResizeObserver`;
+   * if the container is content-sized (full-page usage) the Designer fills the
+   * viewport (`window.innerHeight` minus the iframe's top offset). Either way the
+   * result is clamped to `minHeight` and re-probed on resize. Heights are applied
+   * with `!important` so a host theme can't override them. Pass a number for a
+   * fixed pixel height you manage yourself.
    */
   height?: 'fill' | number;
   /** Lower bound for `'fill'` sizing. Defaults to `480`. */
@@ -54,8 +58,8 @@ export interface EmbeddedDesignerProps {
   /**
    * Legacy content-height auto-grow via the `seatlayer.designer.resize`
    * protocol. Only honored when `height` is a number; with the default
-   * `height: 'fill'` the resize messages are ignored and the iframe always
-   * fills the viewport.
+   * `height: 'fill'` the resize messages are ignored and the SDK sizes the iframe
+   * to the container or viewport.
    */
   autoResize?: boolean;
   /**

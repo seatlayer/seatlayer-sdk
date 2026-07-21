@@ -123,6 +123,14 @@ export function VenueEditor({ session }: { session: {
 Changing `designerUrl` replaces the iframe, so a newly-minted fragment token never
 continues an earlier session. See [the embedded Designer guide](https://docs.seatlayer.io/guides/embedded-designer/).
 
+The default `height: 'fill'` is **container-aware**: give the container element a
+definite height (a fixed-height block, `flex-1 min-h-0`, a resolved `%`) and the
+Designer fills 100% of it, tracking size changes live via a `ResizeObserver`; leave
+it content-sized (e.g. `style={{ height: 'calc(100vh - 96px)' }}` full-page) and it
+fills the viewport instead. The result is clamped to `minHeight` (default `480`) and
+re-probed on resize. SDK-managed heights are applied with `!important`, so a host
+theme's `iframe { height: … }` rule can't override them.
+
 ### Built-in loading, error, and expiry states
 
 The component paints a branded loading skeleton inside its container until the

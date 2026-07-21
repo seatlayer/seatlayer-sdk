@@ -51,15 +51,28 @@ export interface EmbeddedDesignerOptions {
   /**
    * How to size the iframe's height. The Designer is a full application (its
    * shell is `position:fixed; height:100dvh`), not flowing content, so it should
-   * fill the viewport rather than be measured.
+   * fill its box rather than be measured.
    *
-   * - `'fill'` (default): grow the iframe so its bottom edge reaches the bottom
-   *   of the viewport — `window.innerHeight - iframe.top`, clamped to `minHeight`
-   *   — recomputed (rAF-throttled) on `resize` / `orientationchange` / `scroll`.
-   *   The legacy `seatlayer.designer.resize` message is ignored in this mode: it
-   *   is circular, because the fixed-position shell just echoes the iframe height.
+   * - `'fill'` (default): container-aware. On mount the SDK probes whether the
+   *   host gave the container a DEFINITE (bounded) height:
+   *     - **Bounded container** (a fixed-height block, `height`/`max-height`,
+   *       `flex:1; min-h:0`, a resolved `%`, etc.) → the iframe fills 100% of
+   *       that block and tracks its size live via a `ResizeObserver`.
+   *     - **Content-sized container** (the block collapses to whatever the iframe
+   *       measures — typical full-page usage) → the iframe grows so its bottom
+   *       edge reaches the bottom of the viewport (`window.innerHeight -
+   *       iframe.top`), recomputed (rAF-throttled) on `resize` /
+   *       `orientationchange` / `scroll`.
+   *   Either way the result is clamped to `minHeight`. The verdict is cached but
+   *   re-probed on `resize`/`orientationchange` so a responsive host layout can
+   *   flip between the two. The legacy `seatlayer.designer.resize` message is
+   *   ignored in `'fill'` mode: it is circular, because the fixed-position shell
+   *   just echoes the iframe height.
    * - a number: a fixed pixel height. In this mode the legacy resize message is
    *   still honoured (unless `autoResize` is `false`) so older hosts keep growing.
+   *
+   * All SDK-managed heights are written with `!important` priority so a host
+   * theme's `iframe { height: … !important }` cannot override them.
    */
   height?: 'fill' | number;
   /** Minimum height (px) that `'fill'` mode clamps to. Defaults to `480`. */
@@ -95,6 +108,14 @@ const TYPES = new Set<EmbeddedDesignerEventType>([
 
 const DEFAULT_LOADING_TIMEOUT_MS = 20000;
 const DEFAULT_MIN_FILL_HEIGHT = 480;
+/**
+ * Container-fill detection tunables. The probe drives the iframe to two extreme
+ * heights within one synchronous task (no paint between reads, so no flash) and
+ * watches whether the container tracks it.
+ */
+const FILL_PROBE_HEIGHT_PX = 100000; // "huge" iframe used to see if the box grows with it
+const FILL_PROBE_TRACK_EPSILON_PX = 4; // container grew with the iframe ⇒ content-sized
+const FILL_MIN_DEFINITE_HEIGHT_PX = 50; // a bounded box must keep at least this much height
 
 /** Internal reason the error card is being shown, used to pick human copy. */
 type ErrorCause = 'expired' | 'mismatch' | 'timeout' | 'load';
@@ -151,9 +172,16 @@ export class EmbeddedDesigner {
   private fsKeyHandler: ((event: KeyboardEvent) => void) | null = null;
   /** Latest height (px string) the Designer reported; re-applied after unpin. */
   private lastAutoHeight = '';
-  // Viewport-fill sizing: pending rAF handle + whether listeners are attached.
+  // Fill sizing: pending rAF handles + whether window listeners are attached.
   private fillRaf: number | null = null;
+  private reprobeRaf: number | null = null;
   private fillListening = false;
+  /** Resolved container element (fill measurement + ResizeObserver target). */
+  private containerEl: HTMLElement | null = null;
+  /** Cached fill verdict: 'container' = bounded block, 'viewport' = full page. */
+  private fillMode: 'viewport' | 'container' | null = null;
+  /** Live block-size tracking in container-fill mode; disconnected on destroy. */
+  private resizeObs: ResizeObserver | null = null;
 
   constructor(options: EmbeddedDesignerOptions) {
     this.options = options;
@@ -172,15 +200,22 @@ export class EmbeddedDesigner {
     frame.allow = this.options.allow ?? 'fullscreen; clipboard-write';
     frame.referrerPolicy = this.options.referrerPolicy ?? 'origin';
     frame.src = url.toString();
-    frame.style.width = '100%';
-    // `'fill'` (default) is computed from the viewport once the frame is in the
-    // DOM (see startFill); a numeric height is a fixed pixel box.
-    frame.style.height = typeof this.options.height === 'number' ? `${this.options.height}px` : '100%';
+    // Width/height are written with `!important` priority so a host theme's
+    // `iframe { height: … !important }` cannot beat the SDK's inline sizing.
+    frame.style.setProperty('width', '100%', 'important');
+    // `'fill'` (default) is (re)computed once the frame is in the DOM (see
+    // startFill); a numeric height is a fixed pixel box.
+    frame.style.setProperty(
+      'height',
+      typeof this.options.height === 'number' ? `${this.options.height}px` : '100%',
+      'important',
+    );
     frame.style.border = '0';
     Object.assign(frame.style, this.options.style);
     if (this.options.className) frame.className = this.options.className;
 
     const container = resolveContainer(this.options.container);
+    this.containerEl = container;
     window.addEventListener('message', this.handleMessage);
     container.append(frame);
     this.frame = frame;
@@ -222,6 +257,8 @@ export class EmbeddedDesigner {
     this.restoreContainerStyle();
     this.frame?.remove();
     this.frame = null;
+    this.containerEl = null;
+    this.fillMode = null;
     this.designerOrigin = '';
     this.phase = 'loading';
     this.lastAutoHeight = '';
@@ -240,20 +277,65 @@ export class EmbeddedDesigner {
     return typeof this.options.height !== 'number';
   }
 
+  /** Write an SDK-managed height with `!important` so a host theme can't win. */
+  private setFrameHeight(value: string): void {
+    this.frame?.style.setProperty('height', value, 'important');
+  }
+
   /**
-   * Size the iframe so its bottom edge meets the bottom of the viewport
-   * (`window.innerHeight - top`), clamped to `minHeight`. No-op while pinned
-   * fullscreen (the pin fills the viewport itself).
+   * Decide whether the host gave the container a DEFINITE (bounded) height — a
+   * fixed block the embed should fill 100% of — versus a content-sized container
+   * that collapses to whatever the iframe measures (full-page usage).
+   *
+   * We drive the iframe to two extreme heights within a single synchronous task
+   * and watch whether the container follows: a bounded box barely moves, a
+   * content-sized one grows with the iframe. Because we restore the height before
+   * yielding, the browser only lays out — it never paints the extremes, so there
+   * is no visible flash. Works for px, resolved `%`, and flex (`flex:1;min-h:0`)
+   * heights, and leaves a mere `min-height` floor classified as content-sized so
+   * full-page hosts keep the old viewport-fill behavior.
+   */
+  private detectFillMode(): 'viewport' | 'container' {
+    const container = this.containerEl;
+    const frame = this.frame;
+    if (this.pinned || !container || !frame) return this.fillMode ?? 'viewport';
+    const measure = (): number => container.getBoundingClientRect().height;
+    const savedValue = frame.style.getPropertyValue('height');
+    const savedPriority = frame.style.getPropertyPriority('height');
+
+    frame.style.setProperty('height', '0px', 'important');
+    const collapsed = measure();
+    frame.style.setProperty('height', `${FILL_PROBE_HEIGHT_PX}px`, 'important');
+    const expanded = measure();
+
+    if (savedValue) frame.style.setProperty('height', savedValue, savedPriority);
+    else frame.style.removeProperty('height');
+
+    const tracksIframe = expanded - collapsed > FILL_PROBE_TRACK_EPSILON_PX;
+    const bounded = !tracksIframe && collapsed >= FILL_MIN_DEFINITE_HEIGHT_PX;
+    return bounded ? 'container' : 'viewport';
+  }
+
+  /**
+   * Size the iframe for the current fill verdict, clamped to `minHeight`. In
+   * container mode it fills 100% of the bounded block; in viewport mode its
+   * bottom edge meets the bottom of the viewport (`window.innerHeight - top`).
+   * No-op while pinned fullscreen (the pin fills the viewport itself).
    */
   private applyFill(): void {
     if (!this.frame || this.pinned) return;
     const min = this.options.minHeight ?? DEFAULT_MIN_FILL_HEIGHT;
+    if (this.fillMode === 'container' && this.containerEl) {
+      const target = Math.max(min, Math.round(this.containerEl.getBoundingClientRect().height));
+      this.setFrameHeight(`${target}px`);
+      return;
+    }
     const top = this.frame.getBoundingClientRect().top;
     const target = Math.max(min, Math.round(window.innerHeight - top));
-    this.frame.style.height = `${target}px`;
+    this.setFrameHeight(`${target}px`);
   }
 
-  /** rAF-throttled fill recompute, so a burst of scroll/resize ticks coalesces. */
+  /** rAF-throttled fill recompute, so a burst of scroll/RO ticks coalesces. */
   private scheduleFill = (): void => {
     if (this.fillRaf !== null) return;
     this.fillRaf = requestAnimationFrame(() => {
@@ -262,12 +344,45 @@ export class EmbeddedDesigner {
     });
   };
 
+  /**
+   * rAF-throttled re-probe: a host layout change (responsive breakpoint, a block
+   * gaining/losing a definite height) can flip the verdict, so `resize` /
+   * `orientationchange` re-detect and swap the container observer accordingly.
+   */
+  private scheduleReprobe = (): void => {
+    if (this.reprobeRaf !== null) return;
+    this.reprobeRaf = requestAnimationFrame(() => {
+      this.reprobeRaf = null;
+      if (this.pinned) return;
+      this.fillMode = this.detectFillMode();
+      this.syncContainerObserver();
+      this.applyFill();
+    });
+  };
+
+  /** Attach/detach the container ResizeObserver to match the current verdict. */
+  private syncContainerObserver(): void {
+    const want =
+      this.fillMode === 'container' && !!this.containerEl && typeof ResizeObserver !== 'undefined';
+    if (want && !this.resizeObs) {
+      this.resizeObs = new ResizeObserver(() => this.scheduleFill());
+      this.resizeObs.observe(this.containerEl!);
+    } else if (!want && this.resizeObs) {
+      this.resizeObs.disconnect();
+      this.resizeObs = null;
+    }
+  }
+
   private startFill(): void {
+    this.fillMode = this.detectFillMode();
+    this.syncContainerObserver();
     this.applyFill();
     if (this.fillListening) return;
     this.fillListening = true;
-    window.addEventListener('resize', this.scheduleFill);
-    window.addEventListener('orientationchange', this.scheduleFill);
+    // Layout-changing events re-probe (the verdict can flip); scroll only shifts
+    // the viewport-fill top offset, so it just re-applies.
+    window.addEventListener('resize', this.scheduleReprobe);
+    window.addEventListener('orientationchange', this.scheduleReprobe);
     window.addEventListener('scroll', this.scheduleFill, { passive: true });
   }
 
@@ -276,10 +391,18 @@ export class EmbeddedDesigner {
       cancelAnimationFrame(this.fillRaf);
       this.fillRaf = null;
     }
+    if (this.reprobeRaf !== null) {
+      cancelAnimationFrame(this.reprobeRaf);
+      this.reprobeRaf = null;
+    }
+    if (this.resizeObs) {
+      this.resizeObs.disconnect();
+      this.resizeObs = null;
+    }
     if (!this.fillListening) return;
     this.fillListening = false;
-    window.removeEventListener('resize', this.scheduleFill);
-    window.removeEventListener('orientationchange', this.scheduleFill);
+    window.removeEventListener('resize', this.scheduleReprobe);
+    window.removeEventListener('orientationchange', this.scheduleReprobe);
     window.removeEventListener('scroll', this.scheduleFill);
   }
 
@@ -292,16 +415,25 @@ export class EmbeddedDesigner {
     if (this.pinned || !this.frame) return;
     this.pinned = true;
     this.frameStyleBeforeFs = this.frame.getAttribute('style');
-    Object.assign(this.frame.style, {
+    // Every pin property is `!important` so a host theme's `iframe { … }` rules
+    // (height/width/inset) can't unpin us. `inset` is written as its four longhands
+    // for reliability across engines. Restored wholesale via the saved style attr.
+    const pin: Record<string, string> = {
       position: 'fixed',
-      inset: '0',
+      top: '0',
+      right: '0',
+      bottom: '0',
+      left: '0',
       width: '100vw',
       height: '100vh',
       margin: '0',
       border: '0',
-      zIndex: '2147483000',
+      'z-index': '2147483000',
       background: '#101625',
-    } satisfies Partial<CSSStyleDeclaration>);
+    };
+    for (const [property, value] of Object.entries(pin)) {
+      this.frame.style.setProperty(property, value, 'important');
+    }
 
     const docEl = document.documentElement;
     this.docOverflowBeforeFs = docEl.style.overflow;
@@ -324,10 +456,11 @@ export class EmbeddedDesigner {
     if (this.frame) {
       if (this.frameStyleBeforeFs === null) this.frame.removeAttribute('style');
       else this.frame.setAttribute('style', this.frameStyleBeforeFs);
-      // Restore the right height for the mode: recompute the viewport fill, or
-      // re-apply the last height the Designer reported (numeric mode).
+      // Restore the right height for the mode: recompute the fill, or re-apply
+      // the last height the Designer reported (numeric mode). Both use
+      // `!important` so a host theme can't win after we unpin.
       if (this.fillEnabled()) this.applyFill();
-      else if (this.autoResizeEnabled() && this.lastAutoHeight) this.frame.style.height = this.lastAutoHeight;
+      else if (this.autoResizeEnabled() && this.lastAutoHeight) this.setFrameHeight(this.lastAutoHeight);
     }
     this.frameStyleBeforeFs = null;
 
@@ -589,7 +722,8 @@ export class EmbeddedDesigner {
         this.lastAutoHeight = `${Math.round(data.px)}px`;
         // While pinned fullscreen the iframe fills the viewport; apply the
         // reported height only when not pinned (it's re-applied on unpin).
-        if (!this.pinned) this.frame.style.height = this.lastAutoHeight;
+        // `!important` so a host theme's `iframe { height … }` can't win.
+        if (!this.pinned) this.setFrameHeight(this.lastAutoHeight);
       }
       return;
     }

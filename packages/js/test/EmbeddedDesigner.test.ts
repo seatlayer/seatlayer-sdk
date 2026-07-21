@@ -254,3 +254,176 @@ describe('EmbeddedDesigner resize + fullscreen protocol', () => {
     expect(document.documentElement.style.overflow).toBe('');
   });
 });
+
+describe('EmbeddedDesigner writes !important-proof heights', () => {
+  const priority = (frame: HTMLIFrameElement, prop: string) => frame.style.getPropertyPriority(prop);
+
+  it('applies the viewport-fill height with !important', () => {
+    const frame = mountDesigner().getIframe()!;
+    expect(priority(frame, 'height')).toBe('important');
+    expect(priority(frame, 'width')).toBe('important');
+  });
+
+  it('applies a fixed numeric height with !important', () => {
+    const frame = mountDesigner({ height: 720 }).getIframe()!;
+    expect(frame.style.height).toBe('720px');
+    expect(priority(frame, 'height')).toBe('important');
+  });
+
+  it('applies the autoResize (resize protocol) height with !important', () => {
+    const designer = mountDesigner({ height: 300 });
+    postFromFrame(designer, { type: 'seatlayer.designer.resize', px: 640 });
+    const frame = designer.getIframe()!;
+    expect(frame.style.height).toBe('640px');
+    expect(priority(frame, 'height')).toBe('important');
+  });
+
+  it('pins fullscreen with !important on height/width/position/inset', () => {
+    const designer = mountDesigner();
+    const frame = designer.getIframe()!;
+    postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: true });
+    for (const prop of ['position', 'top', 'right', 'bottom', 'left', 'width', 'height']) {
+      expect(priority(frame, prop)).toBe('important');
+    }
+    // Unpin restores the pre-pin inline style, which itself kept !important height.
+    postFromFrame(designer, { type: 'seatlayer.designer.fullscreen', on: false });
+    expect(frame.style.position).toBe('');
+    expect(priority(frame, 'height')).toBe('important');
+  });
+});
+
+describe('EmbeddedDesigner container-aware fill', () => {
+  const realRaf = global.requestAnimationFrame;
+  const realCaf = global.cancelAnimationFrame;
+  let rafQueue: Array<((t: number) => void) | undefined>;
+
+  function flushRaf() {
+    const queued = rafQueue;
+    rafQueue = [];
+    for (const cb of queued) cb?.(0);
+  }
+
+  /** Minimal DOMRect stub — the SDK only reads `.height` (container) / `.top` (iframe). */
+  function rect(height: number): DOMRect {
+    return { height, top: 0, bottom: height, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+  }
+
+  /** A block the host sized to a definite height — stays put whatever the iframe does. */
+  function makeBounded(el: HTMLElement, getHeight: () => number) {
+    el.getBoundingClientRect = () => rect(getHeight());
+  }
+
+  /** A content-sized block — its height collapses to whatever the iframe measures. */
+  function makeContentSized(el: HTMLElement) {
+    el.getBoundingClientRect = () => {
+      const frame = el.querySelector('iframe');
+      return rect(frame ? Number.parseFloat(frame.style.height) || 0 : 0);
+    };
+  }
+
+  class MockResizeObserver {
+    static instances: MockResizeObserver[] = [];
+    elements: Element[] = [];
+    constructor(public cb: ResizeObserverCallback) { MockResizeObserver.instances.push(this); }
+    observe(el: Element) { this.elements.push(el); }
+    unobserve(el: Element) { this.elements = this.elements.filter((e) => e !== el); }
+    disconnect() { this.elements = []; }
+    trigger() { this.cb([], this as unknown as ResizeObserver); }
+  }
+
+  beforeEach(() => {
+    rafQueue = [];
+    global.requestAnimationFrame = ((cb: (t: number) => void) => rafQueue.push(cb)) as typeof requestAnimationFrame;
+    global.cancelAnimationFrame = ((id: number) => { rafQueue[id - 1] = undefined; }) as typeof cancelAnimationFrame;
+    (global as unknown as { ResizeObserver: unknown }).ResizeObserver = MockResizeObserver;
+    MockResizeObserver.instances = [];
+  });
+
+  afterEach(() => {
+    global.requestAnimationFrame = realRaf;
+    global.cancelAnimationFrame = realCaf;
+    delete (global as unknown as { ResizeObserver?: unknown }).ResizeObserver;
+  });
+
+  it('fills 100% of a host-sized (bounded) container', () => {
+    makeBounded(container, () => 640);
+    const frame = mountDesigner().getIframe()!;
+    expect(frame.style.height).toBe('640px');
+    expect(frame.style.getPropertyPriority('height')).toBe('important');
+  });
+
+  it('falls back to viewport-fill when the container collapses (content-sized)', () => {
+    makeContentSized(container);
+    const frame = mountDesigner().getIframe()!;
+    // top:0 in jsdom ⇒ viewport-fill == max(minHeight, innerHeight).
+    expect(frame.style.height).toBe(`${Math.max(480, window.innerHeight)}px`);
+  });
+
+  it('treats a bare min-height floor as content-sized (keeps viewport-fill)', () => {
+    // min-height floors the collapsed measure but the box still grows with the
+    // iframe, so the probe must not mistake it for a bounded block.
+    makeBounded(container, () => 0); // baseline
+    container.getBoundingClientRect = () => {
+      const frame = container.querySelector('iframe');
+      const h = frame ? Number.parseFloat(frame.style.height) || 0 : 0;
+      return rect(Math.max(760, h)); // min-height:760, still tracks the iframe upward
+    };
+    const frame = mountDesigner().getIframe()!;
+    expect(frame.style.height).toBe(`${Math.max(480, window.innerHeight)}px`);
+  });
+
+  it('clamps container-fill to minHeight', () => {
+    makeBounded(container, () => 200);
+    const frame = mountDesigner({ minHeight: 500 }).getIframe()!;
+    expect(frame.style.height).toBe('500px');
+  });
+
+  it('tracks live block-size changes via a ResizeObserver', () => {
+    let blockHeight = 600;
+    makeBounded(container, () => blockHeight);
+    const frame = mountDesigner().getIframe()!;
+    expect(frame.style.height).toBe('600px');
+
+    // A ResizeObserver was created for the bounded-container verdict.
+    expect(MockResizeObserver.instances.length).toBeGreaterThan(0);
+
+    // Firing the observer callback re-fills the iframe to the new block height.
+    blockHeight = 820;
+    for (const observer of MockResizeObserver.instances) observer.trigger();
+    flushRaf();
+    expect(frame.style.height).toBe('820px');
+  });
+
+  it('disconnects the ResizeObserver on destroy', () => {
+    makeBounded(container, () => 600);
+    const designer = mountDesigner();
+    expect(MockResizeObserver.instances.length).toBeGreaterThan(0);
+    designer.destroy();
+    // Every observer is disconnected, and a late callback resizes nothing.
+    for (const observer of MockResizeObserver.instances) {
+      expect(observer.elements).toEqual([]);
+      observer.trigger();
+    }
+    flushRaf();
+    expect(container.querySelector('iframe')).toBeNull();
+  });
+
+  it('re-probes on resize and flips content-sized → bounded', () => {
+    makeContentSized(container);
+    const designer = mountDesigner();
+    const frame = designer.getIframe()!;
+    expect(frame.style.height).toBe(`${Math.max(480, window.innerHeight)}px`);
+    expect(MockResizeObserver.instances.length).toBe(0);
+
+    // Host layout change: the block now has a definite height.
+    makeBounded(container, () => 700);
+    window.dispatchEvent(new Event('resize'));
+    flushRaf();
+    expect(frame.style.height).toBe('700px');
+    // An observer is now attached; firing it keeps the iframe filled to the block.
+    expect(MockResizeObserver.instances.length).toBeGreaterThan(0);
+    for (const observer of MockResizeObserver.instances) observer.trigger();
+    flushRaf();
+    expect(frame.style.height).toBe('700px');
+  });
+});

@@ -101,8 +101,19 @@ designer.setDesignerUrl(nextSession.designerUrl);
 designer.destroy();
 ```
 
-Give the container a height, for example `min-height: 760px`. Keep the default
-`referrerPolicy: 'origin'`; the Designer uses it to verify the parent origin.
+The default `height: 'fill'` is **container-aware**. On mount the SDK probes the
+container: if you gave it a definite height — a fixed-height block, `height` /
+`max-height`, a `flex:1; min-h-0` child, a resolved `%` — the iframe fills 100% of
+that block and tracks its size live via a `ResizeObserver`. If the container is
+content-sized (it collapses to whatever the iframe measures — typical full-page
+usage), the iframe instead grows so its bottom edge meets the bottom of the
+viewport. Either way the result is clamped to `minHeight` (default `480`), and the
+verdict is re-probed on resize so a responsive layout can flip between the two. So
+you can either drop the Designer into a sized block (it fills the block) or give it
+`min-height: 760px` for full-page use (it fills the viewport). Every SDK-managed
+height is written with `!important`, so a host theme's `iframe { height: … }` rule
+can't override it. Keep the default `referrerPolicy: 'origin'`; the Designer uses
+it to verify the parent origin.
 
 ### Built-in loading, error, and expiry states
 
