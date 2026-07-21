@@ -33,6 +33,7 @@ import {
   type LodRung,
   type PickerSeat,
   type PickerTransport,
+  type SeatCommercialAttributes,
   type SeatHoverDetails,
   type SectionSummary,
 } from '@seatlayer/core';
@@ -689,6 +690,17 @@ const CSS = `
 .sl-ba-title .spark{color:var(--sl-accent);font-size:16px}
 .sl-ba-copy{grid-column:1/-1;margin:-4px 0 2px 23px;color:var(--sl-muted);font-size:10.5px;line-height:1.35}
 .sl-ba-copy .narrow{display:none}
+/* "★ Best seats" premium quick-pick — gold accent echoing the ★ Premium pill on
+   the confirm popover; deliberately distinct from the accent-toned qty/go. */
+.sl-ba-premium{position:relative;z-index:1;grid-column:1/-1;justify-self:start;display:inline-flex;align-items:center;gap:6px;
+  padding:6px 12px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.02em;cursor:pointer;
+  color:#c9a24b;background:color-mix(in srgb,#e8c15a 10%,var(--sl-surface));
+  border:1px solid color-mix(in srgb,#e8c15a 34%,var(--sl-line));transition:filter .15s,background .15s,color .15s}
+.sl-ba-premium .star{font-size:12px;line-height:1;color:#e8c15a}
+.sl-ba-premium:hover{filter:brightness(1.05)}
+.sl-ba-premium.on{color:#1c1608;background:linear-gradient(135deg,#f0cf6b,#e0b23f);border-color:transparent;
+  box-shadow:0 6px 16px color-mix(in srgb,#e8c15a 26%,transparent)}
+.sl-ba-premium.on .star{color:#5a4410}
 .sl-ba select{background:var(--sl-surface);color:var(--sl-text);border:1px solid var(--sl-line);border-radius:8px;
   font:inherit;font-size:11px;padding:7px 8px;min-width:0;width:100%;max-width:none}
 .sl-ba-qty{display:flex;align-items:center;gap:7px;padding:3px;border:1px solid var(--sl-line);border-radius:9px;background:var(--sl-surface)}
@@ -785,6 +797,25 @@ const CSS = `
   color:var(--sl-text);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;gap:7px}
 .sl-confirm-view:hover{border-color:var(--sl-muted)}
 .sl-confirm-view svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+
+/* commercial seat flags — limited-view caution + premium tag. Amber tone,
+   deliberately distinct from the red taken/held state; shown on the confirm
+   card, echoed as a small ◐ marker on cart chips and the hover tip. */
+.sl-cx{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.sl-cx-warn{display:flex;align-items:flex-start;gap:7px;padding:8px 10px;border-radius:9px;
+  background:color-mix(in srgb,#f4b740 13%,var(--sl-surface));border:1px solid color-mix(in srgb,#f4b740 40%,var(--sl-line));
+  animation:slNoticeIn .28s ease both}
+.sl-cx-glyph{flex:none;font-size:14px;line-height:1.2;color:#f4b740}
+.sl-cx-txt{min-width:0;display:flex;flex-direction:column;gap:2px}
+.sl-cx-txt b{font-size:12px;font-weight:800;color:var(--sl-text)}
+.sl-cx-note{font-size:11px;line-height:1.4;color:var(--sl-muted)}
+.sl-cx-premium{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;padding:4px 10px;border-radius:999px;
+  font-size:11px;font-weight:800;letter-spacing:.02em;color:#c9a24b;
+  background:color-mix(in srgb,#e8c15a 13%,var(--sl-surface));border:1px solid color-mix(in srgb,#e8c15a 38%,var(--sl-line))}
+.sl-cx-star{font-size:12px;line-height:1;color:#e8c15a}
+.sl-cx-mark{flex:none;font-size:12px;line-height:1;color:#f4b740;cursor:help}
+.sl-tip-cx{display:flex;align-items:center;gap:6px;padding:5px 10px 7px;font-size:10.5px;font-weight:700;color:#e8b24a}
+.sl-tip-cx .g{font-size:12px}
 
 /* 360° seat-view modal (fills the widget; drag-to-look-around equirectangular) */
 .sl-view{position:absolute;inset:0;z-index:12;display:flex;flex-direction:column;background:var(--sl-bg)}
@@ -932,6 +963,8 @@ export class SeatPicker {
   private srEl: HTMLDivElement | null = null;
   private baQty = 2;
   private baCat = '';
+  /** "★ Best seats" premium quick-pick toggle — biases best-available to premium seats. */
+  private baPremium = false;
   private bestAvailableConfirm = false;
   private releasingHold = false;
   /** Event sales window is closed (read-only load state / live close). */
@@ -1015,6 +1048,57 @@ export class SeatPicker {
       `</button>` +
       `<div class="sl-confirm-sight"><span aria-hidden="true">✓</span>${sight}</div>`
     );
+  }
+
+  /** Minimal HTML/attribute escaper for buyer-authored commercial text (notes). */
+  private escCx(value: unknown): string {
+    return String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]!));
+  }
+
+  /** Localized "Restricted view" / "Obstructed view" label for a seat's flags,
+   *  or '' when neither is set. Restricted takes precedence when both are on. */
+  private limitedViewLabel(c: SeatCommercialAttributes | undefined): string {
+    if (c?.restrictedView) return this.tf('picker.restrictedView', 'Restricted view');
+    if (c?.obstructedView) return this.tf('picker.obstructedView', 'Obstructed view');
+    return '';
+  }
+
+  /**
+   * Commercial flags block for the confirm/detail surface: a subtle ★ Premium
+   * tag plus an amber ◐ limited-view caution (with the organizer's note when
+   * present). '' when the seat carries no surfaced commercial flag.
+   */
+  private commercialConfirmHtml(c: SeatCommercialAttributes | undefined): string {
+    if (!c) return '';
+    const rows: string[] = [];
+    if (c.premium) {
+      rows.push(
+        `<div class="sl-cx-premium"><span class="sl-cx-star" aria-hidden="true">★</span>${this.tf('picker.premiumSeat', 'Premium seat')}</div>`,
+      );
+    }
+    const limited = this.limitedViewLabel(c);
+    if (limited) {
+      rows.push(
+        `<div class="sl-cx-warn"><span class="sl-cx-glyph" aria-hidden="true">◐</span>` +
+        `<span class="sl-cx-txt"><b>${limited}</b>${c.note ? `<span class="sl-cx-note">${this.escCx(c.note)}</span>` : ''}</span></div>`,
+      );
+    } else if (c.note) {
+      // A note with no view flag (e.g. seller info) still deserves a calm line.
+      rows.push(
+        `<div class="sl-cx-warn"><span class="sl-cx-glyph" aria-hidden="true">ℹ</span>` +
+        `<span class="sl-cx-txt"><span class="sl-cx-note">${this.escCx(c.note)}</span></span></div>`,
+      );
+    }
+    return rows.length ? `<div class="sl-cx">${rows.join('')}</div>` : '';
+  }
+
+  /** Small ◐ limited-view marker for a cart chip; title/aria uses the seat's
+   *  note when present, else the generic view label. '' for a clear-view seat. */
+  private commercialChipMarker(c: SeatCommercialAttributes | undefined): string {
+    const limited = this.limitedViewLabel(c);
+    if (!limited) return '';
+    const title = this.escCx(c?.note ? c.note : limited);
+    return `<span class="sl-cx-mark" role="img" aria-label="${title}" title="${title}">◐</span>`;
   }
 
   /** True when the picker is rendered inside an iframe (snippet embed at /e/:key). */
@@ -1538,60 +1622,88 @@ export class SeatPicker {
     this.buildBadge(chartTheme);
 
     // Accessibility filter chips — only for types actually present in the chart.
+    // Same sweep also detects whether ANY seat carries a limited-view (restricted
+    // or obstructed) commercial flag, which gates the "Hide limited-view seats"
+    // toggle that shares this chip row.
     const present = new Set<AccessibilityType>();
+    let hasLimitedView = false;
     if (this.controller.doc) {
       for (const seat of expandChart(this.controller.doc)) {
         for (const type of seat.accessibility ?? []) present.add(type);
         if (seat.accessible && !seat.accessibility?.length) present.add('wheelchair');
+        if (seat.commercial?.restrictedView || seat.commercial?.obstructedView) hasLimitedView = true;
       }
     }
-    if (present.size) {
+    // Jump to the seats rung when a dimming filter turns on — the dimming only
+    // renders at seat detail; applying it zoomed out would silently dim seats
+    // the buyer can't see. Shared by the a11y chips and the limited-view toggle.
+    const focusSeatsForFilter = (): void => {
+      if (this.rungsEl && this.controller.getRung() !== 'seats') {
+        this.controller.setRung('seats');
+        this.collapseSectionCard();
+        this.syncRung();
+      }
+    };
+    if (present.size || hasLimitedView) {
       const chips = document.createElement('div');
       chips.className = 'sl-chips';
-      const GLYPH: Partial<Record<AccessibilityType, string>> = { wheelchair: '♿', companion: '🧑‍🤝‍🧑' };
-      const mk = (key: AccessibilityType | 'all', label: string): string =>
-        `<button type="button" class="sl-chip-f${key === 'all' ? ' on' : ''}" data-f="${key}">${label}</button>`;
-      chips.innerHTML =
-        mk('all', 'All seats') +
-        [...present]
-          .map((type) => mk(type, `${GLYPH[type] ? GLYPH[type] + ' ' : ''}${type[0].toUpperCase()}${type.slice(1).replace(/-/g, ' ')}`))
-          .join('');
       this.regions['top-left'].appendChild(chips);
       this.a11yChipsEl = chips;
-      // Multi-select OR semantics (parity with the buyer page): each type chip
-      // toggles independently; the active filter is the union; "All seats"
-      // clears. A buyer needing wheelchair AND companion seats combines both.
-      const active = new Set<AccessibilityType>();
-      const syncChips = (): void => {
-        chips.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
-          const f = b.dataset.f as AccessibilityType | 'all';
-          const on = f === 'all' ? active.size === 0 : active.has(f);
-          b.classList.toggle('on', on);
-          b.setAttribute('aria-pressed', String(on));
+
+      if (present.size) {
+        const GLYPH: Partial<Record<AccessibilityType, string>> = { wheelchair: '♿', companion: '🧑‍🤝‍🧑' };
+        const mk = (key: AccessibilityType | 'all', label: string): string =>
+          `<button type="button" class="sl-chip-f${key === 'all' ? ' on' : ''}" data-a11y="1" data-f="${key}">${label}</button>`;
+        chips.insertAdjacentHTML('beforeend',
+          mk('all', 'All seats') +
+          [...present]
+            .map((type) => mk(type, `${GLYPH[type] ? GLYPH[type] + ' ' : ''}${type[0].toUpperCase()}${type.slice(1).replace(/-/g, ' ')}`))
+            .join(''));
+        // Multi-select OR semantics (parity with the buyer page): each type chip
+        // toggles independently; the active filter is the union; "All seats"
+        // clears. A buyer needing wheelchair AND companion seats combines both.
+        const active = new Set<AccessibilityType>();
+        const syncChips = (): void => {
+          chips.querySelectorAll<HTMLButtonElement>('button[data-a11y]').forEach((b) => {
+            const f = b.dataset.f as AccessibilityType | 'all';
+            const on = f === 'all' ? active.size === 0 : active.has(f);
+            b.classList.toggle('on', on);
+            b.setAttribute('aria-pressed', String(on));
+          });
+          const filter = active.size ? [...active] : null;
+          this.controller.setAccessibilityFilter(filter);
+          if (filter) focusSeatsForFilter();
+        };
+        chips.querySelectorAll<HTMLButtonElement>('button[data-a11y]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const f = btn.dataset.f as AccessibilityType | 'all';
+            if (f === 'all') active.clear();
+            else if (active.has(f)) active.delete(f);
+            else active.add(f);
+            syncChips();
+          });
         });
-        const filter = active.size ? [...active] : null;
-        this.controller.setAccessibilityFilter(filter);
-        // The accessibility filter dims/highlights individual SEAT dots, which
-        // only render at the 'seats' rung. Applying it from a zoomed-out rung
-        // (zones/sections) would silently dim seats the buyer can't see — so on
-        // activation jump straight to seat detail, where the matching seats
-        // stand out. Only when pills exist and we're not already there; never
-        // on clear (so "All seats" doesn't yank the zoom).
-        if (filter && this.rungsEl && this.controller.getRung() !== 'seats') {
-          this.controller.setRung('seats');
-          this.collapseSectionCard();
-          this.syncRung();
-        }
-      };
-      chips.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const f = btn.dataset.f as AccessibilityType | 'all';
-          if (f === 'all') active.clear();
-          else if (active.has(f)) active.delete(f);
-          else active.add(f);
-          syncChips();
+      }
+
+      // "Hide limited-view seats" toggle — one independent on/off chip that dims
+      // free seats flagged restricted/obstructed view (same chip pattern, sits
+      // beside the a11y chips). Isolated from the a11y OR-union above.
+      if (hasLimitedView) {
+        const limited = document.createElement('button');
+        limited.type = 'button';
+        limited.className = 'sl-chip-f';
+        limited.setAttribute('aria-pressed', 'false');
+        limited.innerHTML = `◐ ${this.tf('picker.hideLimitedView', 'Hide limited-view seats')}`;
+        chips.appendChild(limited);
+        let limitedOn = false;
+        limited.addEventListener('click', () => {
+          limitedOn = !limitedOn;
+          limited.classList.toggle('on', limitedOn);
+          limited.setAttribute('aria-pressed', String(limitedOn));
+          this.controller.setCommercialLimitedFilter(limitedOn);
+          if (limitedOn) focusSeatsForFilter();
         });
-      });
+      }
     }
 
     // Colorblind-safe toggle rides in the zoom column (wide) or the sheet's
@@ -2478,6 +2590,9 @@ export class SeatPicker {
         xBtn + `</div>` +
         `<div class="sl-seccard-zone">${summary.zoneLabel ? `${summary.zoneLabel} · ` : ''}` +
         `<span class="sl-seccard-left">${leftLabel}</span></div>` +
+        (summary.entrance
+          ? `<div class="sl-seccard-entrance">${t('picker.entrance')} ${String(summary.entrance).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]!))}</div>`
+          : '') +
         (mix ? `<div class="sl-seccard-mix">${mix}</div>` : '') +
         `<div class="sl-seccard-foot">` +
         `<button type="button" class="sl-seccard-overview">← ${t('picker.overview')}</button>` +
@@ -2585,13 +2700,14 @@ export class SeatPicker {
     el.innerHTML =
       `<div class="sl-confirm-grid">` +
       `<div class="sl-confirm-field"><span class="sl-confirm-key">Section</span><span class="sl-confirm-value">${safe(details?.sectionLabel)}</span></div>` +
-      `<div class="sl-confirm-field"><span class="sl-confirm-key">Row</span><span class="sl-confirm-value">${safe(this.rowShort(details))}</span></div>` +
-      `<div class="sl-confirm-field"><span class="sl-confirm-key">Seat</span><span class="sl-confirm-value">${safe(details?.seatNumber ?? seat.label)}</span></div>` +
+      `<div class="sl-confirm-field"><span class="sl-confirm-key">${safe(this.rowTypeWord(details))}</span><span class="sl-confirm-value">${safe(this.rowShort(details))}</span></div>` +
+      `<div class="sl-confirm-field"><span class="sl-confirm-key">Seat</span><span class="sl-confirm-value">${safe(details?.seatNumber ?? seat.displayLabel ?? seat.label)}</span></div>` +
       `</div>` +
       `<div class="sl-confirm-cat"><span class="sl-dot" style="background:${cat?.color ?? '#6e7bff'}"></span>` +
       `<span class="sl-confirm-cat-name">${safe(details?.categoryLabel ?? cat?.label ?? seat.categoryKey)}</span>` +
       (price != null ? `<span class="sl-confirm-price">${this.money(price)}</span>` : '') + `</div>` +
       `<div class="sl-confirm-body">` +
+      this.commercialConfirmHtml(seat.commercial) +
       (this.seatViewEnabled() ? this.confirmThumbHtml(seat) : '') +
       `<div class="sl-confirm-row">` +
       `<button type="button" class="sl-confirm-cancel">Cancel</button>` +
@@ -2991,6 +3107,12 @@ export class SeatPicker {
           `<div class="sl-ba-title"><span class="spark" aria-hidden="true">✦</span>Find the best seats together</div>` +
           `<div class="sl-ba-copy"><span class="wide">We’ll choose the closest available group for you.</span>` +
           `<span class="narrow">Closest available group, chosen instantly.</span></div>` +
+          // Premium quick-pick — present only when the chart actually has premium
+          // seats (same present-only philosophy as the a11y filter chips).
+          (this.controller.hasPremiumSeats()
+            ? `<button type="button" class="sl-ba-premium${this.baPremium ? ' on' : ''}" data-ba-premium aria-pressed="${this.baPremium ? 'true' : 'false'}">` +
+              `<span class="star" aria-hidden="true">★</span>${this.tf('picker.bestSeatsPremium', 'Best seats')}</button>`
+            : '') +
           (cats.length > 1
             ? `<select aria-label="Preferred ticket type" data-ba-cat>` +
               `<option value="">Any ticket type</option>` +
@@ -3022,7 +3144,7 @@ export class SeatPicker {
       return (
         `<div class="sl-chip-id">` +
         `<span class="fld sec"><span class="sl-chip-eb">Section</span><span class="val">${d.sectionLabel ?? '—'}</span></span>` +
-        (d.rowLabel ? `<span class="fld mid"><span class="sl-chip-eb">Row</span><span class="val">${this.rowShort(d)}</span></span>` : '') +
+        (d.rowLabel ? `<span class="fld mid"><span class="sl-chip-eb">${this.rowTypeWord(d)}</span><span class="val">${this.rowShort(d)}</span></span>` : '') +
         (d.seatNumber ? `<span class="fld mid"><span class="sl-chip-eb">Seat</span><span class="val">${d.seatNumber}</span></span>` : '') +
         `</div>`
       );
@@ -3053,6 +3175,7 @@ export class SeatPicker {
           `<span class="sl-ticket-state held" aria-label="Held for you" title="Held for you">` +
           `<svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>` +
           `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>` +
+          this.commercialChipMarker(heldSeat?.commercial) +
           `<span class="amt">${this.money(this.paidPrice(item.categoryKey, item.tierId, item.unitPrice) * (item.quantity ?? 1))}</span>` +
           `</div></div>` +
           iconRail(`Remove held ticket ${item.label}`, canView ? item.label : null) +
@@ -3077,11 +3200,11 @@ export class SeatPicker {
       parts.push(
         `<div class="sl-chip${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-seat="${s.id}" data-locate="${s.id}">` +
           `<div class="sl-chip-main">` +
-          idGrid(s.id, s.label) +
+          idGrid(s.id, s.displayLabel ?? s.label) +
           `<div class="sl-chip-sub">` +
           `<span class="sl-ticket-state" aria-label="Selected" title="Selected">` +
           `<svg viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></svg></span>` +
-          `<span class="cat">${cat?.label ?? s.categoryKey}</span>${tierSelect}` +
+          `<span class="cat">${cat?.label ?? s.categoryKey}</span>${this.commercialChipMarker(s.commercial)}${tierSelect}` +
           `<span class="amt">${this.money(this.paidPrice(s.categoryKey, s.tierId ?? null, s.price))}</span>` +
           `</div></div>` +
           iconRail(`Remove ${s.label}`, canView ? s.label : null) +
@@ -3112,6 +3235,10 @@ export class SeatPicker {
     this.els.tray.querySelector<HTMLSelectElement>('[data-ba-cat]')?.addEventListener('change', (e) => {
       this.baCat = (e.target as HTMLSelectElement).value;
     });
+    this.els.tray.querySelector<HTMLButtonElement>('[data-ba-premium]')?.addEventListener('click', () => {
+      this.baPremium = !this.baPremium;
+      this.syncTray();
+    });
     this.els.tray.querySelector<HTMLButtonElement>('.sl-ba-go')?.addEventListener('click', () => {
       if (this.pendingSelectionCount() > 0) {
         this.bestAvailableConfirm = true;
@@ -3119,7 +3246,7 @@ export class SeatPicker {
         this.els.tray.querySelector<HTMLButtonElement>('[data-ba-replace]')?.focus();
         return;
       }
-      void this.bestAvailable(this.baQty, this.baCat || undefined);
+      void this.bestAvailable(this.baQty, this.baCat || undefined, { preferPremium: this.baPremium });
     });
     this.els.tray.querySelector<HTMLButtonElement>('[data-ba-cancel]')?.addEventListener('click', () => {
       this.bestAvailableConfirm = false;
@@ -3128,7 +3255,7 @@ export class SeatPicker {
     });
     this.els.tray.querySelector<HTMLButtonElement>('[data-ba-replace]')?.addEventListener('click', () => {
       this.bestAvailableConfirm = false;
-      void this.bestAvailable(this.baQty, this.baCat || undefined);
+      void this.bestAvailable(this.baQty, this.baCat || undefined, { preferPremium: this.baPremium });
     });
     this.els.tray.querySelectorAll<HTMLElement>('.sl-chip .rm').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -3584,6 +3711,13 @@ export class SeatPicker {
    * the prefix is exact (won't touch "1040-A" under section "104"); otherwise
    * the label is shown verbatim.
    */
+  /** Buyer-facing type word for the row/table key label — the designer's
+   *  per-object "Displayed type" override, or the default "Row". */
+  private rowTypeWord(details: { rowType?: string } | null | undefined): string {
+    const t = details?.rowType?.trim();
+    return t || 'Row';
+  }
+
   private rowShort(details: { sectionLabel?: string; rowLabel?: string } | null | undefined): string | undefined {
     const row = details?.rowLabel;
     const sec = details?.sectionLabel;
@@ -3611,20 +3745,25 @@ export class SeatPicker {
     const grid = hasLoc
       ? `<div class="sl-tip-grid">` +
         `<div class="sl-tip-field"><span class="sl-tip-key">Section</span><span class="sl-tip-val">${esc(details.sectionLabel)}</span></div>` +
-        `<div class="sl-tip-field"><span class="sl-tip-key">Row</span><span class="sl-tip-val">${esc(this.rowShort(details))}</span></div>` +
-        `<div class="sl-tip-field"><span class="sl-tip-key">Seat</span><span class="sl-tip-val">${esc(details.seatNumber ?? details.label)}</span></div>` +
+        `<div class="sl-tip-field"><span class="sl-tip-key">${esc(this.rowTypeWord(details))}</span><span class="sl-tip-val">${esc(this.rowShort(details))}</span></div>` +
+        `<div class="sl-tip-field"><span class="sl-tip-key">Seat</span><span class="sl-tip-val">${esc(details.seatNumber ?? details.displayLabel ?? details.label)}</span></div>` +
         `</div>`
-      : `<div class="sl-tip-grid one"><div class="sl-tip-field"><span class="sl-tip-key">Seat</span><span class="sl-tip-val">${esc(details.label)}</span></div></div>`;
+      : `<div class="sl-tip-grid one"><div class="sl-tip-field"><span class="sl-tip-key">Seat</span><span class="sl-tip-val">${esc(details.displayLabel ?? details.label)}</span></div></div>`;
     const statusLine =
       details.status === 'free'
         ? ''
         : `<div class="sl-tip-status">${details.status === 'held' ? t('map.statusHeld') : t('map.statusTaken')}</div>`;
+    const limited = this.limitedViewLabel(details.commercial);
+    const cxLine = limited
+      ? `<div class="sl-tip-cx"><span class="g" aria-hidden="true">◐</span>${esc(limited)}</div>`
+      : '';
     this.tipEl.style.setProperty('--sl-cat', details.categoryColor);
     this.tipEl.innerHTML =
       grid +
       `<div class="sl-tip-cat"><span class="sl-tip-dot" style="background:${details.categoryColor}"></span>` +
       `<span class="sl-tip-name">${esc(details.categoryLabel)}</span>` +
       `<span class="sl-tip-amt">${price}</span></div>` +
+      cxLine +
       statusLine;
     this.tipEl.style.display = 'block';
     this.placeTooltip();
@@ -3651,7 +3790,11 @@ export class SeatPicker {
     return this.removeHeldLabel(label);
   }
 
-  async bestAvailable(qty: number, categoryKey?: string): Promise<HoldResult | null> {
+  async bestAvailable(
+    qty: number,
+    categoryKey?: string,
+    opts: { preferPremium?: boolean } = {},
+  ): Promise<HoldResult | null> {
     if (this.salesClosed || this.bestAvailableBusy) return null;
     qty = Math.max(1, Math.min(this.maxTickets, Math.floor(qty)));
     if (this.confirmSeat) this.cancelConfirm();
@@ -3663,7 +3806,7 @@ export class SeatPicker {
       button.innerHTML = '<span class="sl-ba-spin" aria-hidden="true"></span>Finding…';
     }
     try {
-      const h = await this.controller.bestAvailable(qty, categoryKey);
+      const h = await this.controller.bestAvailable(qty, categoryKey, opts);
       if (h) {
         this.hold = { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items };
         this.handedOff = false;
@@ -3673,6 +3816,11 @@ export class SeatPicker {
         this.flashHeldSeats(this.hold);
         this.syncTray();
         this.emitHoldChange();
+        // Premium quick-pick asked for a premium block but no full block of
+        // `qty` existed → we held the best overall instead. Surface a subtle note.
+        if (opts.preferPremium && h.seats.length && !h.seats.every((s) => s.commercial?.premium)) {
+          this.toast(t('picker.premiumFallbackNote', { count: qty }), 'neutral');
+        }
         return this.hold;
       }
       return null;

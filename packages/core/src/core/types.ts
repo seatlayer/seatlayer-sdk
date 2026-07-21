@@ -262,6 +262,12 @@ export interface RowObject {
   label: string;
   /** Buyer-facing row name. `label` remains the legacy inventory prefix. */
   displayLabel?: string;
+  /**
+   * Buyer-facing type word override (seats.io "Displayed type"). Replaces the
+   * hardcoded "Row" in the picker tooltip/confirm/cart, e.g. "Table", "Bench",
+   * "Aisle". ≤24 chars; absent = the default "Row". Pure presentation.
+   */
+  displayType?: string;
   labelPresentation?: LabelPresentation;
   /** Position of the FIRST seat. */
   origin: Point;
@@ -366,6 +372,9 @@ export interface GAAreaObject {
   type: 'gaArea';
   id: string;
   label: string;
+  /** Buyer-facing type word override (seats.io "Displayed type"), ≤24 chars.
+   * Absent = the default type word. Pure presentation. */
+  displayType?: string;
   /** Closed polygon, in chart units. */
   points: Point[];
   /** Explicit aisles/pillars/cutouts excluded from the sellable GA surface. */
@@ -459,6 +468,9 @@ export interface TableObject {
   id: string;
   /** e.g. "T1" — seat labels are `${label}-${n}`. */
   label: string;
+  /** Buyer-facing type word override (seats.io "Displayed type"), ≤24 chars.
+   * Absent = the default "Row"/"Table" word. Pure presentation. */
+  displayType?: string;
   center: Point;
   shape: 'round' | 'rect';
   /** Seats around the perimeter (round) or along the enabled edges (rect). */
@@ -489,6 +501,9 @@ export interface BoothObject {
   type: 'booth';
   id: string;
   label: string;
+  /** Buyer-facing type word override (seats.io "Displayed type"), ≤24 chars.
+   * Absent = the default type word. Pure presentation. */
+  displayType?: string;
   center: Point;
   width: number;
   height: number;
@@ -510,6 +525,11 @@ export interface SectionObject {
   label: string;
   /** Buyer-facing section name; logical/id fields remain stable. */
   displayLabel?: string;
+  /**
+   * Buyer-facing entrance/door hint shown in the picker section card
+   * ("Entrance X"). ≤40 chars; absent = no entrance line. Pure presentation.
+   */
+  entrance?: string;
   labelPresentation?: LabelPresentation;
   /**
    * Stable management/inventory identity shared by disconnected visual

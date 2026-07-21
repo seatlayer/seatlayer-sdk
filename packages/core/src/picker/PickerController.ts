@@ -70,6 +70,9 @@ export interface SeatHoverDetails extends PickerSeat {
   sectionLabel?: string;
   rowLabel?: string;
   seatNumber?: string;
+  /** Buyer-facing type word for the row/table (seats.io "Displayed type"),
+   *  overriding the default "Row" in tooltip/confirm/cart. Absent = "Row". */
+  rowType?: string;
 }
 
 export interface HoldConflict {
@@ -107,6 +110,8 @@ export interface SectionSummary {
   label: string;
   /** Zone label (from ChartDoc.zones); '' when the section has no zone. */
   zoneLabel: string;
+  /** Buyer-facing entrance/door hint ("Entrance X"); absent when unset. */
+  entrance?: string;
   /** Mix/section colour for the card's dot (section.color → zone colour → dominant category). */
   color: string;
   /** Free member seats right now. */
@@ -258,7 +263,7 @@ export class PickerController {
   /** id → seat, for the section-summary breakdown (renderer members are ids). */
   private seatById = new Map<string, ExpandedSeat>();
   /** id → buyer-facing spatial metadata used by every tooltip/confirm surface. */
-  private seatContext = new Map<string, { sectionLabel?: string; rowLabel?: string; seatNumber?: string }>();
+  private seatContext = new Map<string, { sectionLabel?: string; rowLabel?: string; seatNumber?: string; rowType?: string }>();
   private allIds: string[] = [];
 
   // realtime socket
@@ -377,6 +382,11 @@ export class PickerController {
         ? source.displayLabel
         : sourceLabel;
       const rowLabel = s.kind === 'booth' ? undefined : sourceDisplayLabel;
+      // Buyer-facing type word override (seats.io "Displayed type") — replaces the
+      // default "Row" in tooltip/confirm/cart for rows and tables when set.
+      const rowType = source && 'displayType' in source && typeof source.displayType === 'string' && source.displayType.trim()
+        ? source.displayType.trim()
+        : undefined;
       // Seat number is read off the buyer-facing seat label so a renamed row shows
       // the buyer copy; both labels share the same `${prefix}-${number}` suffix.
       const visibleSeatLabel = s.displayLabel ?? s.label;
@@ -390,6 +400,7 @@ export class PickerController {
         sectionLabel: sectionLabels.get(membership.objectToSection.get(s.rowId) ?? ''),
         rowLabel,
         seatNumber,
+        rowType,
       });
     }
 
@@ -1108,6 +1119,7 @@ export class PickerController {
       id,
       label: sec.label,
       zoneLabel: zone?.label ?? '',
+      ...(sec.entrance && sec.entrance.trim() ? { entrance: sec.entrance.trim() } : {}),
       color,
       seatsLeft,
       priceMin: prices.length ? prices[0] : 0,

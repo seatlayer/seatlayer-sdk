@@ -40,6 +40,7 @@ export const es: Dict = {
   'picker.seatsLeftInSection.one': '{count} asiento disponible',
   'picker.seatsLeftInSection.other': '{count} asientos disponibles',
   'picker.overview': 'Descripción general',
+  'picker.entrance': 'Entrada',
   'picker.tapSeatHint': 'Toca cualquier asiento para ver su vista',
   'picker.ticketTierFor': 'Categoría de entrada para {label}',
   'picker.viewFromSeat': 'Vista desde el asiento {label}',

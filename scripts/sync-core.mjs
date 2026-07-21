@@ -39,6 +39,10 @@ const FILES = [
   ['src/core/complexGeometry.ts', 'packages/core/src/core/complexGeometry.ts'],
   ['src/core/sectionPath.ts', 'packages/core/src/core/sectionPath.ts'],
   ['src/core/chartRenderRules.ts', 'packages/core/src/core/chartRenderRules.ts'],
+  // Rendered-quality inspection: turns a renderer's quality evidence into a
+  // structured report. Depends only on chartRenderRules + types (both above).
+  // Consumed by the CDN-only headless review entry (cdn/src/ChartDocumentPreview).
+  ['src/core/renderedQuality.ts', 'packages/core/src/core/renderedQuality.ts'],
   ['src/core/layout.ts', 'packages/core/src/core/layout.ts'],
   ['src/core/labeling.ts', 'packages/core/src/core/labeling.ts'],
   ['src/core/bestAvailable.ts', 'packages/core/src/core/bestAvailable.ts'],
@@ -66,9 +70,37 @@ const FILES = [
 if (!existsSync(appRepo)) {
   const msg = `Main app repo not found at ${appRepo}. Set SEATMAP_REPO to override.`;
   // In --check mode this is a soft skip (e.g. CI without the private app repo);
-  // the guard only enforces when the app is actually available locally.
+  // the guard only enforces when the app is actually available locally. Make
+  // this UNMISTAKABLE in CI logs — a vacuous pass here must never look like a
+  // real verification. The actual drift guard for this scenario lives on the
+  // app side (app CI clones this public repo and runs this same --check with
+  // SEATMAP_REPO pointed at itself, where both repos ARE reachable).
   if (CHECK) {
-    console.log(`ⓘ sync check skipped — ${msg}`);
+    console.log('');
+    console.log('⚠️⚠️⚠️  ENGINE SYNC CHECK SKIPPED — NOTHING WAS VERIFIED  ⚠️⚠️⚠️');
+    console.log(`⚠️  ${msg}`);
+    console.log('⚠️  This is a VACUOUS PASS, not a real check of @seatlayer/core');
+    console.log('⚠️  against the app engine. A stale/drifted engine could ship');
+    console.log('⚠️  right now and this step would still be green.');
+    console.log('⚠️  The real drift guard runs in the APP repo CI (it clones this');
+    console.log('⚠️  public SDK repo and runs this same --check the other way).');
+    console.log('⚠️⚠️⚠️  ENGINE SYNC CHECK SKIPPED — NOTHING WAS VERIFIED  ⚠️⚠️⚠️');
+    console.log('');
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      writeFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        [
+          '## ⚠️ Engine sync check SKIPPED — nothing was verified',
+          '',
+          `${msg}`,
+          '',
+          'This is a vacuous pass, not a real comparison against the app engine.',
+          'The real drift guard runs in the **app** repo CI.',
+          '',
+        ].join('\n'),
+        { flag: 'a' },
+      );
+    }
     process.exit(0);
   }
   console.error(`✘ ${msg}`);

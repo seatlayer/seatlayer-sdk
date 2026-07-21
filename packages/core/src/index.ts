@@ -10,6 +10,7 @@ export * from './core/types';
 export * from './core/layout';
 export * from './core/ga';
 export * from './core/sections';
+export * from './core/renderedQuality';
 export * from './engine/SeatmapRenderer';
 export * from './picker/PickerController';
 export * from './view/generatePanorama';

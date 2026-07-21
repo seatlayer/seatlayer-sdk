@@ -2,7 +2,8 @@ name: Release npm + CDN
 
 # One tag is one release across all npm packages and both CDN channels. The
 # immutable CDN version must be live and hash-verified before npm is allowed to
-# publish. The mutable /sdk/v1 alias is promoted only after npm succeeds.
+# publish. The mutable seatlayer-js@<major> channel moves only after npm
+# succeeds — and it moves by publishing -/versions.json, not by copying bytes.
 on:
   push:
     tags: ['v*']
@@ -60,11 +61,14 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
           RELEASE_PUBLISH_CONFIRMED: '1'
-      - name: Promote the v1 CDN alias
-        run: pnpm cdn:promote:v1
+      # Publishing the version index is the promotion: the Worker resolves
+      # seatlayer-js@<major> by reading it and 302-ing to the pinned URL that
+      # was already verified live above.
+      - name: Promote the mutable CDN channel (publish -/versions.json)
+        run: pnpm cdn:promote
         env:
           CDN_UPLOAD_CONFIRMED: '1'
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Verify npm-synchronized CDN alias
+      - name: Verify the alias redirects to the freshly published version
         run: pnpm verify:cdn:remote full

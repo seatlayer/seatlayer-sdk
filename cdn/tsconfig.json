@@ -1,0 +1,20 @@
+{
+  // The CDN entry is not a workspace package (it is never published to npm), so
+  // `pnpm -r typecheck` does not reach it. Without this project the CDN-only
+  // sources — notably ChartDocumentPreview.ts — would be bundled by vite with no
+  // type checking at all. Root `pnpm typecheck` runs this project too.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "types": [],
+    // Mirror the vite alias so the CDN build and the type check resolve the
+    // exact same core/js sources.
+    "baseUrl": "..",
+    "paths": {
+      "@seatlayer/core": ["packages/core/src/index.ts"],
+      "@seatlayer/js": ["packages/js/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "../packages/core/src/env.d.ts"]
+}

@@ -3,7 +3,9 @@ import { defineConfig } from 'vite';
 import jsPackage from '../packages/js/package.json';
 
 const version = jsPackage.version;
-const releaseDir = resolve(__dirname, `dist/sdk/v${version}`);
+// Canonical CDN namespace: /seatlayer-js@<x.y.z>/seatlayer.js. The filename is
+// constant across versions so upgrading is a one-token edit. See cdn/src/worker.mjs.
+const releaseDir = resolve(__dirname, `dist/seatlayer-js@${version}`);
 
 export default defineConfig({
   define: {

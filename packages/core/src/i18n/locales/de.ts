@@ -44,6 +44,7 @@ export const de: Dict = {
   'picker.seatsLeftInSection.one': '{count} Platz verfügbar',
   'picker.seatsLeftInSection.other': '{count} Plätze verfügbar',
   'picker.overview': 'Übersicht',
+  'picker.entrance': 'Eingang',
   'picker.tapSeatHint': 'Tippen Sie auf einen Platz, um die Ansicht zu prüfen',
   'picker.ticketTierFor': 'Ticketklasse für {label}',
   'picker.viewFromSeat': 'Ansicht von Platz {label}',
