@@ -52,6 +52,19 @@ export function isBookableLabelLegibleAtScale(fontSize: number, effectiveScale: 
   return fontSize * effectiveScale >= MIN_VISIBLE_BOOKABLE_LABEL_PX;
 }
 
+/** Square viewBox the {@link ACCESS_GLYPH_PATH} coordinates live in. */
+export const ACCESS_GLYPH_VIEWBOX = 24;
+/**
+ * Accessibility pictogram drawn centred on accessible seats — the widely
+ * recognised "person" access symbol, as a single filled vector path. A vector
+ * path renders crisply at small sizes on every platform, unlike the ♿ colour
+ * emoji whose canvas metrics/alignment are inconsistent cross-browser. The
+ * coloured ring around the seat still encodes the specific accommodation type,
+ * so buyer and designer show the same marker (shared via this constant).
+ */
+export const ACCESS_GLYPH_PATH =
+  'M12 2c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm9 7h-6v13h-2v-6h-2v6H9V9H3V7h18v2z';
+
 /**
  * Keep the public seat label as the inventory identity while rendering only
  * its terminal seat number inside the physical marker. Generated row seats use

@@ -212,6 +212,16 @@ export interface LabelPresentation {
   style?: 'plain' | 'pill';
   /** Per-object size/color override for this row's or section's label. */
   labelStyle?: LabelStyle;
+  /**
+   * End-position preset for a ROW label — which end(s) of the row show it:
+   *  - `start` (default/undefined) — the row's numbering-start end (legacy behaviour).
+   *  - `end`   — the far end of the row.
+   *  - `both`  — a label at BOTH ends.
+   *  - `none`  — hidden (kept coherent with `visible: false`).
+   * A free-drag `position` overrides the preset (the designer shows a 'custom'
+   * state). Ignored for sections (they use `position`/`visible` only).
+   */
+  positionPreset?: 'start' | 'end' | 'both' | 'none';
 }
 
 /** Brand/venue theming — applied by the renderer in both designer and picker. */
@@ -299,15 +309,42 @@ export interface RowObject {
     rowIndex: number;
     segmentIndex: number;
   };
-  /** First seat number (default 1). */
+  /** First seat number (default 1). Roman/letters read it as a 1-based ordinal
+   *  (start 1 → I / A). */
   seatLabelStart?: number;
-  /** Seat numbering within the row (default ltr, step 1). */
+  /** Seat numbering within the row (default decimal, ltr, step 1). */
   seatNumbering?: {
     /** ltr / rtl number from an end; `center` numbers outward from the middle
      *  (centre seat lowest — the premium-centre theatre convention). */
     direction: 'ltr' | 'rtl' | 'center';
     /** 2 = odd/even numbering (1,3,5… — start at 2 for evens). */
     step?: 1 | 2;
+    /**
+     * Label scheme for the seat NUMBER part (the row prefix is separate).
+     * Default `decimal`. Composition with `direction`/`step`/`seatLabelStart`:
+     *  - `decimal`      1,2,3         — honours direction + step + start.
+     *  - `odd`          1,3,5         — odd numbers from the first odd ≥ start.
+     *  - `even`         2,4,6         — even numbers from the first even ≥ start.
+     *  - `updown`       1,3,5,…,6,4,2 — odd-up-even-back; REPLACES direction (uses
+     *                                   physical left→right order); start shifts.
+     *  - `roman`        I,II,III      — honours direction + step + start (uppercase).
+     *  - `letters-upper` A,B,C…Z,AA   — honours direction + step + start.
+     *  - `letters-lower` a,b,c…z,aa   — honours direction + step + start.
+     * Like `step`/`direction` today, the scheme changes the seat's inventory
+     * label (its booking identity), by design.
+     */
+    scheme?: 'decimal' | 'odd' | 'even' | 'updown' | 'roman' | 'letters-upper' | 'letters-lower';
+    /** Optional prefix prepended to every seat number, e.g. 'R' → 'R1', 'R2'. */
+    prefix?: string;
+    /**
+     * End-at preset ("useEndAt"): the row's numbering ENDS at this value instead
+     * of starting at `seatLabelStart`. The start is derived so the last-numbered
+     * seat (highest position rank) lands on `endAt`, respecting the scheme's step
+     * (odd/even = 2). When set it WINS over the stored `seatLabelStart` (which is
+     * left untouched). For letters it is a 1-based number index (26 → last seat
+     * 'Z'); `updown` owns its own sequence and ignores `endAt`.
+     */
+    endAt?: number;
   };
   /**
    * Per-seat exceptions, keyed by seat index (0-based position in the row).

@@ -19,6 +19,7 @@ import { Rect } from 'konva/lib/shapes/Rect';
 import { Ellipse } from 'konva/lib/shapes/Ellipse';
 import { Line } from 'konva/lib/shapes/Line';
 import { Text } from 'konva/lib/shapes/Text';
+import { Path } from 'konva/lib/shapes/Path';
 import { Image as KImage } from 'konva/lib/shapes/Image';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { Shape } from 'konva/lib/Shape';
@@ -43,6 +44,8 @@ import type {
 import { accessibilityRingColor } from '../core/types';
 import { chartBounds, expandChart, floorsOf, pointInPolygonWithHoles, polygonLabelPoint, stackFloors } from '../core/layout';
 import {
+  ACCESS_GLYPH_PATH,
+  ACCESS_GLYPH_VIEWBOX,
   BOOTH_LABEL_FONT_SIZE,
   GA_CAPACITY_LABEL_FONT_SIZE,
   GA_FILL_OPACITY,
@@ -69,6 +72,12 @@ const MIN_FITTED_SEAT_LABEL_FONT_SIZE = 4;
  *  it. Gives small seats a finger-friendly hit target (§4 "hit ≥ 24px") so a
  *  near-miss on mobile still selects the nearest seat instead of doing nothing. */
 const SEAT_TAP_SLOP_PX = 14;
+/**
+ * Min effective on-screen seat radius (CSS px) at which the accessibility glyph
+ * becomes legible and is drawn centred on the seat. Below this the seat is too
+ * small for a symbol, so the coloured ring alone carries the accommodation.
+ */
+const SEAT_GLYPH_MIN_PX = 6.5;
 /** At/below this scale, sections read as clean labelled shells (seats hidden). */
 const SECTION_PROMINENT_SCALE = 0.45 * SEAT_LEGIBLE_SCALE;
 /**
@@ -544,6 +553,15 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private boothLabelById = new Map<string, Text>();
   /** Viewport seat labels are rebuilt after each settled camera change. */
   private seatLabelById = new Map<string, Text>();
+  /** Coloured accommodation ring per accessible seat (few per chart). */
+  private accessRingById = new Map<string, Circle>();
+  /** Centred accessibility glyph per accessible seat — shown once the seat is
+   *  big enough on-screen (see {@link SEAT_GLYPH_MIN_PX}); the ring is the
+   *  smaller-zoom fallback. Kept in a map so zoom toggles touch only the handful
+   *  of accessible seats, never all 13k nodes. */
+  private accessGlyphById = new Map<string, Path>();
+  /** Whether the accessibility glyph is legible at the current camera scale. */
+  private accessGlyphVisible = false;
   /** Authored free-text nodes obey the same rendered-size visibility floor. */
   private freeTextById = new Map<string, {
     objectId?: string;
@@ -779,6 +797,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.boothDims.clear();
     this.boothLabelById.clear();
     this.seatLabelById.clear();
+    this.accessRingById.clear();
+    this.accessGlyphById.clear();
     this.freeTextById.clear();
     this.primaryFocalLabels.clear();
     this.gaById.clear();
@@ -1838,21 +1858,26 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       this.circleById.set(seat.id, c);
       this.paintSeat(c, seat.id);
       target.add(c);
-      // Accessible seats get a static 2px outer ring, coloured by their primary
-      // accommodation (few per chart, so the extra node is cheap).
+      // Accessible seats get two markers (few per chart, so the extra nodes are
+      // cheap): a colour-coded accommodation ring, plus a centred glyph revealed
+      // once the seat is big enough on-screen. The ring is the small-zoom
+      // fallback, so it is drawn a touch thicker/wider to stay perceptible there.
       if (seat.accessible) {
-        target.add(
-          new Circle({
-            x: seat.x,
-            y: seat.y,
-            radius: this.seatR + 1,
-            stroke: accessibilityRingColor(seat.accessibility),
-            strokeWidth: 2,
-            listening: false,
-            perfectDrawEnabled: false,
-            shadowForStrokeEnabled: false,
-          }),
-        );
+        const ring = new Circle({
+          x: seat.x,
+          y: seat.y,
+          radius: this.seatR + 1.5,
+          stroke: accessibilityRingColor(seat.accessibility),
+          strokeWidth: 2.5,
+          listening: false,
+          perfectDrawEnabled: false,
+          shadowForStrokeEnabled: false,
+        });
+        this.accessRingById.set(seat.id, ring);
+        target.add(ring);
+        const glyph = this.buildAccessGlyph(seat, typeof c.fill() === 'string' ? (c.fill() as string) : '');
+        this.accessGlyphById.set(seat.id, glyph);
+        target.add(glyph);
       }
     }
   }
@@ -1897,6 +1922,56 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.boothLabelById.set(seat.id, t);
     target.add(t);
     this.paintSeat(rect, seat.id);
+  }
+
+  /**
+   * Build the centred accessibility glyph for a seat. Sized relative to the seat
+   * radius (so it always fills the marker at any zoom) and given a contrast-aware
+   * fill against the seat's paint — recomputed per state in {@link paintSeat}.
+   */
+  private buildAccessGlyph(seat: ExpandedSeat, seatFill: string): Path {
+    const k = (this.seatR * 1.5) / ACCESS_GLYPH_VIEWBOX;
+    return new Path({
+      x: seat.x,
+      y: seat.y,
+      data: ACCESS_GLYPH_PATH,
+      offsetX: ACCESS_GLYPH_VIEWBOX / 2,
+      offsetY: ACCESS_GLYPH_VIEWBOX / 2,
+      scaleX: k,
+      scaleY: k,
+      fill: stateAwareBookableLabelInk(seatFill, '#ffffff'),
+      listening: false,
+      visible: this.accessGlyphVisible,
+      perfectDrawEnabled: false,
+      shadowForStrokeEnabled: false,
+    });
+  }
+
+  /**
+   * Toggle the accessibility glyphs for the current camera scale: shown once the
+   * effective on-screen seat radius clears {@link SEAT_GLYPH_MIN_PX}, otherwise
+   * hidden so only the ring remains. Iterates the (small) accessible-seat set,
+   * never the full node graph, so it is cheap to call on every view change.
+   */
+  private updateAccessGlyphs(scale: number): void {
+    if (!this.accessGlyphById.size) return;
+    this.accessGlyphVisible = this.seatR * scale >= SEAT_GLYPH_MIN_PX;
+    for (const [id, glyph] of this.accessGlyphById) {
+      glyph.visible(this.accessGlyphVisible && this.accessGlyphEligible(id));
+    }
+  }
+
+  /**
+   * Whether an accessible seat's glyph should show for its current status. It is
+   * hidden on seats a buyer cannot take (sold, or another buyer's hold) where the
+   * overlay status cue (diagonal mark / lock) carries the state instead — mirrors
+   * the `unavailable` test in {@link updateLabels} so the two never collide.
+   */
+  private accessGlyphEligible(id: string): boolean {
+    const status = this.statusById.get(id) ?? 'free';
+    if (status === 'booked') return false;
+    if (status === 'held' && !this.ownedHold.has(id) && !this.opts.manageMode) return false;
+    return true;
   }
 
   /** The category's display color — Okabe-Ito hue when colorblind-safe is on. */
@@ -2054,6 +2129,18 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         && c.opacity() >= 0.5,
       );
     }
+    // Keep the accessibility markers composed with the seat's final paint: the
+    // glyph re-contrasts against the current fill (legible on any state incl.
+    // colorblind hues), and both markers inherit the seat's opacity so filter/
+    // focus dimming carries through instead of leaving a bright ring behind.
+    const accessGlyph = this.accessGlyphById.get(id);
+    if (accessGlyph) {
+      const fill = c.fill();
+      accessGlyph.fill(stateAwareBookableLabelInk(typeof fill === 'string' ? fill : '', '#ffffff'));
+      accessGlyph.opacity(c.opacity());
+      accessGlyph.visible(this.accessGlyphVisible && this.accessGlyphEligible(id));
+    }
+    this.accessRingById.get(id)?.opacity(c.opacity());
   }
 
   /** True when a seat sits in a section/zone currently marked `closed`. */
@@ -4157,6 +4244,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (this.hasSections) this.applySectionLod(scale);
     else if (this.primaryFocalLabels.size) this.bgLayer.batchDraw();
     this.paintGAStateForView();
+    // Reveal/hide the per-seat accessibility glyphs for this zoom BEFORE the
+    // cache decision below, so the seat-layer bitmap bakes them in/out to match.
+    this.updateAccessGlyphs(scale);
     const shouldCache = scale < CACHE_THRESHOLD;
     if (shouldCache && !this.cached) {
       this.cacheSeatLayer();
@@ -4265,6 +4355,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // the offset/doubled numbers visible at close zoom levels.
       if (seat.kind === 'booth') continue;
       if (seat.x < x0 || seat.x > x1 || seat.y < y0 || seat.y > y1) continue;
+      // Accessible seats show their accessibility glyph in place of the seat
+      // number (venue-map convention) — skip the overlay number so the two don't
+      // stack. The glyph is always legible before labels are (lower zoom gate),
+      // so an accessible seat is never left with no on-seat mark here.
+      if (seat.accessible && this.accessGlyphVisible) continue;
       const shape = this.circleById.get(seat.id);
       if ((shape?.opacity() ?? 1) < 0.5) continue;
       const status = this.statusById.get(seat.id) ?? 'free';

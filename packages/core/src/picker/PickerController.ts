@@ -40,6 +40,9 @@ const MAX_BACKOFF_MS = 15_000;
 export interface PickerSeat {
   id: string;
   label: string;
+  /** Buyer-facing label (row `displayLabel` applied). Falls back to `label`;
+   *  never use for booking — `label` is the inventory/booking identity. */
+  displayLabel?: string;
   categoryKey: string;
   /** Price for the chosen tier when the category has tiers, else the base price. */
   price: number;
@@ -368,13 +371,21 @@ export class PickerController {
       this.allIds.push(s.id);
       const source = chartObjects.get(s.rowId);
       const sourceLabel = source && 'label' in source && typeof source.label === 'string' ? source.label : undefined;
-      const rowLabel = s.kind === 'booth' ? undefined : sourceLabel;
-      const labelParts = s.label.split('-');
-      const seatNumber = rowLabel && s.label.startsWith(`${rowLabel}-`)
-        ? s.label.slice(rowLabel.length + 1)
+      // Buyer-facing row name honours the designer's row `displayLabel`; inventory
+      // `label` stays the booking identity used everywhere seats are held/booked.
+      const sourceDisplayLabel = source && 'displayLabel' in source && typeof source.displayLabel === 'string' && source.displayLabel
+        ? source.displayLabel
+        : sourceLabel;
+      const rowLabel = s.kind === 'booth' ? undefined : sourceDisplayLabel;
+      // Seat number is read off the buyer-facing seat label so a renamed row shows
+      // the buyer copy; both labels share the same `${prefix}-${number}` suffix.
+      const visibleSeatLabel = s.displayLabel ?? s.label;
+      const labelParts = visibleSeatLabel.split('-');
+      const seatNumber = sourceDisplayLabel && visibleSeatLabel.startsWith(`${sourceDisplayLabel}-`)
+        ? visibleSeatLabel.slice(sourceDisplayLabel.length + 1)
         : s.kind === 'booth'
-          ? s.label
-          : labelParts[labelParts.length - 1] ?? s.label;
+          ? visibleSeatLabel
+          : labelParts[labelParts.length - 1] ?? visibleSeatLabel;
       this.seatContext.set(s.id, {
         sectionLabel: sectionLabels.get(membership.objectToSection.get(s.rowId) ?? ''),
         rowLabel,
@@ -1132,14 +1143,16 @@ export class PickerController {
 
   private toSeat(s: ExpandedSeat): PickerSeat {
     const commercial = s.commercial ? { commercial: s.commercial } : undefined;
+    const display = s.displayLabel ? { displayLabel: s.displayLabel } : undefined;
     const tiers = this.tiersFor(s.categoryKey);
     if (!tiers) {
-      return { id: s.id, label: s.label, categoryKey: s.categoryKey, price: this.priceFor(s.categoryKey), ...commercial };
+      return { id: s.id, label: s.label, ...display, categoryKey: s.categoryKey, price: this.priceFor(s.categoryKey), ...commercial };
     }
     const chosen = tiers.find((t) => t.id === this.seatTiers.get(s.id)) ?? tiers[0];
     return {
       id: s.id,
       label: s.label,
+      ...display,
       categoryKey: s.categoryKey,
       price: chosen.price,
       tiers,

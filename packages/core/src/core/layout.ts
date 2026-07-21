@@ -18,6 +18,7 @@ import type {
 } from './types';
 import { distributeAlongCubic } from './complexGeometry';
 import { translateSectionOutlinePath } from './sectionPath';
+import { toLetters, toRoman } from './labeling';
 
 /** Resolve a seat override's accessibility, honouring the legacy boolean flag. */
 function overrideAccessibility(o: SeatOverride | undefined): AccessibilityType[] {
@@ -61,7 +62,7 @@ function place(lx: number, ly: number, deg: number, origin: Point): { x: number;
  * (start at 1 → 1,3,5…; start at 2 → 2,4,6…).
  */
 /** Base (pre-override) seat centre per index — shared by expandRow + designer edit mode. */
-function rowSeatPositions(row: RowObject): Point[] {
+export function rowSeatPositions(row: RowObject): Point[] {
   const { seatCount, seatSpacing, curve, rotation, origin } = row;
   const out: Point[] = [];
   if (row.path) return distributeAlongCubic(row.path, seatCount);
@@ -111,28 +112,89 @@ export interface RowSeatSlot {
   labelStyle?: LabelStyle;
 }
 
-export function expandRowSlots(row: RowObject): RowSeatSlot[] {
-  const start = row.seatLabelStart ?? 1;
+/**
+ * Number outward from the middle: rank seats by distance from centre (inner-left
+ * wins ties), so the centre seat gets rank 0 (the lowest number). Shared by the
+ * `center` direction across every scheme.
+ */
+function centerRank(n: number): number[] {
+  const rank = new Array<number>(n);
+  Array.from({ length: n }, (_, i) => i)
+    .sort((a, b) => Math.abs(2 * a - (n - 1)) - Math.abs(2 * b - (n - 1)) || a - b)
+    .forEach((idx, k) => (rank[idx] = k));
+  return rank;
+}
+
+/**
+ * The seat NUMBER part of a row seat's label (the row prefix is prepended by the
+ * caller). Applies the row's numbering scheme, direction, step, start and label
+ * prefix. Labels only — never geometry. See `RowObject.seatNumbering.scheme`.
+ */
+export function seatLabelPart(row: RowObject, i: number): string {
+  const rawStart = row.seatLabelStart ?? 1;
   const dir = row.seatNumbering?.direction ?? 'ltr';
   const step = row.seatNumbering?.step ?? 1;
+  const scheme = row.seatNumbering?.scheme ?? 'decimal';
+  const prefix = row.seatNumbering?.prefix ?? '';
+  const endAt = row.seatNumbering?.endAt;
   const n = row.seatCount;
-  let seatNumber: (i: number) => number;
-  if (dir === 'center') {
-    // Number outward from the middle: rank seats by distance from centre
-    // (inner-left wins ties), so the centre seat gets `start`.
-    const rank = new Array<number>(n);
-    Array.from({ length: n }, (_, i) => i)
-      .sort((a, b) => Math.abs(2 * a - (n - 1)) - Math.abs(2 * b - (n - 1)) || a - b)
-      .forEach((idx, k) => (rank[idx] = k));
-    seatNumber = (i) => start + rank[i] * step;
-  } else {
-    seatNumber = (i) => start + (dir === 'rtl' ? n - 1 - i : i) * step;
+
+  // `updown` (odd-up-even-back) replaces direction — it numbers by physical
+  // left→right order: first ⌈n/2⌉ seats get ascending odds, the rest get
+  // descending evens (1,3,5,…,6,4,2). `start` shifts the whole sequence.
+  // updown owns its own sequence, so it ignores `endAt`.
+  if (scheme === 'updown') {
+    const half = Math.ceil(n / 2);
+    const core = i < half ? rawStart + 2 * i : rawStart - 1 + 2 * (n - i);
+    return `${prefix}${core}`;
   }
+
+  // End-at preset ("useEndAt"): derive `start` so the LAST-numbered seat
+  // (position rank n-1) lands on `endAt`, honouring the scheme's effective step
+  // (odd/even = 2). `endAt` wins over the stored `seatLabelStart`.
+  const effStep = scheme === 'odd' || scheme === 'even' ? 2 : step;
+  const start = endAt != null && Number.isFinite(endAt) ? endAt - (n - 1) * effStep : rawStart;
+
+  // Position rank p ∈ [0, n-1]: the 0-based ordinal along the numbering
+  // direction. Every remaining scheme is a formatting of `start + p*step`.
+  const p = dir === 'center' ? centerRank(n)[i] : dir === 'rtl' ? n - 1 - i : i;
+
+  let core: string;
+  switch (scheme) {
+    case 'odd': {
+      const firstOdd = start % 2 === 1 ? start : start + 1;
+      core = String(firstOdd + p * 2);
+      break;
+    }
+    case 'even': {
+      const firstEven = start % 2 === 0 ? start : start + 1;
+      core = String(firstEven + p * 2);
+      break;
+    }
+    case 'roman':
+      core = toRoman(start + p * step);
+      break;
+    case 'letters-upper':
+      core = toLetters(start + p * step, false);
+      break;
+    case 'letters-lower':
+      core = toLetters(start + p * step, true);
+      break;
+    case 'decimal':
+    default:
+      core = String(start + p * step);
+      break;
+  }
+  return `${prefix}${core}`;
+}
+
+export function expandRowSlots(row: RowObject): RowSeatSlot[] {
   const ov = overrideMap(row);
   return rowSeatPositions(row).map((p, i) => {
     const o = ov.get(i);
     const accessibility = overrideAccessibility(o);
-    const inventoryLabel = o?.label ?? `${row.label}-${seatNumber(i)}`;
+    const part = seatLabelPart(row, i);
+    const inventoryLabel = o?.label ?? `${row.label}-${part}`;
     const displayPrefix = row.displayLabel ?? row.label;
     const commercial = { ...row.commercial, ...o?.commercial };
     return {
@@ -140,7 +202,7 @@ export function expandRowSlots(row: RowObject): RowSeatSlot[] {
       x: p.x + (o?.dx ?? 0),
       y: p.y + (o?.dy ?? 0),
       label: inventoryLabel,
-      displayLabel: o?.displayLabel ?? `${displayPrefix}-${seatNumber(i)}`,
+      displayLabel: o?.displayLabel ?? `${displayPrefix}-${part}`,
       categoryKey: o?.categoryKey ?? row.categoryKey,
       skipped: !!o?.skip,
       accessible: accessibility.length > 0,
