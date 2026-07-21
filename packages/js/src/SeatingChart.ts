@@ -104,6 +104,7 @@ export class SeatingChart {
   private mount: HTMLElement | null = null;
   private hostEl: HTMLDivElement | null = null;
   private rendered = false;
+  private mode_: 'live' | 'test' | null = null;
   private tipEl: HTMLDivElement | null = null;
   private tipPos = { x: 0, y: 0 };
   private onTipMove: ((e: MouseEvent) => void) | null = null;
@@ -169,6 +170,9 @@ export class SeatingChart {
       this.rendered = false;
       return this;
     }
+    // The served event's mode. Anything the API does not explicitly mark as a
+    // test event is a live one — the same rule the test-mode ribbon below uses.
+    this.mode_ = info.mode === 'test' ? 'test' : 'live';
 
     // Tooltip element + cursor tracking (mouse only — touch selects directly and
     // reviews seats in the host tray). Positioned at the cursor, flipped at edges.
@@ -287,6 +291,20 @@ export class SeatingChart {
     this.placeTooltip();
   }
 
+  /**
+   * Whether the SERVED event is a live or a test event (`sk_test_` keys create
+   * test events, which never book real inventory). `null` before render()
+   * resolves — the mode comes from the server with the chart, not from options.
+   *
+   * The widget already surfaces this visually with the test-mode ribbon; this
+   * getter is for hosts that draw their own chrome — notably a native WebView
+   * wrapper, which must be able to tell an integrator that the build they are
+   * about to ship is pointed at a test event.
+   */
+  getMode(): 'live' | 'test' | null {
+    return this.mode_;
+  }
+
   /** Current selection with prices resolved from the chart categories. */
   getSelection(): SelectedSeat[] {
     return this.controller.getSelection();
@@ -307,6 +325,23 @@ export class SeatingChart {
   async resumeHold(holdId: string): Promise<HoldResult | null> {
     try {
       const h = await this.controller.resumeHold(holdId);
+      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
+    } catch (err) {
+      this.opts.onError?.(err);
+      return null;
+    }
+  }
+
+  /**
+   * Push the OPEN hold's expiry out ("need more time?"). Resolves the refreshed
+   * hold, or `null` when there is nothing held or the server refused (the hold
+   * is gone, already expired, or at its renewal cap) — refusal is a normal
+   * outcome, not an error, so the host decides the copy. The client-side expiry
+   * timer is re-armed to match, so `onHoldExpired` won't fire early.
+   */
+  async extendHold(ttlMs?: number): Promise<HoldResult | null> {
+    try {
+      const h = await this.controller.extendHold(ttlMs);
       return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
     } catch (err) {
       this.opts.onError?.(err);
@@ -418,5 +453,6 @@ export class SeatingChart {
     this.hostEl = null;
     this.mount = null;
     this.rendered = false;
+    this.mode_ = null;
   }
 }
