@@ -203,7 +203,45 @@ export class SeatingChart {
         'box-shadow:0 2px 8px rgba(0,0,0,.25);pointer-events:none;';
       host.appendChild(ribbon);
     }
+
+    // "Powered by SeatLayer" attribution — the SDK embed is canvas-only, so
+    // (unlike the full SeatPicker widget) nothing else renders this badge; no
+    // duplication guard is needed. Shown by default; hidden only when the SERVED
+    // chart doc's theme sets hideBadge (the API forces that false for orgs
+    // without the white-label entitlement, so the client can trust the flag).
+    this.buildBadge(host);
     return this;
+  }
+
+  /**
+   * Attribution badge pinned to the embed's bottom-right, linking to
+   * seatlayer.io. Rendered as an absolutely-positioned overlay with
+   * self-contained inline styles — the SDK embed ships no widget CSS, and an
+   * overlay keeps it out of the layout flow so it never disturbs the SDK v0.22
+   * fill-height resize contract. Mirrors the full widget's mark + wordmark and
+   * reuses the `picker.poweredBy` i18n string.
+   */
+  private buildBadge(host: HTMLDivElement): void {
+    if (this.controller.doc?.theme?.hideBadge) return;
+    const badge = document.createElement('a');
+    badge.href = 'https://seatlayer.io';
+    badge.target = '_blank';
+    badge.rel = 'noopener noreferrer';
+    badge.setAttribute('aria-label', t('picker.poweredBy'));
+    badge.style.cssText =
+      'position:absolute;bottom:10px;right:12px;z-index:5;' +
+      'display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border-radius:999px;' +
+      'background:rgba(255,255,255,.92);color:#4a5163;text-decoration:none;' +
+      'font:600 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:.02em;' +
+      'box-shadow:0 2px 8px rgba(0,0,0,.12);';
+    badge.innerHTML =
+      '<span aria-hidden="true" style="width:16px;height:16px;border-radius:4px;flex:none;' +
+      'display:flex;align-items:center;justify-content:center;background:#f4b740;color:#1a1200">' +
+      '<svg viewBox="0 0 24 24" style="width:11px;height:11px;fill:currentColor">' +
+      '<path d="M4 15c0-1.1.9-2 2-2h12a2 2 0 0 1 2 2v3h-3v-2H7v2H4v-3Z"/>' +
+      '<rect x="7" y="7" width="10" height="5" rx="1.6"/></svg></span>' +
+      `<span>${t('picker.poweredBy')}</span>`;
+    host.appendChild(badge);
   }
 
   private placeTooltip(): void {
