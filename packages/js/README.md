@@ -128,10 +128,50 @@ CSS files or external assets.
 | --- | --- | --- | --- |
 | `showLoadingState` | `boolean` | `true` | Render the built-in skeleton and error card. Set `false` when you draw your own chrome. |
 | `loadingTimeoutMs` | `number` | `20000` | If `ready` never arrives within this window, show the error card with a timeout message. |
-| `onRequestRelaunch` | `() => void` | — | Called by **"Try again"**. Mint a fresh session and call `setDesignerUrl()`; the iframe recreates and returns to loading. When omitted, "Try again" reloads the current URL in place. |
+| `onRequestRelaunch` | `() => void` | — | Called by **"Try again"** _and_ by automatic renewal (below). Mint a fresh session and call `setDesignerUrl()`; the iframe recreates and returns to loading. When omitted, "Try again" reloads the current URL in place. |
+| `autoRenewSession` | `boolean` | `true`¹ | Silently renew the session before it expires and auto-recover once if an expiry error slips through. ¹Defaults `true` only when `onRequestRelaunch` is provided; a no-op without it. Set `false` for fully manual "Try again". |
 
 `setDesignerUrl()` always returns the host to the loading state, so a relaunch
 flow needs no extra bookkeeping.
+
+### Session lifecycle
+
+Designer sessions are **short-lived by design**: your backend mints a `dse_`
+token (default 1 hour, up to 4 hours via `expiresInSeconds`) and bakes it into
+`designerUrl`. Pick a TTL that fits how long organizers actually edit — longer is
+not automatically better; the renewal below keeps even a multi-hour session alive.
+
+Provide `onRequestRelaunch` returning (or awaiting) a freshly minted session, and
+the SDK turns expiry into a non-event:
+
+- **Silent proactive renewal.** From each `ready` message's `expiresAt` the SDK
+  schedules an automatic relaunch shortly before the session lapses — ~3 minutes
+  ahead, or, for a TTL under 15 minutes, after 80% of the remaining life (never
+  sooner than 30s after `ready`). Your `onRequestRelaunch` mints a fresh session
+  and swaps `designerUrl`, so editing continues with no expiry card. The timer
+  re-arms from every `ready`.
+- **Automatic expiry recovery.** If an expiry error still arrives (a laptop that
+  slept past the renewal window, say), the SDK makes **one** automatic relaunch
+  attempt before showing the "Try again" card, and only falls back to the card if
+  that attempt also fails.
+
+Relaunching is safe: **in-progress work is autosaved server-side**, so a fresh
+iframe restores the organizer's chart where they left off.
+
+```js
+const designer = new EmbeddedDesigner({
+  container: '#venue-designer',
+  designerUrl: session.designerUrl,
+  expectedChartId: session.chartId,
+  // Mint a fresh session on renewal, expiry recovery, or "Try again":
+  onRequestRelaunch: async () => {
+    const next = await mintDesignerSession(session.chartId); // your backend, up to 4h TTL
+    designer.setDesignerUrl(next.designerUrl);               // recreates the iframe
+  },
+  // autoRenewSession defaults to true because onRequestRelaunch is present.
+});
+designer.mount();
+```
 
 ## API
 

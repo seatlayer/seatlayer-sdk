@@ -89,8 +89,30 @@ export interface EmbeddedDesignerOptions {
    * fresh Designer session and call `setDesignerUrl()` with the new URL, which
    * recreates the iframe and returns to the loading state. When omitted, "Try
    * again" reloads the current `designerUrl` in place.
+   *
+   * When supplied, it also powers automatic session renewal — see
+   * {@link EmbeddedDesignerOptions.autoRenewSession}.
    */
   onRequestRelaunch?: () => void;
+  /**
+   * Keep long editing sessions alive without the user ever hitting the expiry
+   * wall. Designer sessions are short-lived security tokens; when the host wires
+   * `onRequestRelaunch` the SDK, with this enabled, will:
+   *
+   * - **Renew proactively.** From each `ready` message's `expiresAt` it schedules
+   *   a silent relaunch shortly before the session lapses (~3 min ahead; for a
+   *   TTL under 15 min it renews after 80% of the remaining life, and never
+   *   sooner than 30s after `ready`). The host mints a fresh session and swaps
+   *   `designerUrl`, so the editor keeps working with no error card.
+   * - **Recover on expiry.** If an expiry error still slips through (a slept
+   *   laptop woke past the renewal window, say) it makes ONE automatic relaunch
+   *   attempt before showing the "Try again" card, and only falls back to the
+   *   card if that relaunch also fails.
+   *
+   * Defaults to `true` whenever `onRequestRelaunch` is provided; a no-op without
+   * it. Set `false` to keep the fully manual "Try again" behavior.
+   */
+  autoRenewSession?: boolean;
   onReady?: (message: EmbeddedDesignerMessage) => void;
   onSaved?: (message: EmbeddedDesignerMessage) => void;
   onPublished?: (message: EmbeddedDesignerMessage) => void;
@@ -108,6 +130,15 @@ const TYPES = new Set<EmbeddedDesignerEventType>([
 
 const DEFAULT_LOADING_TIMEOUT_MS = 20000;
 const DEFAULT_MIN_FILL_HEIGHT = 480;
+/**
+ * Proactive session-renewal timing (see {@link EmbeddedDesigner.scheduleRenewal}).
+ * We aim to relaunch a comfortable lead ahead of `expiresAt`; short-lived sessions
+ * instead renew after a fraction of their life so the lead never overshoots the TTL.
+ */
+const RENEW_LEAD_MS = 3 * 60 * 1000; // standard lead: renew ~3 min before expiry
+const RENEW_SHORT_TTL_MS = 15 * 60 * 1000; // below this TTL, use the fraction clamp
+const RENEW_SHORT_TTL_FRACTION = 0.8; // short TTL: renew after 80% of remaining life
+const RENEW_MIN_DELAY_MS = 30 * 1000; // never renew sooner than 30s after `ready`
 /**
  * Container-fill detection tunables. The probe drives the iframe to two extreme
  * heights within one synchronous task (no paint between reads, so no flash) and
@@ -162,6 +193,14 @@ export class EmbeddedDesigner {
   private designerOrigin = '';
   private overlay: HTMLDivElement | null = null;
   private timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Proactive session-renewal timer; armed from each `ready`, cleared on re-mount. */
+  private renewTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * One automatic recovery relaunch is allowed per expiry. Reset ONLY when a fresh
+   * `ready` arrives — deliberately not on re-mount — so a session that keeps failing
+   * to load can't loop the host through endless silent relaunches.
+   */
+  private autoRecoverUsed = false;
   private phase: 'loading' | 'ready' | 'error' = 'loading';
   private restoreContainerPosition: string | null = null;
   // Host-side fullscreen pin: saved state we restore on `off`/Escape/destroy.
@@ -253,6 +292,7 @@ export class EmbeddedDesigner {
     this.stopFill();
     this.unpinFullscreen();
     this.clearTimeoutTimer();
+    this.clearRenewTimer();
     this.removeOverlay();
     this.restoreContainerStyle();
     this.frame?.remove();
@@ -483,6 +523,56 @@ export class EmbeddedDesigner {
       clearTimeout(this.timeoutTimer);
       this.timeoutTimer = null;
     }
+  }
+
+  /**
+   * Auto-renewal (proactive + one expiry recovery) is on when the host wired a
+   * relaunch hook and did not opt out. Without the hook there is nothing to call,
+   * so it is a no-op.
+   */
+  private autoRenewEnabled(): boolean {
+    return !!this.options.onRequestRelaunch && this.options.autoRenewSession !== false;
+  }
+
+  private clearRenewTimer(): void {
+    if (this.renewTimer !== null) {
+      clearTimeout(this.renewTimer);
+      this.renewTimer = null;
+    }
+  }
+
+  /**
+   * Arm the proactive renewal timer from a `ready` message's `expiresAt` (epoch
+   * ms). We relaunch a comfortable lead before expiry so the host can mint a fresh
+   * session and swap `designerUrl` without the user ever seeing the expiry card:
+   *
+   * - normal TTL (≥ 15 min): renew {@link RENEW_LEAD_MS} (~3 min) before expiry;
+   * - short TTL (< 15 min): renew after {@link RENEW_SHORT_TTL_FRACTION} (80%) of
+   *   the remaining life, so the lead can't overshoot the whole session;
+   * - either way, never sooner than {@link RENEW_MIN_DELAY_MS} (30s) after `ready`
+   *   so a burst of `ready` messages can't spin the host.
+   *
+   * Re-armed on every `ready`; cleared on destroy / setDesignerUrl (via re-mount).
+   * A no-op when auto-renewal is off or `expiresAt` is missing/already past — the
+   * expiry-error path recovers a session that has already lapsed.
+   */
+  private scheduleRenewal(expiresAt: number | undefined): void {
+    this.clearRenewTimer();
+    if (!this.autoRenewEnabled()) return;
+    if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) return;
+    const remaining = expiresAt - Date.now();
+    if (remaining <= 0) return;
+    const lead =
+      remaining < RENEW_SHORT_TTL_MS
+        ? remaining * RENEW_SHORT_TTL_FRACTION
+        : remaining - RENEW_LEAD_MS;
+    const delay = Math.max(RENEW_MIN_DELAY_MS, lead);
+    this.renewTimer = setTimeout(() => {
+      this.renewTimer = null;
+      // Silent renewal: the host mints a fresh session and swaps designerUrl,
+      // which re-mounts the iframe and re-arms us from the next `ready`.
+      if (this.autoRenewEnabled()) this.options.onRequestRelaunch!();
+    }, delay);
   }
 
   private ensureContainerPositioned(container: HTMLElement): void {
@@ -760,15 +850,32 @@ export class EmbeddedDesigner {
         this.phase = 'ready';
         this.clearTimeoutTimer();
         this.removeOverlay();
+        // A fresh live session: clear the recovery guard and (re)arm proactive
+        // renewal from this session's expiry.
+        this.autoRecoverUsed = false;
+        this.scheduleRenewal(message.expiresAt);
         this.options.onReady?.(message);
         break;
       case 'seatlayer.designer.saved': this.options.onSaved?.(message); break;
       case 'seatlayer.designer.published': this.options.onPublished?.(message); break;
       case 'seatlayer.designer.close': this.options.onClose?.(message); break;
-      case 'seatlayer.designer.error':
-        this.showError(causeFromCode(message.code));
+      case 'seatlayer.designer.error': {
+        const cause = causeFromCode(message.code);
+        // Expiry is recoverable. If the host wired a relaunch hook, make ONE
+        // silent auto-relaunch before ever showing the dead-end card — the user
+        // never sees an overlay. Guarded (reset only on a fresh `ready`) so a
+        // session that keeps failing to load falls through to the card instead of
+        // looping the host.
+        if (cause === 'expired' && this.autoRenewEnabled() && !this.autoRecoverUsed) {
+          this.autoRecoverUsed = true;
+          this.clearRenewTimer();
+          this.options.onRequestRelaunch!();
+          return;
+        }
+        this.showError(cause);
         this.options.onError?.(message);
         break;
+      }
     }
   };
 }

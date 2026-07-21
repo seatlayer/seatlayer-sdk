@@ -142,7 +142,54 @@ with cause-specific copy. The skeleton honors `prefers-reduced-motion`.
 | --- | --- | --- | --- |
 | `showLoadingState` | `boolean?` | `true` | Render the built-in skeleton and error card. Set `false` to supply your own chrome. |
 | `loadingTimeoutMs` | `number?` | `20000` | Show the error card if `ready` never arrives within this window. |
-| `onRequestRelaunch` | `() => void` | — | Called by **"Try again"**. Mint a fresh session and set a new `designerUrl` (which recreates the iframe and returns to loading). When omitted, "Try again" reloads the current URL. |
+| `onRequestRelaunch` | `() => void` | — | Called by **"Try again"** _and_ by automatic renewal (below). Mint a fresh session and set a new `designerUrl` (which recreates the iframe and returns to loading). When omitted, "Try again" reloads the current URL. |
+| `autoRenewSession` | `boolean?` | `true`¹ | Silently renew the session before it expires and auto-recover once if an expiry error slips through. ¹Defaults `true` only when `onRequestRelaunch` is provided; a no-op without it. Set `false` for fully manual "Try again". |
 
-All three props are optional and additive — existing integrations keep working
+All props are optional and additive — existing integrations keep working
 unchanged.
+
+### Session lifecycle
+
+Designer sessions are **short-lived by design**: your backend mints a `dse_`
+token (default 1 hour, up to 4 hours via `expiresInSeconds`) baked into
+`designerUrl`. Choose a TTL that matches how long organizers actually edit — the
+renewal below keeps even a multi-hour session alive, so you needn't over-provision.
+
+Pass `onRequestRelaunch` that mints (and awaits) a fresh session and updates the
+`designerUrl` state, and the component makes expiry a non-event:
+
+- **Silent proactive renewal** — from each `ready`'s `expiresAt` it schedules an
+  automatic relaunch shortly before the session lapses (~3 min ahead, or after 80%
+  of the remaining life for a sub-15-minute TTL, never sooner than 30s after
+  `ready`), re-armed on every `ready`.
+- **Automatic expiry recovery** — if an expiry error slips through anyway, it makes
+  **one** automatic relaunch attempt before showing the "Try again" card.
+
+The wrapper **recreates the iframe whenever `designerUrl` changes**, and
+**in-progress work is autosaved server-side**, so relaunching is safe — the
+organizer's chart is restored right where they left off.
+
+```tsx
+export function VenueEditor({ chartId }: { chartId: string }) {
+  const [designerUrl, setDesignerUrl] = useState<string>();
+
+  useEffect(() => {
+    mintDesignerSession(chartId).then((s) => setDesignerUrl(s.designerUrl));
+  }, [chartId]);
+
+  if (!designerUrl) return null;
+  return (
+    <EmbeddedDesigner
+      designerUrl={designerUrl}
+      expectedChartId={chartId}
+      style={{ width: '100%', height: 'calc(100vh - 96px)' }}
+      // Mint a fresh session on renewal, expiry recovery, or "Try again":
+      onRequestRelaunch={async () => {
+        const next = await mintDesignerSession(chartId); // your backend, up to 4h TTL
+        setDesignerUrl(next.designerUrl);                // swapping the URL recreates the iframe
+      }}
+      // autoRenewSession defaults to true because onRequestRelaunch is present.
+    />
+  );
+}
+```

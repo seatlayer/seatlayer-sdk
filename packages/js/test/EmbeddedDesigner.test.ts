@@ -136,6 +136,152 @@ describe('EmbeddedDesigner loading state machine', () => {
   });
 });
 
+describe('EmbeddedDesigner session auto-renewal', () => {
+  const HOUR_MS = 60 * 60 * 1000;
+  const MIN_MS = 60 * 1000;
+
+  /** Post a ready whose session expires `ttlMs` from now (uses the fake clock). */
+  function postReady(designer: EmbeddedDesigner, ttlMs: number) {
+    postFromFrame(designer, { type: 'seatlayer.designer.ready', expiresAt: Date.now() + ttlMs });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  it('schedules a proactive renewal ~3 min before expiry (normal TTL)', () => {
+    const onRequestRelaunch = vi.fn();
+    const designer = mountDesigner({ onRequestRelaunch });
+    postReady(designer, HOUR_MS);
+
+    // Renewal fires 3 min before the 1h expiry — not a moment sooner.
+    vi.advanceTimersByTime(HOUR_MS - 3 * MIN_MS - 1);
+    expect(onRequestRelaunch).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(2);
+    expect(onRequestRelaunch).toHaveBeenCalledTimes(1);
+    designer.destroy();
+  });
+
+  it('clamps a short TTL to 80% of remaining life', () => {
+    const onRequestRelaunch = vi.fn();
+    const designer = mountDesigner({ onRequestRelaunch });
+    // 10 min TTL (< 15 min) ⇒ renew after 80% = 8 min, not 7 min (10 − 3).
+    postReady(designer, 10 * MIN_MS);
+
+    vi.advanceTimersByTime(8 * MIN_MS - 1);
+    expect(onRequestRelaunch).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(2);
+    expect(onRequestRelaunch).toHaveBeenCalledTimes(1);
+    designer.destroy();
+  });
+
+  it('never renews sooner than 30s after ready (very short TTL)', () => {
+    const onRequestRelaunch = vi.fn();
+    const designer = mountDesigner({ onRequestRelaunch });
+    // 20s TTL ⇒ 80% = 16s, floored up to the 30s minimum.
+    postReady(designer, 20 * 1000);
+
+    vi.advanceTimersByTime(30 * 1000 - 1);
+    expect(onRequestRelaunch).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(2);
+    expect(onRequestRelaunch).toHaveBeenCalledTimes(1);
+    designer.destroy();
+  });
+
+  it('re-arms the renewal timer from each new ready message', () => {
+    const onRequestRelaunch = vi.fn();
+    const designer = mountDesigner({ onRequestRelaunch });
+    postReady(designer, HOUR_MS);
+    vi.advanceTimersByTime(HOUR_MS); // first renewal fires
+    expect(onRequestRelaunch).toHaveBeenCalledTimes(1);
+
+    // A fresh session's ready re-arms a brand-new timer.
+    postReady(designer, HOUR_MS);
+    vi.advanceTimersByTime(HOUR_MS - 3 * MIN_MS - 1);
+    expect(onRequestRelaunch).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(2);
+    expect(onRequestRelaunch).toHaveBeenCalledTimes(2);
+    designer.destroy();
+  });
+
+  it('auto-recovers once on an expiry error, then shows the card on a second failure', () => {
+    const onRequestRelaunch = vi.fn();
+    const onError = vi.fn();
+    const designer = mountDesigner({ onRequestRelaunch, onError });
+    postReady(designer, HOUR_MS);
+
+    // First expiry: one silent relaunch, no overlay, no onError.
+    postFromFrame(designer, { type: 'seatlayer.designer.error', code: 'designer_session_expired' });
+    expect(onRequestRelaunch).toHaveBeenCalledTimes(1);
+    expect(overlay()).toBeNull();
+    expect(onError).not.toHaveBeenCalled();
+
+    // Second expiry without an intervening ready: fall through to the card.
+    postFromFrame(designer, { type: 'seatlayer.designer.error', code: 'designer_session_expired' });
+    expect(onRequestRelaunch).toHaveBeenCalledTimes(1);
+    expect(overlayPhase()).toBe('error');
+    expect(overlay()?.textContent).toContain('expired');
+    expect(onError).toHaveBeenCalledTimes(1);
+    designer.destroy();
+  });
+
+  it('resets the auto-recover guard on a fresh ready', () => {
+    const onRequestRelaunch = vi.fn();
+    const designer = mountDesigner({ onRequestRelaunch });
+    postReady(designer, HOUR_MS);
+    postFromFrame(designer, { type: 'seatlayer.designer.error', code: 'designer_session_expired' });
+    expect(onRequestRelaunch).toHaveBeenCalledTimes(1);
+
+    // A recovered session goes ready again — a later expiry may auto-recover once more.
+    postReady(designer, HOUR_MS);
+    postFromFrame(designer, { type: 'seatlayer.designer.error', code: 'designer_session_expired' });
+    expect(onRequestRelaunch).toHaveBeenCalledTimes(2);
+    expect(overlay()).toBeNull();
+    designer.destroy();
+  });
+
+  it('schedules no renewal timer without a relaunch hook', () => {
+    const designer = mountDesigner();
+    postReady(designer, HOUR_MS);
+    // No hook ⇒ nothing to call; the expiry error still surfaces the card manually.
+    expect(vi.getTimerCount()).toBe(0);
+    designer.destroy();
+  });
+
+  it('schedules no renewal timer when autoRenewSession is false', () => {
+    const onRequestRelaunch = vi.fn();
+    const designer = mountDesigner({ onRequestRelaunch, autoRenewSession: false });
+    postReady(designer, HOUR_MS);
+    expect(vi.getTimerCount()).toBe(0);
+
+    // Expiry now behaves as before: straight to the card, no auto-relaunch.
+    postFromFrame(designer, { type: 'seatlayer.designer.error', code: 'designer_session_expired' });
+    expect(onRequestRelaunch).not.toHaveBeenCalled();
+    expect(overlayPhase()).toBe('error');
+    designer.destroy();
+  });
+
+  it('clears the renewal timer on destroy', () => {
+    const onRequestRelaunch = vi.fn();
+    const designer = mountDesigner({ onRequestRelaunch });
+    postReady(designer, HOUR_MS);
+    designer.destroy();
+    vi.advanceTimersByTime(HOUR_MS);
+    expect(onRequestRelaunch).not.toHaveBeenCalled();
+  });
+
+  it('clears the renewal timer when the session URL is swapped', () => {
+    const onRequestRelaunch = vi.fn();
+    const designer = mountDesigner({ onRequestRelaunch });
+    postReady(designer, HOUR_MS);
+    // Swapping to a fresh session re-mounts; the old session's timer must not fire.
+    designer.setDesignerUrl('https://designer.seatlayer.test/embed#token=dse_next');
+    vi.advanceTimersByTime(HOUR_MS);
+    expect(onRequestRelaunch).not.toHaveBeenCalled();
+    designer.destroy();
+  });
+});
+
 describe('EmbeddedDesigner resize + fullscreen protocol', () => {
   it('ignores the legacy resize message in fill mode (default)', () => {
     const designer = mountDesigner();

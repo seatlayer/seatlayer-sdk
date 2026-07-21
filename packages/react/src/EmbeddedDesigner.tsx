@@ -66,8 +66,21 @@ export interface EmbeddedDesignerProps {
    * Called when the user presses "Try again" on the error card. Mint a fresh
    * session and set the new `designerUrl` (recreating the iframe returns it to
    * the loading state). When omitted, "Try again" reloads the current URL.
+   *
+   * When supplied, it also powers automatic session renewal — see
+   * {@link EmbeddedDesignerProps.autoRenewSession}.
    */
   onRequestRelaunch?: () => void;
+  /**
+   * Keep long editing sessions alive with no expiry wall. When you supply
+   * `onRequestRelaunch`, the SDK schedules a silent relaunch shortly before the
+   * session's `expiresAt` (mint a fresh session and update `designerUrl` in your
+   * `onRequestRelaunch` handler), and makes one automatic recovery attempt if an
+   * expiry error still slips through before showing the "Try again" card. Defaults
+   * to `true` whenever `onRequestRelaunch` is provided; a no-op without it. Set
+   * `false` to keep the fully manual "Try again" behavior.
+   */
+  autoRenewSession?: boolean;
   onReady?: (message: EmbeddedDesignerMessage) => void;
   onSaved?: (message: EmbeddedDesignerMessage) => void;
   onPublished?: (message: EmbeddedDesignerMessage) => void;
@@ -105,6 +118,7 @@ export const EmbeddedDesigner = forwardRef<EmbeddedDesignerHandle, EmbeddedDesig
         height: props.height,
         minHeight: props.minHeight,
         autoResize: props.autoResize,
+        autoRenewSession: props.autoRenewSession,
         // Only forward a relaunch hook when the host supplied one, so the core's
         // "reload the same URL in place" fallback still applies otherwise.
         onRequestRelaunch: props.onRequestRelaunch
@@ -125,7 +139,7 @@ export const EmbeddedDesigner = forwardRef<EmbeddedDesignerHandle, EmbeddedDesig
       // Session/chart identity changes must recreate the iframe. Callback changes are
       // picked up from the ref without reloading an in-progress Designer session.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [props.designerUrl, props.expectedChartId, props.expectedWorkspaceId, props.title, props.iframeClassName, props.iframeStyle, props.allow, props.referrerPolicy, props.showLoadingState, props.loadingTimeoutMs, props.autoResize]);
+    }, [props.designerUrl, props.expectedChartId, props.expectedWorkspaceId, props.title, props.iframeClassName, props.iframeStyle, props.allow, props.referrerPolicy, props.showLoadingState, props.loadingTimeoutMs, props.autoResize, props.autoRenewSession]);
 
     useImperativeHandle(ref, () => ({
       setDesignerUrl: (designerUrl) => { designerRef.current?.setDesignerUrl(designerUrl); },
