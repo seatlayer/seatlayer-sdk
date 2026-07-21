@@ -18,6 +18,7 @@ import { createRenderer } from '../engine/SeatmapRenderer';
 import { allObjects, expandChart } from '../core/layout';
 import { applyHidden, computeSections } from '../core/sections';
 import { strandedSingles } from '../core/orphans';
+import { pickBestAvailable } from '../core/bestAvailable';
 import { t } from '../i18n';
 import type {
   CategoryTier,
@@ -630,10 +631,92 @@ export class PickerController {
     return this.hold_;
   }
 
-  /** Server-picks `qty` best free seats and holds them atomically. Throws on failure. */
-  async bestAvailable(qty: number, categoryKey?: string): Promise<HoldInfo | null> {
+  /** True when any seat on the visible chart carries the `premium` commercial
+   *  flag — gates the buyer widget's "★ Best seats" premium quick-pick (chip is
+   *  present-only, exactly like the accessibility filter chips). */
+  hasPremiumSeats(): boolean {
+    for (const seat of this.labelToSeat.values()) {
+      if (seat.commercial?.premium) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Client-side premium pre-pass: find the best contiguous block of `qty`
+   * PREMIUM-flagged free seats (orphan-avoiding, closest to the focal point)
+   * using the local seat geometry + live availability, mirroring the server's
+   * held-back exclusion via the visible (hidden-stripped) chart and current
+   * seat status. Returns a FULL premium block of `qty`, or null when none
+   * exists (the caller then falls back to the normal server pick).
+   */
+  private pickPremiumBlock(qty: number, categoryKey?: string): string[] | null {
+    const doc = this.visibleDoc();
+    if (!doc?.objects?.length) return null;
+    const focal = doc.focalPoint ?? { x: 0, y: 0 };
+    const seats = expandChart(doc); // hidden sections already removed
+    const held = new Set(this.hold_?.labels ?? []);
+    const available = new Set<string>();
+    for (const seat of seats) {
+      if (held.has(seat.label)) continue;
+      const id = this.labelToId.get(seat.label);
+      const status = id ? this.getStatus(id) : undefined;
+      if ((status ?? 'free') === 'free') available.add(seat.label);
+    }
+    const pick = pickBestAvailable(seats, available, { qty, categoryKey, focal, preferPremium: true });
+    if (pick.labels.length !== qty) return null;
+    // Only treat it as a premium block when EVERY picked seat is premium — a
+    // partial run means there's no true premium block of `qty` to offer.
+    const allPremium = pick.labels.every((l) => this.labelToSeat.get(l)?.commercial?.premium);
+    return allPremium ? [...pick.labels] : null;
+  }
+
+  /**
+   * Server-picks `qty` best free seats and holds them atomically. Throws on
+   * failure. With `preferPremium`, first tries to hold the best PREMIUM block
+   * locally; when none matches the requested quantity it falls back to the
+   * normal server pick (the widget surfaces a subtle note on that fallback).
+   */
+  async bestAvailable(
+    qty: number,
+    categoryKey?: string,
+    opts: { preferPremium?: boolean } = {},
+  ): Promise<HoldInfo | null> {
     const r = this.renderer;
     if (!r) return null;
+    if (opts.preferPremium) {
+      const block = this.pickPremiumBlock(qty, categoryKey);
+      if (block) {
+        // Drop any prior auto-hold before claiming the premium block.
+        if (this.hold_ && !(await this.release())) return null;
+        try {
+          const selection = block.map((label) => {
+            const seat = this.labelToSeat.get(label);
+            const resolved = seat ? this.toSeat(seat) : null;
+            return { label, ...(resolved?.tierId ? { tierId: resolved.tierId } : {}) };
+          });
+          const result = await this.api.hold(this.key, selection);
+          r.clearSelection();
+          const ids = block.map((l) => this.labelToId.get(l)).filter((v): v is string => !!v);
+          if (ids.length) r.setStatus(ids, 'held');
+          this.setHold({ holdId: result.holdId, labels: [...block], expiresAt: result.expiresAt, items: result.items });
+          const seats = block
+            .map((l) => this.labelToSeat.get(l))
+            .filter((s): s is ExpandedSeat => !!s)
+            .map((s) => this.toSeat(s));
+          this.opts.onSelectionChange?.(seats);
+          return this.hold_;
+        } catch (err) {
+          const { status, reason } = errInfo(err);
+          if (status === 409 && reason === 'event_closed') {
+            this.opts.onSalesClosed?.();
+            throw err;
+          }
+          // Lost a race for the premium block (a seat was taken) — fall through
+          // to the atomic server pick below rather than failing the buyer.
+        }
+      }
+      // No premium block available — fall through to the normal server pick.
+    }
     // Drop any prior auto-hold first.
     if (this.hold_ && !(await this.release())) return null;
     try {

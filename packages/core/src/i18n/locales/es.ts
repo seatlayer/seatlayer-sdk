@@ -84,4 +84,6 @@ export const es: Dict = {
   'picker.obstructedView': 'Visibilidad obstruida',
   'picker.premiumSeat': 'Asiento premium',
   'picker.hideLimitedView': 'Ocultar asientos con visibilidad limitada',
+  'picker.bestSeatsPremium': 'Mejores asientos',
+  'picker.premiumFallbackNote': 'No hay un bloque premium de {count}: mostrando los mejores disponibles',
 };

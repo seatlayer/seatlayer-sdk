@@ -89,4 +89,6 @@ export const en: Dict = {
   'picker.obstructedView': 'Obstructed view',
   'picker.premiumSeat': 'Premium seat',
   'picker.hideLimitedView': 'Hide limited-view seats',
+  'picker.bestSeatsPremium': 'Best seats',
+  'picker.premiumFallbackNote': 'No premium block of {count} — showing best overall',
 };

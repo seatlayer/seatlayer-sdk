@@ -40,6 +40,7 @@ const FILES = [
   ['src/core/sectionPath.ts', 'packages/core/src/core/sectionPath.ts'],
   ['src/core/chartRenderRules.ts', 'packages/core/src/core/chartRenderRules.ts'],
   ['src/core/layout.ts', 'packages/core/src/core/layout.ts'],
+  ['src/core/bestAvailable.ts', 'packages/core/src/core/bestAvailable.ts'],
   ['src/core/ga.ts', 'packages/core/src/core/ga.ts'],
   ['src/core/sections.ts', 'packages/core/src/core/sections.ts'],
   // Orphan-seat (stranded single) detection — imported by PickerController for

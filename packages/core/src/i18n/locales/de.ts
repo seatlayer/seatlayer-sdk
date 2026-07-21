@@ -88,4 +88,6 @@ export const de: Dict = {
   'picker.obstructedView': 'Sichtbehinderung',
   'picker.premiumSeat': 'Premium-Platz',
   'picker.hideLimitedView': 'Plätze mit eingeschränkter Sicht ausblenden',
+  'picker.bestSeatsPremium': 'Beste Plätze',
+  'picker.premiumFallbackNote': 'Kein Premium-Block mit {count} Plätzen — beste verfügbare werden angezeigt',
 };
