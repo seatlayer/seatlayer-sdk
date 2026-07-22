@@ -22,6 +22,7 @@ export const fr: Dict = {
   // renderer (drawn on the Konva map — shared by the embed SDK)
   'map.aria': 'Plan de salle. Utilisez les flèches pour naviguer entre les sièges, Entrée pour sélectionner.',
   'map.seatsLeft': '{count} LIBRES',
+  'map.soldOut': 'COMPLET',
   'map.statusHeld': 'En attente',
   'map.statusTaken': 'Pris',
   'map.fromPrice': 'DÈS {price}',
@@ -30,7 +31,7 @@ export const fr: Dict = {
   'picker.floor': 'Étage',
   'picker.zoomLevel': 'Niveau de zoom',
   'picker.rungTip.zones': 'Vue générale — groupes de sections comme Tribune nord ou VIP',
-  'picker.rungTip.sections': 'Blocs de sections — mélange de catégories + teinte de disponibilité',
+  'picker.rungTip.sections': 'Blocs de sections — les sections complètes ou presque pleines sont estompées pour voir la disponibilité en un coup d’œil',
   'picker.rungTip.seats': 'Sièges individuels — les blocs se transforment en points',
   'picker.rungLabel.zones': 'ZONES',
   'picker.rungLabel.sections': 'SECTIONS',

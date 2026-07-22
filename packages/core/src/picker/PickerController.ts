@@ -155,6 +155,7 @@ export interface SectionCategory {
  */
 export interface SectionSummary {
   id: string;
+  /** Buyer-facing section name (`displayLabel` when set, else the inventory label). */
   label: string;
   /** Zone label (from ChartDoc.zones); '' when the section has no zone. */
   zoneLabel: string;
@@ -1474,7 +1475,7 @@ export class PickerController {
 
     return {
       id,
-      label: sec.label,
+      label: sec.displayLabel ?? sec.label,
       zoneLabel: zone?.label ?? '',
       ...(sec.entrance && sec.entrance.trim() ? { entrance: sec.entrance.trim() } : {}),
       color,

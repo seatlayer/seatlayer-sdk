@@ -444,6 +444,11 @@ export interface GAAreaObject {
   holes?: Point[][];
   capacity: number;
   categoryKey: string;
+  /** Corner-rounding radius in chart units (default 0 = sharp corners). Pure
+   * presentation — softens the polygon's corners in every renderer without
+   * touching capacity, unit identities, or the stored points. Clamped per
+   * corner to half the shorter adjacent edge at draw time. */
+  cornerRadius?: number;
   /**
    * Durable inventory provenance for a surface produced by Join Areas.
    *
@@ -651,6 +656,16 @@ export interface BoothObject {
   width: number;
   height: number;
   rotation: number;
+  /**
+   * Optional custom outline (closed polygon, absolute chart coordinates) for
+   * non-rectangular booths — L-shaped, corner, or island units on expo floors.
+   * Absent = the default axis-aligned rectangle described by `width`/`height`/
+   * `rotation`. A booth stays exactly ONE atomic sellable unit whatever its
+   * outline; `points` is purely geometric. `width`/`height` are retained as the
+   * last rectangular size so "Back to rectangle" can restore it. When `points`
+   * is present, renderers draw the polygon and ignore `rotation`.
+   */
+  points?: Point[];
   categoryKey: string;
   referenceInventorySource?: ReferenceInventorySource;
 }
@@ -836,6 +851,13 @@ export interface TextObject {
   id: string;
   /** Persisted provenance for objects created from the venue-icon palette. */
   semanticKind?: 'icon';
+  /**
+   * Registry key for a vector wayfinding icon (see src/core/icons.ts). Present
+   * on modern icon placements; the object then renders as a single-color vector
+   * Path instead of `text`. Absent on legacy emoji icons, which keep rendering
+   * `text` through the shared glyph path — old charts are never rewritten.
+   */
+  iconKey?: string;
   text: string;
   position: Point;
   fontSize: number;

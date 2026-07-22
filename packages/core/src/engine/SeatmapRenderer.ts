@@ -46,6 +46,7 @@ import type {
 import { accessibilityRingColor } from '../core/types';
 import { chartBounds, expandChart, floorsOf, pointInPolygonWithHoles, polygonLabelPoint, stackFloors } from '../core/layout';
 import { buyerBackgroundImage } from '../core/chartBackgrounds';
+import { venueIconPath, VENUE_ICON_VIEWBOX, VENUE_ICON_STROKE } from '../core/icons';
 import { sectionGeometry } from '../core/sections';
 import { buildSeatIndex, queryRect, type SeatIndex } from '../core/spatialIndex';
 import { CHART_UNITS_PER_METRE, SEATED_EYE_HEIGHT_M, sectionElevationTier } from '../core/units';
@@ -144,7 +145,9 @@ const ISO_TWEEN_MS = 320;
 const CAMERA_GLIDE_MS = 650;
 
 // ---- Section/zone LOD ("melt") tuning -------------------------------------
-/** Section overview is a semantic hierarchy, not a price/availability heatmap. */
+/** Section overview is a semantic hierarchy shaded by four bounded availability
+ *  states (normal / nearly-gone / sold-out / closed) — never a continuous
+ *  price-or-demand heatmap ramp. See overviewStateFill / SectionAvailabilityState. */
 const BLOCK_FILL_ALPHA = 1;
 const SECTION_STROKE_PX = 2;
 const LIGHT_OVERVIEW_SECTION_FILL = '#e5e7eb';
@@ -177,7 +180,8 @@ const FOCUS_DIM_OPACITY = 0.16;
 /** Light/neutral backdrop panel drawn behind the focused section's seats. */
 const FOCUS_BACKDROP_FILL = 'rgba(244,246,248,0.06)';
 /** Okabe-Ito colorblind-safe hues (black dropped — unreadable on dark charts).
- *  Categories map to these by their doc order when colorblind mode is on. */
+ *  Categories bind to these by their stable KEY (sorted), never doc order, so
+ *  reordering categories never re-shuffles seat hues (OV-46). */
 const CB_PALETTE = ['#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7'];
 
 /** Does a seat satisfy a filter? `[]` means "any accessible seat". */
@@ -278,6 +282,43 @@ function overviewPalette(canvasBackground: string): OverviewPalette {
       };
 }
 
+/**
+ * Bounded availability states an overview section shell can read (OV-69). This is
+ * a four-bucket semantic ladder, deliberately NOT a continuous demand heatmap:
+ *  • normal      — shown in the neutral shell fill.
+ *  • nearly-gone  — >0 but ≤10% of the section's seats free: one desaturated step.
+ *  • sold-out     — 0 seats free: a muted, flatter fill that reads unavailable.
+ *  • closed       — operator turned the section off: its own darker slab (kept).
+ * `closed` outranks the live-availability buckets — an operator close is authoritative.
+ */
+type SectionAvailabilityState = 'normal' | 'nearly-gone' | 'sold-out' | 'closed';
+
+/** Section is nearly gone once free seats drop to this fraction of its capacity. */
+const SECTION_NEARLY_GONE_RATIO = 0.1;
+
+/** The one source of truth for a section shell's fill per availability state.
+ *  Both the live paint and the overview evidence set read from here, so the
+ *  "clean shell never leaks category paint" check treats these semantic fills as
+ *  legitimate (not category leakage). */
+function overviewStateFill(palette: OverviewPalette, state: SectionAvailabilityState): string {
+  const base = palette.sectionFill;
+  // Sold-out: drop lightness a notch then drain the cool cast so it reads as a
+  // dead, muted block — distinct from the operator-closed darker-but-tinted slab.
+  const soldOut = desaturate(darken(base, 0.2), 0.85);
+  switch (state) {
+    case 'closed':
+      return darken(base, 0.12);
+    case 'sold-out':
+      return soldOut;
+    case 'nearly-gone':
+      // One measured step toward sold-out — never a smooth per-seat ramp.
+      return lerpColor(base, soldOut, 0.4);
+    case 'normal':
+    default:
+      return base;
+  }
+}
+
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /** Read a custom attr off an event target (Stage | Shape union isn't callable directly). */
@@ -305,6 +346,16 @@ function darken(hex: string, amt: number): string {
   const n = parseInt(m[1], 16);
   const mix = (c: number) => Math.round(c * (1 - amt));
   return `#${((1 << 24) | (mix((n >> 16) & 255) << 16) | (mix((n >> 8) & 255) << 8) | mix(n & 255)).toString(16).slice(1)}`;
+}
+
+/** Mix a #rrggbb colour toward its own perceptual grey by `amt` (0..1) —
+ *  drains saturation without changing brightness, for the muted "sold-out" look. */
+function desaturate(hex: string, amt: number): string {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return hex;
+  const [r, g, b] = rgb;
+  const grey = 0.299 * r + 0.587 * g + 0.114 * b;
+  return toHex(r + (grey - r) * amt, g + (grey - g) * amt, b + (grey - b) * amt);
 }
 
 /** Axis-aligned bounds of a polygon (no padding). */
@@ -394,10 +445,34 @@ function polygonLabelCandidates(outer: Point[], holes: Point[][], preferred: Poi
     )));
 }
 
+/** Trace a closed polygon with rounded corners (radius clamped per corner to
+ *  half the shorter adjacent edge). Mirrors the designer's corner-smoothing so
+ *  the buyer map matches the authored GA shape (OV-66). */
+function roundedPolygonSubpath(
+  context: { moveTo(x: number, y: number): void; arcTo(x1: number, y1: number, x2: number, y2: number, r: number): void; closePath(): void },
+  points: Point[],
+  radius: number,
+): void {
+  const n = points.length;
+  const start = { x: (points[n - 1].x + points[0].x) / 2, y: (points[n - 1].y + points[0].y) / 2 };
+  context.moveTo(start.x, start.y);
+  for (let i = 0; i < n; i += 1) {
+    const curr = points[i];
+    const next = points[(i + 1) % n];
+    const prev = points[(i - 1 + n) % n];
+    const rMax = Math.min(
+      Math.hypot(curr.x - prev.x, curr.y - prev.y) / 2,
+      Math.hypot(next.x - curr.x, next.y - curr.y) / 2,
+    );
+    context.arcTo(curr.x, curr.y, next.x, next.y, Math.max(0, Math.min(radius, rMax)));
+  }
+  context.closePath();
+}
+
 function polygonWithHolesShape(
   outer: Point[],
   holes: Point[][] | undefined,
-  attrs: { fill?: string; stroke?: string; strokeWidth?: number; opacity?: number; listening?: boolean },
+  attrs: { fill?: string; stroke?: string; strokeWidth?: number; opacity?: number; listening?: boolean; cornerRadius?: number },
   outerPath?: SectionOutlinePath,
 ): Shape {
   const signedArea = (points: Point[]): number => points.reduce((sum, point, index) => {
@@ -405,12 +480,14 @@ function polygonWithHolesShape(
     return sum + point.x * next.y - next.x * point.y;
   }, 0);
   const outerClockwise = signedArea(outer) > 0;
+  const cornerRadius = attrs.cornerRadius && attrs.cornerRadius > 0 ? attrs.cornerRadius : 0;
   return new Shape({
     ...attrs,
     sceneFunc(context, shape) {
       context.beginPath();
       const polygonPath = (points: Point[]) => {
         if (!points.length) return;
+        if (cornerRadius > 0 && points.length >= 3) return roundedPolygonSubpath(context, points, cornerRadius);
         context.moveTo(points[0].x, points[0].y);
         for (let index = 1; index < points.length; index += 1) context.lineTo(points[index].x, points[index].y);
         context.closePath();
@@ -654,7 +731,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   /** Interactive node per seat/booth — a Circle for seats, a Rect for booths. */
   private circleById = new Map<string, Shape>();
   /** Booth block geometry, keyed by booth id (= the unit's rowId). */
-  private boothDims = new Map<string, { width: number; height: number; rotation: number }>();
+  private boothDims = new Map<string, { width: number; height: number; rotation: number; points?: Point[] }>();
   /** Booth labels live with the booth shape but obey the shared rendered-size LOD. */
   private boothLabelById = new Map<string, Text>();
   /** Viewport seat labels are rebuilt after each settled camera change. */
@@ -674,6 +751,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     kind: RenderedFreeTextEvidence['kind'];
     categoryKey?: string;
   }>();
+  /** Vector venue-icon Path nodes + authored size; obey the free-text size floor. */
+  private iconNodeById = new Map<string, { node: Path; fontSize: number }>();
   /** Stage/rink landmarks retain a readable screen-space caption at overview. */
   private primaryFocalLabels = new Map<Text, number>();
   /** GA paint and text share price/highlight filter state. */
@@ -696,6 +775,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private effSelection: string = DEF_SELECTION;
   /** Colorblind-safe mode (Okabe-Ito hues + hollow booked seats). */
   private colorblind = false;
+  /** Stable per-category-KEY colorblind hue (OV-46) — order-independent. */
+  private cbHueByKey = new Map<string, string>();
+  /** OV-45(a): authored row-letter labels for the buyer/preview map, resolved in
+   *  world space (matching seat labels) and honouring each row's labelPresentation
+   *  (position/rotation/visibility/style). Painted at the seats LOD rung. */
+  private rowLabelPlan: Array<{ text: string; x: number; y: number; rotation: number; fontSize: number; ink: string; opacity: number }> = [];
   /** Category order from the doc — the stable index into the CB palette. */
   private catOrder: string[] = [];
 
@@ -973,6 +1058,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.accessRingById.clear();
     this.accessGlyphById.clear();
     this.freeTextById.clear();
+    this.iconNodeById.clear();
     this.primaryFocalLabels.clear();
     this.gaById.clear();
     for (const marker of this.selectionMarkers.values()) marker.destroy();
@@ -1036,6 +1122,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.catColor.clear();
     this.catPrice.clear();
     this.catOrder = doc.categories.map((c) => c.key);
+    // OV-46: colorblind-safe hues bind to a category's stable KEY (deterministic
+    // sorted order), never its position. Reordering categories (buyer legend
+    // priority) must never re-shuffle which seat shows which hue.
+    this.cbHueByKey.clear();
+    [...this.catOrder].sort().forEach((key, i) => {
+      this.cbHueByKey.set(key, CB_PALETTE[i % CB_PALETTE.length]);
+    });
     for (const c of doc.categories) {
       this.catColor.set(c.key, c.color);
       if (typeof c.price === 'number') this.catPrice.set(c.key, c.price);
@@ -1043,7 +1136,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
     for (const obj of view.objects) {
       if (obj.type === 'booth') {
-        this.boothDims.set(obj.id, { width: obj.width, height: obj.height, rotation: obj.rotation });
+        this.boothDims.set(obj.id, {
+          width: obj.width, height: obj.height, rotation: obj.rotation,
+          ...(obj.points && obj.points.length >= 3 ? { points: obj.points.map((p) => ({ x: p.x, y: p.y })) } : {}),
+        });
       }
     }
 
@@ -1072,6 +1168,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.unsectionedSeatGroup = new Group({ listening: true });
     this.seatLayer.add(this.unsectionedSeatGroup);
     this.renderSeats();
+    this.buildRowLabelPlan(view);
     // re-add overlay furniture wiped by destroyChildren above (order sets z:
     // labels + foreground decor sit under the hover/focus rings).
     this.overlayLayer.add(this.labelGroup);
@@ -2639,26 +2736,45 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private renderBoothUnit(seat: ExpandedSeat): void {
     const target = this.seatContainer(seat.id);
     const dims = this.boothDims.get(seat.rowId) ?? { width: 40, height: 30, rotation: 0 };
-    const rect = new Rect({
-      x: seat.x,
-      y: seat.y,
-      width: dims.width,
-      height: dims.height,
-      offsetX: dims.width / 2,
-      offsetY: dims.height / 2,
-      rotation: dims.rotation,
-      cornerRadius: 4,
-      perfectDrawEnabled: false,
-      shadowForStrokeEnabled: false,
-      hitStrokeWidth: 0,
-    });
-    rect.setAttr('seatId', seat.id);
-    this.circleById.set(seat.id, rect);
-    target.add(rect);
+    let labelX = seat.x;
+    let labelY = seat.y;
+    let node: Shape;
+    if (dims.points && dims.points.length >= 3) {
+      // Custom outline: local points relative to the booth centre (seat.x/y),
+      // drawn as one closed unit. Label sits at the polygon centroid.
+      node = new Line({
+        x: seat.x,
+        y: seat.y,
+        points: dims.points.flatMap((p) => [p.x, p.y]),
+        closed: true,
+        perfectDrawEnabled: false,
+        shadowForStrokeEnabled: false,
+        hitStrokeWidth: 0,
+      });
+      labelX = seat.x + dims.points.reduce((a, p) => a + p.x, 0) / dims.points.length;
+      labelY = seat.y + dims.points.reduce((a, p) => a + p.y, 0) / dims.points.length;
+    } else {
+      node = new Rect({
+        x: seat.x,
+        y: seat.y,
+        width: dims.width,
+        height: dims.height,
+        offsetX: dims.width / 2,
+        offsetY: dims.height / 2,
+        rotation: dims.rotation,
+        cornerRadius: 4,
+        perfectDrawEnabled: false,
+        shadowForStrokeEnabled: false,
+        hitStrokeWidth: 0,
+      });
+    }
+    node.setAttr('seatId', seat.id);
+    this.circleById.set(seat.id, node);
+    target.add(node);
 
     const t = new Text({
-      x: seat.x,
-      y: seat.y,
+      x: labelX,
+      y: labelY,
       text: seat.displayLabel ?? seat.label,
       fontSize: BOOTH_LABEL_FONT_SIZE,
       fontStyle: '600',
@@ -2673,7 +2789,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.hasBoothText = true; // gate the upright-label scan of the seat layer
     this.boothLabelById.set(seat.id, t);
     target.add(t);
-    this.paintSeat(rect, seat.id);
+    this.paintSeat(node, seat.id);
   }
 
   /**
@@ -2755,8 +2871,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   /** The category's display color — Okabe-Ito hue when colorblind-safe is on. */
   private seatBaseColor(categoryKey: string): string {
     if (!this.colorblind) return this.catColor.get(categoryKey) ?? '#6e7bff';
-    const idx = this.catOrder.indexOf(categoryKey);
-    return CB_PALETTE[(idx >= 0 ? idx : 0) % CB_PALETTE.length];
+    // Key-based (OV-46): the hue follows the category's identity, not its order.
+    return this.cbHueByKey.get(categoryKey) ?? CB_PALETTE[0];
   }
 
   /** Per-seat authored label size relative to the neutral default (1 = default),
@@ -3318,6 +3434,31 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private renderText(obj: Extract<ChartDoc['objects'][number], { type: 'text' }>): void {
     const background = this.canvasBackground;
     const preferredInk = obj.color ?? this.theme.textColor ?? DEF_TEXT;
+    // Modern venue icons draw as a single-color vector Path — pixel-identical to
+    // the Designer. Legacy emoji icons (no iconKey) and captions fall through to
+    // the Konva.Text path below, so old charts render unchanged.
+    const iconPath = obj.semanticKind === 'icon' ? venueIconPath(obj.iconKey) : undefined;
+    if (iconPath) {
+      const scale = obj.fontSize / VENUE_ICON_VIEWBOX;
+      const iconNode = new Path({
+        x: obj.position.x,
+        y: obj.position.y,
+        data: iconPath,
+        rotation: obj.rotation,
+        scaleX: scale,
+        scaleY: scale,
+        stroke: stateAwareBookableLabelInk(background, preferredInk),
+        strokeWidth: VENUE_ICON_STROKE,
+        lineCap: 'round',
+        lineJoin: 'round',
+        fillEnabled: false,
+        listening: false,
+        perfectDrawEnabled: false,
+      });
+      this.iconNodeById.set(obj.id, { node: iconNode, fontSize: obj.fontSize });
+      this.bgLayer.add(iconNode);
+      return;
+    }
     const node = new Text({
       x: obj.position.x,
       y: obj.position.y,
@@ -3513,6 +3654,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       opacity: GA_FILL_OPACITY,
       stroke: color,
       strokeWidth: 1.5,
+      cornerRadius: obj.cornerRadius,
     });
     poly.setAttr('gaId', obj.id);
     poly.on('click tap', (e: KonvaEventObject<Event>) => {
@@ -3767,10 +3909,16 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     sec.outlinePoly.shadowOpacity(0.25 + raw * 0.45);
   }
 
-  /** Recompute a section's neutral overview state and retained detail count. */
+  /** Recompute a section's availability shading + retained availability text. */
   private refreshSectionFill(sec: SectionRender): void {
     sec.blockPoly.fill(this.sectionBlockFill(sec));
-    sec.subLabel.text(t('map.seatsLeft', { count: sec.free }));
+    // The overview shell itself carries the sold-out/nearly-gone signal; this
+    // text stays for the focused/detail + a11y layers (kept hidden on the shell).
+    sec.subLabel.text(
+      this.sectionAvailabilityState(sec) === 'sold-out'
+        ? t('map.soldOut')
+        : t('map.seatsLeft', { count: sec.free }),
+    );
     sec.subLabel.offsetX(sec.subLabel.width() / 2);
   }
 
@@ -3781,10 +3929,22 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       || (sec.zone != null && this.closedSections.has(sec.zone));
   }
 
-  /** Clean overview shells never leak category, price, or live availability paint. */
+  /** Resolve the four-bucket overview availability state for a section (OV-69).
+   *  `closed` (operator) outranks live availability; the availability buckets
+   *  only apply to seated sections (GA-only shells have no seat capacity here). */
+  private sectionAvailabilityState(sec: SectionRender): SectionAvailabilityState {
+    if (this.isSectionClosed(sec)) return 'closed';
+    if (sec.total <= 0) return 'normal';
+    if (sec.free <= 0) return 'sold-out';
+    if (sec.free <= sec.total * SECTION_NEARLY_GONE_RATIO) return 'nearly-gone';
+    return 'normal';
+  }
+
+  /** Overview shells stay neutral except for the bounded availability shading
+   *  (nearly-gone / sold-out) and the operator `closed` slab — never category
+   *  or price paint, which is deferred to section focus/seat detail. */
   private sectionBlockFill(sec: SectionRender): string {
-    const fill = overviewPalette(this.canvasBackground).sectionFill;
-    return this.isSectionClosed(sec) ? darken(fill, 0.12) : fill;
+    return overviewStateFill(overviewPalette(this.canvasBackground), this.sectionAvailabilityState(sec));
   }
 
   /**
@@ -3962,8 +4122,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       if (rescale && sectionLabelT > 0.01) this.fitSectionRungLabels(sec, sx);
       const labelOpacity = sectionLabelT * (1 - zoneT) * dim;
       sec.nameLabel.opacity(sec.nameLabelFits ? labelOpacity : 0);
-      // Availability stays in the focused/detail UI. It is deliberately not a
-      // second map label at the clean section-overview rung.
+      // Availability now reads from the shell FILL (nearly-gone / sold-out
+      // shading, OV-69), so the availability text stays a focused/detail + a11y
+      // affordance — deliberately not a second map label on the overview rung.
       sec.subLabel.opacity(0);
     }
 
@@ -5096,10 +5257,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       };
     });
     const palette = overviewPalette(this.canvasBackground);
-    const neutralSectionFills = new Set([
-      palette.sectionFill.toLowerCase(),
-      darken(palette.sectionFill, 0.12).toLowerCase(),
-    ]);
+    // Every bounded availability-state fill (normal / nearly-gone / sold-out /
+    // closed) is a legitimate semantic shell — not category paint leaking in.
+    const neutralSectionFills = new Set(
+      (['normal', 'nearly-gone', 'sold-out', 'closed'] as const)
+        .map((state) => overviewStateFill(palette, state).toLowerCase()),
+    );
     const visibleSectionShells = this.sections.filter((section) => section.blockPoly.opacity() > 0.05);
     return {
       viewport,
@@ -5380,6 +5543,71 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         && effectiveScale < CACHE_THRESHOLD;
       node.visible(!gaDimmed && !gaOverviewHidden && isBookableLabelLegibleAtScale(node.fontSize(), effectiveScale));
     }
+    // Vector venue icons share the free-text rendered-size floor.
+    for (const { node, fontSize } of this.iconNodeById.values()) {
+      node.visible(isBookableLabelLegibleAtScale(fontSize, effectiveScale));
+    }
+  }
+
+  /** OV-45(a): resolve authored row-letter labels for the buyer/preview map, in
+   *  world space, matching the Designer's placement contract (start/end/both/none
+   *  preset, a free-drag `position` that wins over the preset, rotation, and
+   *  labelStyle colour/size fed through the same auto-contrast guard). Segmented
+   *  rows keep their own logical-label handling and are resolved by their owner. */
+  private buildRowLabelPlan(view: ChartDoc): void {
+    this.rowLabelPlan = [];
+    const background = this.theme.background ?? '#0e1117';
+    const seatsByRow = new Map<string, ExpandedSeat[]>();
+    for (const seat of this.seats) {
+      if (seat.kind === 'booth') continue;
+      const key = seat.logicalRowId ?? seat.rowId;
+      (seatsByRow.get(key) ?? seatsByRow.set(key, []).get(key)!).push(seat);
+    }
+    const seatOrder = (seat: ExpandedSeat): number => seat.logicalSeatIndex
+      ?? Number(seat.id.split(':').pop() ?? 0);
+    for (const obj of view.objects) {
+      if (obj.type !== 'row') continue;
+      // A segmented row paints ONE logical label, owned by its first component.
+      if (obj.segmentedRow && obj.segmentedRow.componentIndex !== 0) continue;
+      const presentation = obj.segmentedRow?.labelPresentation ?? obj.labelPresentation;
+      if (presentation?.visible === false || presentation?.positionPreset === 'none') continue;
+      const key = obj.segmentedRow ? obj.segmentedRow.groupId : obj.id;
+      const seats = (seatsByRow.get(key) ?? []).slice().sort((a, b) => seatOrder(a) - seatOrder(b));
+      if (!seats.length) continue;
+      const first = seats[0];
+      const last = seats[seats.length - 1];
+      const labelStyle = presentation?.labelStyle;
+      const ink = stateAwareBookableLabelInk(
+        background,
+        labelStyle?.color ?? this.theme.rowLabelColor ?? this.theme.textColor ?? '#e6e9f0',
+      );
+      const fontSize = labelStyle?.size ?? 12;
+      const rotation = presentation?.rotation ?? 0;
+      const text = obj.segmentedRow?.displayLabel ?? obj.displayLabel ?? obj.label;
+      const opacity = this.objectFilteredOut(obj) ? 0.15 : 1;
+      const push = (x: number, y: number) => this.rowLabelPlan.push({ text, x, y, rotation, fontSize, ink, opacity });
+      if (presentation?.position) {
+        // Free-drag wins: the stored point is the label's visual centre (WYSIWYG
+        // with the Designer canvas and its placement handle).
+        push(presentation.position.x, presentation.position.y);
+        continue;
+      }
+      const radians = (obj.rotation * Math.PI) / 180;
+      const along = { x: Math.cos(radians), y: Math.sin(radians) };
+      const gap = this.seatR + 12;
+      const preset = presentation?.positionPreset ?? 'start';
+      if (preset === 'start' || preset === 'both') push(first.x - along.x * gap, first.y - along.y * gap);
+      if (preset === 'end' || preset === 'both') push(last.x + along.x * gap, last.y + along.y * gap);
+    }
+  }
+
+  /** Row labels never carry status; the buyer just dims them under the same
+   *  category/price filters that dim their seats. */
+  private objectFilteredOut(obj: { categoryKey?: string }): boolean {
+    const key = obj.categoryKey;
+    if (!key) return false;
+    return Boolean((this.categoryHighlight && key !== this.categoryHighlight)
+      || (this.categoryFilter && !this.categoryFilter.has(key)));
   }
 
   private updateLabels(): void {
@@ -5479,6 +5707,33 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       this.seatLabelContainer(seat.id).add(t);
       this.seatLabelById.set(seat.id, t);
       if (++count >= MAX_LABELS) break;
+    }
+    // OV-45(a): authored row letters, world-space like seat labels, at the seats
+    // rung. Culled by screen bounds; centred and honouring per-row rotation/style.
+    for (const rl of this.rowLabelPlan) {
+      const screen = this.worldToScreen({ x: rl.x, y: rl.y });
+      if (screen.x < -40 || screen.x > this.stage.width() + 40
+        || screen.y < -40 || screen.y > this.stage.height() + 40) continue;
+      const t = new Text({
+        x: rl.x,
+        y: rl.y,
+        text: rl.text,
+        fontSize: rl.fontSize,
+        fontStyle: '700',
+        fontFamily: this.labelFont(),
+        fill: rl.ink,
+        rotation: rl.rotation,
+        opacity: rl.opacity,
+        shadowColor: '#05070c',
+        shadowBlur: rl.ink.toLowerCase() === '#ffffff' ? 5 : 0,
+        shadowOpacity: rl.ink.toLowerCase() === '#ffffff' ? 0.8 : 0,
+        shadowForStrokeEnabled: false,
+        listening: false,
+        perfectDrawEnabled: false,
+      });
+      t.offsetX(t.width() / 2);
+      t.offsetY(t.height() / 2);
+      this.labelGroup.add(t);
     }
     // Keep freshly-built seat labels upright under the iso layer skew.
     if (this.isoT > 0 && this.viewMode !== 'perspective') this.applyUprightLabels();

@@ -48,6 +48,9 @@ const FILES = [
   ['src/core/spatialIndex.ts', 'packages/core/src/core/spatialIndex.ts'],
   ['src/core/perspectiveProjection.ts', 'packages/core/src/core/perspectiveProjection.ts'],
   ['src/core/shapeLineStyle.ts', 'packages/core/src/core/shapeLineStyle.ts'],
+  // Vector wayfinding icon registry (OV-71) — imported by SeatmapRenderer (and
+  // the designer) to draw venue icons as platform-stable Konva paths.
+  ['src/core/icons.ts', 'packages/core/src/core/icons.ts'],
   // Physical-unit helpers (metres <-> world px, real seat heights/rake). Added
   // with the 3D-foundations work; imported by layout, sections, the renderer and
   // the panorama/sightline generator, so it must mirror or those imports break.

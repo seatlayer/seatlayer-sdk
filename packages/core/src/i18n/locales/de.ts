@@ -26,6 +26,7 @@ export const de: Dict = {
   // renderer (drawn on the Konva map — shared by the embed SDK)
   'map.aria': 'Sitzplan. Mit Pfeiltasten zwischen Plätzen navigieren, Eingabe zum Auswählen.',
   'map.seatsLeft': '{count} FREI',
+  'map.soldOut': 'AUSVERKAUFT',
   'map.statusHeld': 'Reserviert',
   'map.statusTaken': 'Vergeben',
   'map.fromPrice': 'AB {price}',
@@ -34,7 +35,7 @@ export const de: Dict = {
   'picker.floor': 'Etage',
   'picker.zoomLevel': 'Zoomstufe',
   'picker.rungTip.zones': 'Übersicht — Bereichsgruppen wie Nordtribüne oder VIP',
-  'picker.rungTip.sections': 'Bereichs-Blöcke — Kategoriesortierung + Verfügbarkeitstönung',
+  'picker.rungTip.sections': 'Bereichs-Blöcke — ausverkaufte und fast volle Bereiche werden abgedunkelt, um die Verfügbarkeit auf einen Blick zu zeigen',
   'picker.rungTip.seats': 'Einzelne Plätze — Blöcke lösen sich zu Punkten auf',
   'picker.rungLabel.zones': 'ZONEN',
   'picker.rungLabel.sections': 'BEREICHE',
