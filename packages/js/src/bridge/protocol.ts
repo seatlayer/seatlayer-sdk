@@ -235,12 +235,21 @@ export function toErrorPayload(err: unknown, fallbackCode: BridgeErrorCode): Bri
   }
   if (err && typeof err === 'object') {
     const e = err as Record<string, unknown>;
-    const code = typeof e.code === 'string' && e.code ? e.code : fallbackCode;
+    // The API discriminates a 409 by `reason` (`sold_out`, `not_enough_together`,
+    // `event_closed`, …) while its top-level `error` — which surfaces as the
+    // generic `.code`/`.message` `conflict` — is only the bucket. Native buyer UI
+    // must branch on the SPECIFIC reason ("sold out" vs "couldn't seat you
+    // together"), so `reason` becomes the surfaced `code` when present; an
+    // explicit `code` is next; the fallback last. The reason is NOT merely buried
+    // in `details` where a native decoder branching on `code` would never see it.
+    const reason = typeof e.reason === 'string' && e.reason ? e.reason : undefined;
+    const explicitCode = typeof e.code === 'string' && e.code ? e.code : undefined;
+    const code = reason ?? explicitCode ?? fallbackCode;
     const message = typeof e.message === 'string' ? e.message : String(err);
     const details: Record<string, unknown> = {};
     if (typeof e.status === 'number') details.status = e.status;
     if (Array.isArray(e.conflicts)) details.conflicts = e.conflicts;
-    if (typeof e.reason === 'string') details.reason = e.reason;
+    if (reason) details.reason = reason;
     return {
       code,
       message,

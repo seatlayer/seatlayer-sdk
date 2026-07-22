@@ -100,7 +100,18 @@ async function request<T>(
     const err = data as
       | { error?: string; code?: string; conflicts?: HoldConflict[]; reason?: string }
       | null;
-    throw new ApiError(res.status, err?.error ?? `request_failed_${res.status}`, err?.code, err?.conflicts, err?.reason);
+    // The public API names its machine code in `error` (`conflict`, `event_closed`,
+    // …); older/other routes may send `code`. Carry whichever into ApiError.code so
+    // the code is populated (it was previously always undefined — nothing reads it
+    // yet) and the bridge can pass it through. The specific 409 discriminator still
+    // rides in `reason` (`sold_out` | `not_enough_together`) and wins downstream.
+    throw new ApiError(
+      res.status,
+      err?.error ?? `request_failed_${res.status}`,
+      err?.code ?? err?.error,
+      err?.conflicts,
+      err?.reason,
+    );
   }
   return data as T;
 }

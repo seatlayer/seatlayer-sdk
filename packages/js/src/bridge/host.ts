@@ -59,13 +59,18 @@ export interface BridgeChart {
   render(): Promise<unknown>;
   /** Live vs test event, as reported by the server with the chart. */
   getMode(): 'live' | 'test' | null;
-  hold(options?: { ttlMs?: number }): Promise<HoldResult | null>;
-  resumeHold(holdId: string): Promise<HoldResult | null>;
+  // Throwing variants (…OrThrow): a 409 must reach onCmd's catch so the command
+  // is answered with an `err` carrying the specific API reason. The public
+  // hold()/bestAvailable()/… swallow the throw into onError + null (the direct
+  // web-consumer contract), which would otherwise hide the conflict as a bare
+  // `res { hold: null }`.
+  holdOrThrow(options?: { ttlMs?: number }): Promise<HoldResult | null>;
+  resumeHoldOrThrow(holdId: string): Promise<HoldResult | null>;
   extendHold(ttlMs?: number): Promise<HoldResult | null>;
   release(): Promise<void>;
   releaseLabels(labels: string[]): Promise<boolean>;
-  bestAvailable(qty: number, categoryKey?: string): Promise<BestAvailableResult | null>;
-  holdGA(areaId: string, qty: number, options?: { tierId?: string | null; ttlMs?: number }): Promise<HoldResult | null>;
+  bestAvailableOrThrow(qty: number, categoryKey?: string): Promise<BestAvailableResult | null>;
+  holdGAOrThrow(areaId: string, qty: number, options?: { tierId?: string | null; ttlMs?: number }): Promise<HoldResult | null>;
   setSeatTier(seatId: string, tierId: string | null): void;
   getSelection(): SelectedSeat[];
   getCurrentHold(): HoldResult | null;
@@ -221,8 +226,8 @@ type CommandHandler = (chart: BridgeChart, p: unknown) => unknown | Promise<unkn
  * array so a payload can gain fields later without breaking native decoders.
  */
 const COMMANDS: Record<string, CommandHandler> = {
-  hold: async (chart, p) => ({ hold: await chart.hold({ ttlMs: optNumber(obj(p), 'ttlMs') }) }),
-  resumeHold: async (chart, p) => ({ hold: await chart.resumeHold(reqString(obj(p), 'holdId')) }),
+  hold: async (chart, p) => ({ hold: await chart.holdOrThrow({ ttlMs: optNumber(obj(p), 'ttlMs') }) }),
+  resumeHold: async (chart, p) => ({ hold: await chart.resumeHoldOrThrow(reqString(obj(p), 'holdId')) }),
   extendHold: async (chart, p) => ({ hold: await chart.extendHold(optNumber(obj(p), 'ttlMs')) }),
   release: async (chart) => {
     await chart.release();
@@ -231,11 +236,11 @@ const COMMANDS: Record<string, CommandHandler> = {
   releaseLabels: async (chart, p) => ({ released: await chart.releaseLabels(reqStringArray(obj(p), 'labels')) }),
   bestAvailable: async (chart, p) => {
     const args = obj(p);
-    return { hold: await chart.bestAvailable(reqNumber(args, 'qty'), optString(args, 'categoryKey')) };
+    return { hold: await chart.bestAvailableOrThrow(reqNumber(args, 'qty'), optString(args, 'categoryKey')) };
   },
   holdGA: async (chart, p) => {
     const args = obj(p);
-    const hold = await chart.holdGA(reqString(args, 'areaId'), reqNumber(args, 'qty'), {
+    const hold = await chart.holdGAOrThrow(reqString(args, 'areaId'), reqNumber(args, 'qty'), {
       tierId: args.tierId === undefined ? undefined : nullableString(args, 'tierId'),
       ttlMs: optNumber(args, 'ttlMs'),
     });

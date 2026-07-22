@@ -9,13 +9,19 @@ function fakeChart() {
   return {
     render: vi.fn(async () => undefined),
     getMode: vi.fn((): 'live' | 'test' | null => 'live'),
+    // The bridge drives the throwing (…OrThrow) variants so a 409 surfaces as an
+    // `err`; the public swallowing methods exist for direct web consumers.
     hold: vi.fn(async () => ({ holdId: 'h1', expiresAt: 123 })),
+    holdOrThrow: vi.fn(async () => ({ holdId: 'h1', expiresAt: 123 })),
     resumeHold: vi.fn(async () => ({ holdId: 'h1', expiresAt: 123 })),
+    resumeHoldOrThrow: vi.fn(async () => ({ holdId: 'h1', expiresAt: 123 })),
     extendHold: vi.fn(async () => ({ holdId: 'h1', expiresAt: 456 })),
     release: vi.fn(async () => undefined),
     releaseLabels: vi.fn(async () => true),
     bestAvailable: vi.fn(async () => ({ holdId: 'h2', expiresAt: 9, labels: ['A-1'] })),
+    bestAvailableOrThrow: vi.fn(async () => ({ holdId: 'h2', expiresAt: 9, labels: ['A-1'] })),
     holdGA: vi.fn(async () => ({ holdId: 'h3', expiresAt: 9 })),
+    holdGAOrThrow: vi.fn(async () => ({ holdId: 'h3', expiresAt: 9 })),
     setSeatTier: vi.fn(),
     getSelection: vi.fn(() => [{ id: 's1', label: 'A-1' }]),
     getCurrentHold: vi.fn(() => ({ holdId: 'h1', expiresAt: 123 })),
@@ -313,7 +319,7 @@ describe('bridge host — commands', () => {
   it('correlates concurrent commands by id', async () => {
     const h = await ready();
     let resolveHold: ((value: { holdId: string; expiresAt: number }) => void) | null = null;
-    h.chart.hold.mockImplementationOnce(
+    h.chart.holdOrThrow.mockImplementationOnce(
       () => new Promise((resolve) => { resolveHold = resolve; }),
     );
 
@@ -332,10 +338,10 @@ describe('bridge host — commands', () => {
     const h = await ready();
 
     expect(await cmd(h, 'hold', { ttlMs: 5000 })).toMatchObject({ k: 'res', p: { hold: { holdId: 'h1' } } });
-    expect(h.chart.hold).toHaveBeenCalledWith({ ttlMs: 5000 });
+    expect(h.chart.holdOrThrow).toHaveBeenCalledWith({ ttlMs: 5000 });
 
     await cmd(h, 'resumeHold', { holdId: 'h9' });
-    expect(h.chart.resumeHold).toHaveBeenCalledWith('h9');
+    expect(h.chart.resumeHoldOrThrow).toHaveBeenCalledWith('h9');
 
     await cmd(h, 'extendHold', { ttlMs: 60_000 });
     expect(h.chart.extendHold).toHaveBeenCalledWith(60_000);
@@ -347,10 +353,10 @@ describe('bridge host — commands', () => {
     expect(h.chart.releaseLabels).toHaveBeenCalledWith(['A-1', 'A-2']);
 
     await cmd(h, 'bestAvailable', { qty: 3, categoryKey: 'vip' });
-    expect(h.chart.bestAvailable).toHaveBeenCalledWith(3, 'vip');
+    expect(h.chart.bestAvailableOrThrow).toHaveBeenCalledWith(3, 'vip');
 
     await cmd(h, 'holdGA', { areaId: 'ga1', qty: 2, tierId: 'child' });
-    expect(h.chart.holdGA).toHaveBeenCalledWith('ga1', 2, { tierId: 'child', ttlMs: undefined });
+    expect(h.chart.holdGAOrThrow).toHaveBeenCalledWith('ga1', 2, { tierId: 'child', ttlMs: undefined });
 
     await cmd(h, 'setSeatTier', { seatId: 's1', tierId: null });
     expect(h.chart.setSeatTier).toHaveBeenCalledWith('s1', null);
@@ -410,7 +416,7 @@ describe('bridge host — commands', () => {
 
   it('converts a rejected chart call into an err, passing the API code through', async () => {
     const h = await ready();
-    h.chart.hold.mockRejectedValueOnce(
+    h.chart.holdOrThrow.mockRejectedValueOnce(
       Object.assign(new Error('seats gone'), { code: 'sold_out', status: 409, conflicts: [{ label: 'A-1', status: 'booked' }] }),
     );
     const reply = await cmd(h, 'hold');
@@ -419,6 +425,50 @@ describe('bridge host — commands', () => {
       code: 'sold_out',
       message: 'seats gone',
       details: { status: 409, conflicts: [{ label: 'A-1', status: 'booked' }] },
+    });
+  });
+
+  // Regression: the live-data iOS bug. A best-available 409 carries the specific
+  // reason in `reason` while the API's `error` (→ `.code`/`.message`) is the
+  // generic `conflict`. The bridge `err` MUST surface the reason as the code
+  // (`sold_out`), not flatten to `conflict`, and MUST carry the conflicts array.
+  it('surfaces the API 409 reason as the err code, not a flattened conflict', async () => {
+    const h = await ready();
+    h.chart.bestAvailableOrThrow.mockRejectedValueOnce(
+      Object.assign(new Error('conflict'), {
+        code: 'conflict',
+        status: 409,
+        reason: 'sold_out',
+        conflicts: [{ label: 'A-1', status: 'booked' }],
+      }),
+    );
+    const reply = await cmd(h, 'bestAvailable', { qty: 4 });
+    expect(reply.k).toBe('err');
+    const p = reply.p as { code: string; message: string; details: { reason: string; conflicts: unknown[]; status: number } };
+    expect(p.code).toBe('sold_out'); // NOT the flattened 'conflict'
+    expect(p.code).not.toBe('conflict');
+    expect(p.details.reason).toBe('sold_out');
+    expect(p.details.conflicts).toEqual([{ label: 'A-1', status: 'booked' }]);
+    expect(p.details.status).toBe(409);
+  });
+
+  // A plain hold conflict has conflicts but NO reason: the honest code is the
+  // generic `conflict` (from the API `error`), and the conflicts array rides in
+  // details so native can name the seats that were taken.
+  it('keeps a reason-less hold conflict as code=conflict with its conflicts', async () => {
+    const h = await ready();
+    h.chart.holdOrThrow.mockRejectedValueOnce(
+      Object.assign(new Error('conflict'), {
+        code: 'conflict',
+        status: 409,
+        conflicts: [{ label: 'B-2', status: 'held' }],
+      }),
+    );
+    const reply = await cmd(h, 'hold');
+    expect(reply.k).toBe('err');
+    expect(reply.p).toMatchObject({
+      code: 'conflict',
+      details: { status: 409, conflicts: [{ label: 'B-2', status: 'held' }] },
     });
   });
 

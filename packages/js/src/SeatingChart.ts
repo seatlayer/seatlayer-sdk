@@ -313,23 +313,41 @@ export class SeatingChart {
   /** Hold the current selection. Resolves the hold, or null on a 409 conflict. */
   async hold(options: { ttlMs?: number } = {}): Promise<HoldResult | null> {
     try {
-      const h = await this.controller.hold(undefined, options.ttlMs);
-      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
+      return await this.holdOrThrow(options);
     } catch (err) {
       this.opts.onError?.(err);
       return null;
     }
   }
 
+  /**
+   * @internal Like {@link hold} but RE-THROWS the structured API error (409
+   * `reason`/`code` + `conflicts`) instead of swallowing it into `onError` +
+   * `null`. The native WebView host adapter needs the throw so it can answer the
+   * originating command with a correlated error carrying the SPECIFIC reason
+   * (`sold_out` vs `not_enough_together`); the public method above keeps the
+   * catch-and-onError contract that direct web consumers rely on. Not a stable
+   * part of the embed API.
+   */
+  async holdOrThrow(options: { ttlMs?: number } = {}): Promise<HoldResult | null> {
+    const h = await this.controller.hold(undefined, options.ttlMs);
+    return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
+  }
+
   /** Restore an active hold by its opaque id without extending its expiry. */
   async resumeHold(holdId: string): Promise<HoldResult | null> {
     try {
-      const h = await this.controller.resumeHold(holdId);
-      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
+      return await this.resumeHoldOrThrow(holdId);
     } catch (err) {
       this.opts.onError?.(err);
       return null;
     }
+  }
+
+  /** @internal Throwing variant of {@link resumeHold} for the native host adapter. See {@link holdOrThrow}. */
+  async resumeHoldOrThrow(holdId: string): Promise<HoldResult | null> {
+    const h = await this.controller.resumeHold(holdId);
+    return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
   }
 
   /**
@@ -365,23 +383,37 @@ export class SeatingChart {
     options: { tierId?: string | null; ttlMs?: number } = {},
   ): Promise<HoldResult | null> {
     try {
-      const h = await this.controller.holdGA(areaId, qty, options);
-      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
+      return await this.holdGAOrThrow(areaId, qty, options);
     } catch (err) {
       this.opts.onError?.(err);
       return null;
     }
   }
 
+  /** @internal Throwing variant of {@link holdGA} for the native host adapter. See {@link holdOrThrow}. */
+  async holdGAOrThrow(
+    areaId: string,
+    qty: number,
+    options: { tierId?: string | null; ttlMs?: number } = {},
+  ): Promise<HoldResult | null> {
+    const h = await this.controller.holdGA(areaId, qty, options);
+    return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
+  }
+
   /** Ask the server for the `qty` best free seats and hold them atomically. */
   async bestAvailable(qty: number, categoryKey?: string): Promise<BestAvailableResult | null> {
     try {
-      const h = await this.controller.bestAvailable(qty, categoryKey);
-      return h ? { holdId: h.holdId, expiresAt: h.expiresAt, labels: h.labels, seats: h.seats, items: h.items } : null;
+      return await this.bestAvailableOrThrow(qty, categoryKey);
     } catch (err) {
       this.opts.onError?.(err);
       return null;
     }
+  }
+
+  /** @internal Throwing variant of {@link bestAvailable} for the native host adapter. See {@link holdOrThrow}. */
+  async bestAvailableOrThrow(qty: number, categoryKey?: string): Promise<BestAvailableResult | null> {
+    const h = await this.controller.bestAvailable(qty, categoryKey);
+    return h ? { holdId: h.holdId, expiresAt: h.expiresAt, labels: h.labels, seats: h.seats, items: h.items } : null;
   }
 
   /**

@@ -127,17 +127,34 @@ describe('bridge protocol — error normalisation', () => {
     expect(payload).toEqual({ code: 'bad_payload', message: 'nope', details: { field: 'qty' } });
   });
 
-  it('passes an API error code straight through, with its context', () => {
-    const apiError = Object.assign(new Error('sold out'), {
-      code: 'sold_out',
+  // The API buckets every 409 under `error: 'conflict'` (→ `.code`/`.message`)
+  // and names the SPECIFIC outcome in `reason`. The reason must become the
+  // surfaced code so native can branch on it — not stay flattened as `conflict`.
+  it('surfaces the specific API reason as the code, not the generic bucket', () => {
+    const apiError = Object.assign(new Error('conflict'), {
+      code: 'conflict',
       status: 409,
       conflicts: [{ label: 'A-1', status: 'booked' }],
       reason: 'not_enough_together',
     });
     expect(toErrorPayload(apiError, 'command_failed')).toEqual({
-      code: 'sold_out',
-      message: 'sold out',
+      code: 'not_enough_together',
+      message: 'conflict',
       details: { status: 409, conflicts: [{ label: 'A-1', status: 'booked' }], reason: 'not_enough_together' },
+    });
+  });
+
+  // A reason-less error keeps its explicit code (e.g. a plain hold conflict).
+  it('keeps an explicit code when there is no reason', () => {
+    const apiError = Object.assign(new Error('conflict'), {
+      code: 'conflict',
+      status: 409,
+      conflicts: [{ label: 'A-1', status: 'held' }],
+    });
+    expect(toErrorPayload(apiError, 'command_failed')).toEqual({
+      code: 'conflict',
+      message: 'conflict',
+      details: { status: 409, conflicts: [{ label: 'A-1', status: 'held' }] },
     });
   });
 
