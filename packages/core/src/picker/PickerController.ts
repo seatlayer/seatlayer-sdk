@@ -21,6 +21,7 @@ import { strandedSingles } from '../core/orphans';
 import { pickBestAvailable } from '../core/bestAvailable';
 import { t } from '../i18n';
 import type {
+  AccessibilityType,
   CategoryTier,
   ChartDoc,
   ChartObject,
@@ -28,11 +29,16 @@ import type {
   ISeatmapRenderer,
   LodRung,
   RendererCallbacks,
+  RendererViewMode,
   SeatCommercialAttributes,
   SeatStatus,
   SectionObject,
 } from '../core/types';
 import { gaAreasOf, gaUnitLabels } from '../core/ga';
+import {
+  groupedTableInventory,
+  type GroupedTableInventoryUnit,
+} from '../core/tableInventory';
 
 const DEFAULT_MAX_SELECTION = 10;
 const MAX_BACKOFF_MS = 15_000;
@@ -43,6 +49,16 @@ export interface PickerSeat {
   /** Buyer-facing label (row `displayLabel` applied). Falls back to `label`;
    *  never use for booking — `label` is the inventory/booking identity. */
   displayLabel?: string;
+  /** Buyer-facing object type word authored in Designer. Pure presentation. */
+  displayType?: string;
+  /** @deprecated Use `displayType`; retained for source compatibility. */
+  rowType?: string;
+  /** Stable parent chart-object id (row/table/booth), separate from seat id. */
+  objectId?: string;
+  /** Buyer-facing spatial context shared by selection, hold, and hover callbacks. */
+  sectionLabel?: string;
+  rowLabel?: string;
+  seatNumber?: string;
   categoryKey: string;
   /** Price for the chosen tier when the category has tiers, else the base price. */
   price: number;
@@ -54,6 +70,30 @@ export interface PickerSeat {
    *  note) resolved for this seat; absent when the seat carries none. Lets the
    *  buyer cart + confirm surface flag limited-view/premium seats. */
   commercial?: SeatCommercialAttributes;
+  /** Accessibility semantics exposed to SDK callbacks and buyer summaries. */
+  accessibility?: AccessibilityType[];
+  /** Explicit physical wheelchair chair/bay distinction. */
+  wheelchairSpaceType?: 'seat-present' | 'no-seat';
+  /** Physical/bookable source kind; booking identity remains `label`. */
+  objectType?: 'seat' | 'booth' | 'table';
+  /** Grouped-table booking contract; absent for normal chair inventory. */
+  bookingMode?: 'whole' | 'variable';
+  /** Guest quantity represented by this one atomic table line. */
+  quantity?: number;
+  capacity?: number;
+  minOccupancy?: number;
+  maxOccupancy?: number;
+}
+
+/** Accessible quantity/confirmation payload for one model-2 table selection. */
+export interface TableSelectionDetails extends PickerSeat {
+  objectType: 'table';
+  bookingMode: 'whole' | 'variable';
+  quantity: number;
+  capacity: number;
+  minOccupancy: number;
+  maxOccupancy: number;
+  physicalSeatIds: string[];
 }
 
 /**
@@ -66,13 +106,21 @@ export interface SeatHoverDetails extends PickerSeat {
   categoryColor: string;
   status: SeatStatus;
   currency: string;
-  /** Human-readable spatial context for hover and confirmation UI. */
-  sectionLabel?: string;
-  rowLabel?: string;
-  seatNumber?: string;
-  /** Buyer-facing type word for the row/table (seats.io "Displayed type"),
-   *  overriding the default "Row" in tooltip/confirm/cart. Absent = "Row". */
-  rowType?: string;
+}
+
+export interface PickerGAArea {
+  id: string;
+  /** Stable technical/inventory prefix. */
+  label: string;
+  /** Buyer-facing area name and type; absent fields use UI defaults. */
+  displayLabel?: string;
+  displayType?: string;
+  capacity: number;
+  available: number;
+  categoryKey: string;
+  price: number;
+  currency: string;
+  tiers?: CategoryTier[];
 }
 
 export interface HoldConflict {
@@ -133,14 +181,14 @@ interface ResumeHoldResponse extends HoldResponse {
 export interface HoldServerItem {
   label: string;
   objectId: string;
-  objectType: 'seat' | 'booth' | 'ga';
+  objectType: 'seat' | 'booth' | 'ga' | 'table';
   categoryKey: string;
   tierId: string | null;
   unitPrice: number;
   currency: string;
   quantity?: number;
 }
-export interface HoldSelectionRequest { label: string; tierId?: string | null }
+export interface HoldSelectionRequest { label: string; tierId?: string | null; quantity?: number }
 interface BestAvailableResponse extends HoldResponse {
   labels: string[];
 }
@@ -149,11 +197,11 @@ interface BestAvailableResponse extends HoldResponse {
 export interface PickerTransport {
   chart(key: string): Promise<{
     doc: ChartDoc;
-    event: { key: string; name: string; salesClosed?: boolean; venue?: string | null; startsAt?: number | null; currency?: string; mode?: string };
+    event: { key: string; name: string; salesClosed?: boolean; venue?: string | null; startsAt?: number | null; currency?: string; mode?: string; inventoryModelVersion?: 1 | 2 };
   }>;
   objects(key: string): Promise<{ seats: Record<string, string>; hidden?: string[]; closed?: string[] }>;
   hold(key: string, selections: HoldSelectionRequest[], ttlMs?: number, replaceHoldId?: string): Promise<HoldResponse>;
-  bestAvailable(key: string, qty: number, categoryKey?: string): Promise<BestAvailableResponse>;
+  bestAvailable(key: string, qty: number, categoryKey?: string, zoneId?: string): Promise<BestAvailableResponse>;
   release(key: string, labels: string[], holdId: string): Promise<unknown>;
   /** Optional capability-style lookup used to restore an active browser hold. */
   resume?(key: string, holdId: string): Promise<ResumeHoldResponse>;
@@ -167,6 +215,8 @@ export interface PickerTransport {
 export interface PickerCallbacks extends RendererCallbacks {
   /** Selection changed (manual clicks or a server best-available pick). */
   onSelectionChange?: (seats: PickerSeat[]) => void;
+  /** A grouped table was selected and needs buyer confirmation/guest quantity. */
+  onTableSelectionRequest?: (table: TableSelectionDetails) => void;
   /** A hold opened (manual hold or best-available). */
   onHold?: (hold: HoldInfo) => void;
   /** A prior active hold was restored from its opaque hold id. */
@@ -263,8 +313,25 @@ export class PickerController {
   /** id → seat, for the section-summary breakdown (renderer members are ids). */
   private seatById = new Map<string, ExpandedSeat>();
   /** id → buyer-facing spatial metadata used by every tooltip/confirm surface. */
-  private seatContext = new Map<string, { sectionLabel?: string; rowLabel?: string; seatNumber?: string; rowType?: string }>();
+  private seatContext = new Map<string, {
+    objectId: string;
+    objectType: 'seat' | 'booth' | 'table';
+    sectionLabel?: string;
+    rowLabel?: string;
+    seatNumber?: string;
+    displayType?: string;
+    /** @deprecated compatibility alias for older tooltip consumers. */
+    rowType?: string;
+  }>();
   private allIds: string[] = [];
+  /** Model-2 tables are one booking unit whose chairs remain renderer geometry. */
+  private groupedTablesByObject = new Map<string, GroupedTableInventoryUnit>();
+  private groupedTablesByLabel = new Map<string, GroupedTableInventoryUnit>();
+  private groupedTableBySeatId = new Map<string, GroupedTableInventoryUnit>();
+  private tableQuantities = new Map<string, number>();
+  /** Variable quantity is a buyer contract, never an inferred default. */
+  private confirmedVariableTables = new Set<string>();
+  private groupedSelectionOverhead = 0;
 
   // realtime socket
   private ws: WebSocket | null = null;
@@ -334,6 +401,24 @@ export class PickerController {
     return this.labelToId.get(label);
   }
 
+  private idsForLabel(label: string): string[] {
+    const table = this.groupedTablesByLabel.get(label);
+    if (table) return table.chairs.map((chair) => chair.id);
+    const id = this.labelToId.get(label);
+    return id ? [id] : [];
+  }
+
+  private idsForLabels(labels: Iterable<string>): string[] {
+    return [...new Set([...labels].flatMap((label) => this.idsForLabel(label)))];
+  }
+
+  /** Resolve a physical chair id (or table inventory label) to its table unit. */
+  tableSelection(seatIdOrLabel: string): TableSelectionDetails | null {
+    const group = this.groupedTableBySeatId.get(seatIdOrLabel)
+      ?? this.groupedTablesByLabel.get(seatIdOrLabel);
+    return group ? this.toTableSeat(group) : null;
+  }
+
   /** Fetch chart, build label maps, mount the renderer, seed statuses, go live. */
   async render(host: HTMLDivElement): Promise<{
     doc: ChartDoc;
@@ -359,6 +444,33 @@ export class PickerController {
     if (this.closed) return null;
     this._doc = res.doc;
 
+    try {
+      const groups = groupedTableInventory(
+        res.doc,
+        res.event.inventoryModelVersion === 2 ? 2 : 1,
+      );
+      this.groupedTablesByObject = new Map(groups.map((group) => [group.objectId, group]));
+      this.groupedTablesByLabel = new Map(groups.map((group) => [group.label, group]));
+      this.groupedTableBySeatId = new Map(
+        groups.flatMap((group) => group.chairs.map((chair) => [chair.id, group] as const)),
+      );
+      this.tableQuantities = new Map(groups.map((group) => [
+        group.label,
+        group.mode === 'whole' ? group.capacity : group.minOccupancy,
+      ]));
+      this.confirmedVariableTables = new Set();
+      this.groupedSelectionOverhead = groups.reduce(
+        (sum, group) => sum + Math.max(0, group.chairs.length - 1),
+        0,
+      );
+    } catch (err) {
+      // A model-2 event with an invalid grouping contract is not safe to sell.
+      // Fail before mounting the interactive renderer instead of falling back
+      // to per-chair labels that the server does not own.
+      this.emitError(err);
+      return null;
+    }
+
     this.labelToId = new Map();
     this.labelToSeat = new Map();
     this.seatById = new Map();
@@ -376,32 +488,50 @@ export class PickerController {
       this.allIds.push(s.id);
       const source = chartObjects.get(s.rowId);
       const sourceLabel = source && 'label' in source && typeof source.label === 'string' ? source.label : undefined;
+      const logicalRow = source?.type === 'row' ? source.segmentedRow : undefined;
       // Buyer-facing row name honours the designer's row `displayLabel`; inventory
       // `label` stays the booking identity used everywhere seats are held/booked.
-      const sourceDisplayLabel = source && 'displayLabel' in source && typeof source.displayLabel === 'string' && source.displayLabel
-        ? source.displayLabel
-        : sourceLabel;
-      const rowLabel = s.kind === 'booth' ? undefined : sourceDisplayLabel;
+      const sourceDisplayLabel = logicalRow?.displayLabel
+        ?? (source && 'displayLabel' in source && typeof source.displayLabel === 'string' && source.displayLabel
+          ? source.displayLabel
+          : sourceLabel);
+      const groupedTable = this.groupedTablesByObject.get(s.rowId);
+      const objectType = source?.type === 'table' ? 'table' : source?.type === 'booth' ? 'booth' : 'seat';
+      const rowLabel = sourceDisplayLabel;
       // Buyer-facing type word override (seats.io "Displayed type") — replaces the
       // default "Row" in tooltip/confirm/cart for rows and tables when set.
-      const rowType = source && 'displayType' in source && typeof source.displayType === 'string' && source.displayType.trim()
-        ? source.displayType.trim()
-        : undefined;
+      const rowType = logicalRow?.displayType?.trim()
+        || (source && 'displayType' in source && typeof source.displayType === 'string' && source.displayType.trim()
+          ? source.displayType.trim()
+          : undefined);
       // Seat number is read off the buyer-facing seat label so a renamed row shows
       // the buyer copy; both labels share the same `${prefix}-${number}` suffix.
       const visibleSeatLabel = s.displayLabel ?? s.label;
       const labelParts = visibleSeatLabel.split('-');
-      const seatNumber = sourceDisplayLabel && visibleSeatLabel.startsWith(`${sourceDisplayLabel}-`)
-        ? visibleSeatLabel.slice(sourceDisplayLabel.length + 1)
+      const seatNumber = groupedTable
+        ? undefined
         : s.kind === 'booth'
-          ? visibleSeatLabel
-          : labelParts[labelParts.length - 1] ?? visibleSeatLabel;
+          ? undefined
+        : sourceDisplayLabel && visibleSeatLabel.startsWith(`${sourceDisplayLabel}-`)
+        ? visibleSeatLabel.slice(sourceDisplayLabel.length + 1)
+        : labelParts[labelParts.length - 1] ?? visibleSeatLabel;
       this.seatContext.set(s.id, {
+        objectId: s.rowId,
+        objectType,
         sectionLabel: sectionLabels.get(membership.objectToSection.get(s.rowId) ?? ''),
         rowLabel,
         seatNumber,
-        rowType,
+        ...(rowType ? { displayType: rowType, rowType } : {}),
       });
+    }
+    // The backend speaks the table label, while the renderer still speaks chair
+    // ids. Point the atomic label at a stable representative chair; every
+    // status/selection mutation expands through idsForLabel() below.
+    for (const group of this.groupedTablesByLabel.values()) {
+      const representative = group.chairs[0];
+      if (!representative) continue;
+      this.labelToId.set(group.label, representative.id);
+      this.labelToSeat.set(group.label, representative);
     }
 
     // The organizer's currency travels with the chart payload; it wins over any
@@ -409,16 +539,16 @@ export class PickerController {
     const currency = res.event.currency ?? this.opts.currency;
     this.currency = currency ?? 'USD';
     const renderer = createRenderer(host, {
-      maxSelection: this.maxSelection,
+      // Group chairs are selected together for paint, but count as one logical
+      // inventory line. The controller enforces the guest-weighted cap.
+      maxSelection: this.rendererSelectionCap(),
       confirmSelection: this.opts.confirmSelection,
       currency,
       onSelect: (seat) => {
-        this.opts.onSelect?.(seat);
-        this.emitSelectionChange();
+        this.handleRendererSelect(seat);
       },
       onDeselect: (seat) => {
-        this.opts.onDeselect?.(seat);
-        this.emitSelectionChange();
+        this.handleRendererDeselect(seat);
       },
       onSelectionLimit: this.opts.onSelectionLimit,
       onHover: (seat) => {
@@ -482,7 +612,20 @@ export class PickerController {
 
   getSelection(): PickerSeat[] {
     if (!this.renderer) return [];
-    return this.renderer.getSelection().map((s) => this.toSeat(s));
+    const out: PickerSeat[] = [];
+    const grouped = new Set<string>();
+    for (const seat of this.renderer.getSelection()) {
+      const table = this.groupedTableBySeatId.get(seat.id);
+      if (table) {
+        if (!grouped.has(table.label)) {
+          grouped.add(table.label);
+          out.push(this.toTableSeat(table));
+        }
+      } else {
+        out.push(this.toSeat(seat));
+      }
+    }
+    return out;
   }
   /** Enriched metadata for a seat confirmation card or tooltip. */
   seatDetails(seatId: string): SeatHoverDetails | null {
@@ -491,20 +634,181 @@ export class PickerController {
   }
   clearSelection(): void {
     this.renderer?.clearSelection();
+    this.resetUnheldTableQuantities();
     this.emitSelectionChange();
   }
   deselect(ids: string[]): void {
-    this.renderer?.deselect(ids);
+    const expanded = new Set<string>();
+    for (const id of ids) {
+      const table = this.groupedTableBySeatId.get(id) ?? this.groupedTablesByLabel.get(id);
+      if (table) {
+        table.chairs.forEach((chair) => expanded.add(chair.id));
+        if (!this.hold_?.labels.includes(table.label)) {
+          this.tableQuantities.set(
+            table.label,
+            table.mode === 'whole' ? table.capacity : table.minOccupancy,
+          );
+          if (table.mode === 'variable') this.confirmedVariableTables.delete(table.label);
+        }
+      } else expanded.add(id);
+    }
+    this.renderer?.deselect([...expanded]);
     this.emitSelectionChange();
   }
   setMaxSelection(maxSelection: number): void {
     this.maxSelection = Math.max(0, Math.floor(maxSelection));
-    this.renderer?.setMaxSelection?.(this.maxSelection);
+    this.renderer?.setMaxSelection?.(this.rendererSelectionCap());
   }
   select(ids: string[]): PickerSeat[] {
-    const added = this.renderer?.select?.(ids) ?? [];
+    const before = new Set(this.getSelection().map((seat) => seat.label));
+    const expanded = new Set<string>();
+    for (const id of ids) {
+      const table = this.groupedTableBySeatId.get(id) ?? this.groupedTablesByLabel.get(id);
+      if (table) table.chairs.forEach((chair) => expanded.add(chair.id));
+      else expanded.add(id);
+    }
+    this.renderer?.select?.([...expanded]);
+    if (this.selectionGuestCount() > this.maxSelection) {
+      this.renderer?.deselect([...expanded]);
+      this.opts.onSelectionLimit?.(this.maxSelection);
+      return [];
+    }
+    const added = this.getSelection().filter((seat) => !before.has(seat.label));
     if (added.length) this.emitSelectionChange();
-    return added.map((seat) => this.toSeat(seat));
+    return added;
+  }
+
+  /** Confirm/update the guest quantity for a selected variable table. */
+  setTableQuantity(label: string, quantity: number): boolean {
+    const table = this.groupedTablesByLabel.get(label);
+    if (!table) return false;
+    const q = table.mode === 'whole' ? table.capacity : Math.floor(quantity);
+    if (!Number.isInteger(q) || q < table.minOccupancy || q > table.maxOccupancy) return false;
+    const previous = this.tableQuantities.get(label) ?? table.minOccupancy;
+    this.tableQuantities.set(label, q);
+    if (this.selectionGuestCount() > this.maxSelection) {
+      this.tableQuantities.set(label, previous);
+      this.opts.onSelectionLimit?.(this.maxSelection);
+      return false;
+    }
+    if (table.mode === 'variable') this.confirmedVariableTables.add(label);
+    this.emitSelectionChange();
+    return true;
+  }
+
+  /** Atomically replace an active variable-table hold with a new guest count. */
+  async replaceTableQuantity(label: string, quantity: number): Promise<HoldInfo | null> {
+    const table = this.groupedTablesByLabel.get(label);
+    const hold = this.hold_;
+    if (!table || table.mode !== 'variable' || !hold?.labels.includes(label)) return null;
+    const q = Math.floor(quantity);
+    if (!Number.isInteger(q) || q < table.minOccupancy || q > table.maxOccupancy) return null;
+    const otherGuests = (hold.items ?? [])
+      .filter((item) => item.label !== label)
+      .reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+    if (otherGuests + q > this.maxSelection) {
+      this.opts.onSelectionLimit?.(this.maxSelection);
+      return null;
+    }
+    const selections: HoldSelectionRequest[] = (hold.items ?? []).map((item) => ({
+      label: item.label,
+      tierId: item.tierId,
+      quantity: item.label === label ? q : item.quantity,
+    }));
+    if (!selections.some((item) => item.label === label)) return null;
+    const result = await this.api.hold(this.key, selections, undefined, hold.holdId);
+    this.tableQuantities.set(label, q);
+    this.setHold({
+      holdId: result.holdId,
+      labels: selections.map((item) => item.label),
+      expiresAt: result.expiresAt,
+      items: result.items,
+    });
+    return this.hold_;
+  }
+
+  private rendererSelectionCap(): number {
+    return this.maxSelection + this.groupedSelectionOverhead;
+  }
+
+  private selectionGuestCount(): number {
+    return this.getSelection().reduce((sum, seat) => sum + (seat.quantity ?? 1), 0);
+  }
+
+  private handleRendererSelect(seat: ExpandedSeat): void {
+    const table = this.groupedTableBySeatId.get(seat.id);
+    if (table) {
+      if (this.selectionGuestCount() > this.maxSelection) {
+        this.renderer?.deselect(table.chairs.map((chair) => chair.id));
+        this.opts.onSelectionLimit?.(this.maxSelection);
+        this.emitSelectionChange();
+        return;
+      }
+      // One click paints every chair as selected; the public selection remains
+      // one table line through getSelection(). Programmatic select is silent.
+      this.renderer?.select?.(table.chairs.map((chair) => chair.id));
+      this.opts.onSelect?.(table.chairs[0] ?? seat);
+      this.opts.onTableSelectionRequest?.(this.toTableSeat(table));
+      this.emitSelectionChange();
+      return;
+    }
+    if (this.selectionGuestCount() > this.maxSelection) {
+      this.renderer?.deselect([seat.id]);
+      this.opts.onSelectionLimit?.(this.maxSelection);
+      this.emitSelectionChange();
+      return;
+    }
+    this.opts.onSelect?.(seat);
+    this.emitSelectionChange();
+  }
+
+  private handleRendererDeselect(seat: ExpandedSeat): void {
+    const table = this.groupedTableBySeatId.get(seat.id);
+    if (table) {
+      this.renderer?.deselect(table.chairs.map((chair) => chair.id));
+      if (!this.hold_?.labels.includes(table.label)) {
+        this.tableQuantities.set(
+          table.label,
+          table.mode === 'whole' ? table.capacity : table.minOccupancy,
+        );
+        if (table.mode === 'variable') this.confirmedVariableTables.delete(table.label);
+      }
+      this.opts.onDeselect?.(table.chairs[0] ?? seat);
+    } else {
+      this.opts.onDeselect?.(seat);
+    }
+    this.emitSelectionChange();
+  }
+
+  private resetUnheldTableQuantities(): void {
+    for (const table of this.groupedTablesByLabel.values()) {
+      if (this.hold_?.labels.includes(table.label)) continue;
+      this.tableQuantities.set(
+        table.label,
+        table.mode === 'whole' ? table.capacity : table.minOccupancy,
+      );
+      if (table.mode === 'variable') this.confirmedVariableTables.delete(table.label);
+    }
+  }
+
+  private resetTableQuantitiesForLabels(labels: Iterable<string>): void {
+    for (const label of labels) {
+      const table = this.groupedTablesByLabel.get(label);
+      if (!table) continue;
+      this.tableQuantities.set(
+        label,
+        table.mode === 'whole' ? table.capacity : table.minOccupancy,
+      );
+      if (table.mode === 'variable') this.confirmedVariableTables.delete(label);
+    }
+  }
+
+  private tableQuantityRequest(seat: PickerSeat | null): { quantity?: number } {
+    if (seat?.objectType !== 'table') return {};
+    if (seat.bookingMode === 'variable' && !this.confirmedVariableTables.has(seat.label)) {
+      throw new Error('picker: confirm a variable table guest quantity before holding');
+    }
+    return { quantity: seat.quantity };
   }
 
   // ---- booking machine ------------------------------------------------------
@@ -518,7 +822,7 @@ export class PickerController {
   async hold(labelsArg?: string[], ttlMs?: number): Promise<HoldInfo | null> {
     const r = this.renderer;
     if (!r) return null;
-    const labels = labelsArg ?? r.getSelection().map((s) => s.label);
+    const labels = labelsArg ?? this.getSelection().map((seat) => seat.label);
     const existingGA = (this.hold_?.items ?? []).filter((item) => item.objectType === 'ga');
     const combinedLabels = [...new Set([...existingGA.map((item) => item.label), ...labels])];
     if (!combinedLabels.length) return null;
@@ -528,10 +832,14 @@ export class PickerController {
     try {
       const selections = combinedLabels.map((label) => {
         const ga = existingGA.find((item) => item.label === label);
-        if (ga) return { label, tierId: ga.tierId };
+        if (ga) return { label, tierId: ga.tierId, quantity: ga.quantity };
         const seat = this.labelToSeat.get(label);
         const resolved = seat ? this.toSeat(seat) : null;
-        return { label, ...(resolved?.tierId ? { tierId: resolved.tierId } : {}) };
+        return {
+          label,
+          ...(resolved?.tierId ? { tierId: resolved.tierId } : {}),
+          ...this.tableQuantityRequest(resolved),
+        };
       });
       const result = await this.api.hold(this.key, selections, ttlMs, this.hold_?.holdId);
       this.setHold({ holdId: result.holdId, labels: combinedLabels, expiresAt: result.expiresAt, items: result.items });
@@ -587,9 +895,18 @@ export class PickerController {
     const out: Record<string, number> = {};
     const closedMembers = this.closedMemberIds();
     for (const [id, s] of this.seatById) {
+      if (this.groupedTableBySeatId.has(id)) continue;
       if (closedMembers.has(id)) continue; // closed sections aren't on sale
       if ((this.getStatus(id) ?? 'free') === 'free') {
         out[s.categoryKey] = (out[s.categoryKey] ?? 0) + 1;
+      }
+    }
+    for (const table of this.groupedTablesByLabel.values()) {
+      if (table.chairs.some((chair) => closedMembers.has(chair.id))) continue;
+      const representative = table.chairs[0];
+      if (representative && (this.getStatus(representative.id) ?? 'free') === 'free') {
+        // Availability is guest capacity, while atomic ownership remains one row.
+        out[table.categoryKey] = (out[table.categoryKey] ?? 0) + table.maxOccupancy;
       }
     }
     return out;
@@ -604,7 +921,7 @@ export class PickerController {
     return out;
   }
 
-  getGAAreas(): { id: string; label: string; capacity: number; available: number; categoryKey: string; price: number; currency: string; tiers?: CategoryTier[] }[] {
+  getGAAreas(): PickerGAArea[] {
     const doc = this.visibleDoc();
     if (!doc) return [];
     return gaAreasOf(doc).map((area) => {
@@ -612,6 +929,8 @@ export class PickerController {
       return {
         id: area.id,
         label: area.label,
+        ...(area.displayLabel ? { displayLabel: area.displayLabel } : {}),
+        ...(area.displayType ? { displayType: area.displayType } : {}),
         capacity: Math.max(0, Math.floor(area.capacity)),
         available: gaUnitLabels(area).filter((label) => (this.liveStatuses.get(label) ?? 'free') === 'free').length,
         categoryKey: area.categoryKey,
@@ -636,15 +955,21 @@ export class PickerController {
       .filter((label) => !this.hold_?.labels.includes(label) && (this.liveStatuses.get(label) ?? 'free') === 'free')
       .slice(0, Math.floor(qty));
     if (labels.length !== Math.floor(qty)) return null;
-    const selections = new Map<string, { label: string; tierId?: string | null }>();
-    for (const item of this.hold_?.items ?? []) selections.set(item.label, { label: item.label, tierId: item.tierId });
+    const selections = new Map<string, HoldSelectionRequest>();
+    for (const item of this.hold_?.items ?? []) selections.set(item.label, {
+      label: item.label,
+      tierId: item.tierId,
+      quantity: item.quantity,
+    });
     if (this.hold_ && !this.hold_?.items?.length) {
       for (const seat of this.hold_.seats) selections.set(seat.label, { label: seat.label, ...(seat.tierId ? { tierId: seat.tierId } : {}) });
     }
-    for (const seat of this.renderer?.getSelection() ?? []) {
-      const resolved = this.labelToSeat.get(seat.label);
-      const chosen = resolved ? this.toSeat(resolved) : null;
-      selections.set(seat.label, { label: seat.label, ...(chosen?.tierId ? { tierId: chosen.tierId } : {}) });
+    for (const seat of this.getSelection()) {
+      selections.set(seat.label, {
+        label: seat.label,
+        ...(seat.tierId ? { tierId: seat.tierId } : {}),
+        ...this.tableQuantityRequest(seat),
+      });
     }
     for (const label of labels) selections.set(label, { label, ...(options.tierId ? { tierId: options.tierId } : {}) });
     const combined = [...selections.values()];
@@ -663,6 +988,18 @@ export class PickerController {
     return false;
   }
 
+  /** Zones which still own visible buyer inventory, in authored order. */
+  getBestAvailableZones(): Array<{ id: string; label: string }> {
+    const doc = this.visibleDoc();
+    if (!doc?.zones?.length) return [];
+    const used = new Set(
+      computeSections(doc).sections
+        .filter((section) => section.seatCount > 0 && !!section.zone)
+        .map((section) => section.zone!),
+    );
+    return doc.zones.filter((zone) => used.has(zone.id)).map((zone) => ({ id: zone.id, label: zone.label }));
+  }
+
   /**
    * Client-side premium pre-pass: find the best contiguous block of `qty`
    * PREMIUM-flagged free seats (orphan-avoiding, closest to the focal point)
@@ -671,11 +1008,14 @@ export class PickerController {
    * seat status. Returns a FULL premium block of `qty`, or null when none
    * exists (the caller then falls back to the normal server pick).
    */
-  private pickPremiumBlock(qty: number, categoryKey?: string): string[] | null {
+  private pickPremiumBlock(qty: number, categoryKey?: string, zoneId?: string): string[] | null {
     const doc = this.visibleDoc();
     if (!doc?.objects?.length) return null;
     const focal = doc.focalPoint ?? { x: 0, y: 0 };
-    const seats = expandChart(doc); // hidden sections already removed
+    const groupedObjectIds = new Set(this.groupedTablesByObject.keys());
+    // Group chairs are geometry, never adjacency inventory. Excluding their
+    // rowIds prevents premium fallback from bridging/splitting a table.
+    const seats = expandChart(doc).filter((seat) => !groupedObjectIds.has(seat.rowId));
     const held = new Set(this.hold_?.labels ?? []);
     const available = new Set<string>();
     for (const seat of seats) {
@@ -684,7 +1024,7 @@ export class PickerController {
       const status = id ? this.getStatus(id) : undefined;
       if ((status ?? 'free') === 'free') available.add(seat.label);
     }
-    const pick = pickBestAvailable(seats, available, { qty, categoryKey, focal, preferPremium: true });
+    const pick = pickBestAvailable(seats, available, { qty, categoryKey, zoneId, focal, preferPremium: true });
     if (pick.labels.length !== qty) return null;
     // Only treat it as a premium block when EVERY picked seat is premium — a
     // partial run means there's no true premium block of `qty` to offer.
@@ -701,12 +1041,12 @@ export class PickerController {
   async bestAvailable(
     qty: number,
     categoryKey?: string,
-    opts: { preferPremium?: boolean } = {},
+    opts: { preferPremium?: boolean; zoneId?: string } = {},
   ): Promise<HoldInfo | null> {
     const r = this.renderer;
     if (!r) return null;
     if (opts.preferPremium) {
-      const block = this.pickPremiumBlock(qty, categoryKey);
+      const block = this.pickPremiumBlock(qty, categoryKey, opts.zoneId);
       if (block) {
         // Drop any prior auto-hold before claiming the premium block.
         if (this.hold_ && !(await this.release())) return null;
@@ -718,7 +1058,7 @@ export class PickerController {
           });
           const result = await this.api.hold(this.key, selection);
           r.clearSelection();
-          const ids = block.map((l) => this.labelToId.get(l)).filter((v): v is string => !!v);
+          const ids = this.idsForLabels(block);
           if (ids.length) r.setStatus(ids, 'held');
           this.setHold({ holdId: result.holdId, labels: [...block], expiresAt: result.expiresAt, items: result.items });
           const seats = block
@@ -742,9 +1082,9 @@ export class PickerController {
     // Drop any prior auto-hold first.
     if (this.hold_ && !(await this.release())) return null;
     try {
-      const result = await this.api.bestAvailable(this.key, qty, categoryKey);
+      const result = await this.api.bestAvailable(this.key, qty, categoryKey, opts.zoneId);
       r.clearSelection();
-      const ids = result.labels.map((l) => this.labelToId.get(l)).filter((v): v is string => !!v);
+      const ids = this.idsForLabels(result.labels);
       if (ids.length) r.setStatus(ids, 'held');
       this.setHold({ holdId: result.holdId, labels: [...result.labels], expiresAt: result.expiresAt, items: result.items });
       const seats = result.labels
@@ -772,7 +1112,7 @@ export class PickerController {
     const r = this.renderer;
     if (!r) return null;
     if (!this.api.book) throw new Error('picker: transport has no book() — hold-only mode');
-    const labels = labelsArg ?? r.getSelection().map((s) => s.label);
+    const labels = labelsArg ?? this.getSelection().map((seat) => seat.label);
     if (!labels.length) return null;
 
     let holdId: string | undefined;
@@ -786,7 +1126,11 @@ export class PickerController {
           labels.map((label) => {
             const seat = this.labelToSeat.get(label);
             const resolved = seat ? this.toSeat(seat) : null;
-            return { label, ...(resolved?.tierId ? { tierId: resolved.tierId } : {}) };
+            return {
+              label,
+              ...(resolved?.tierId ? { tierId: resolved.tierId } : {}),
+              ...this.tableQuantityRequest(resolved),
+            };
           }),
           undefined,
           replaceHoldId,
@@ -803,10 +1147,11 @@ export class PickerController {
       } else if (status === 409 && conflicts?.length) {
         // Paint the taken seats, deselect them, release the still-free remainder.
         const takenLabels = new Set(conflicts.map((c) => c.label));
-        const takenIds = [...takenLabels].map((l) => this.labelToId.get(l)).filter((v): v is string => !!v);
+        const takenIds = this.idsForLabels(takenLabels);
         if (takenIds.length) {
           r.setStatus(takenIds, 'booked');
           r.deselect(takenIds);
+          this.resetTableQuantitiesForLabels(takenLabels);
         }
         const stillFree = labels.filter((l) => !takenLabels.has(l));
         if (stillFree.length && holdId) void this.api.release(this.key, stillFree, holdId).catch(() => {});
@@ -819,12 +1164,13 @@ export class PickerController {
     }
     // Success — optimistically paint booked, deselect just the booked seats
     // (not the whole selection — the cart may be an explicit subset), clear hold.
-    const ids = labels.map((l) => this.labelToId.get(l)).filter((v): v is string => !!v);
+    const ids = this.idsForLabels(labels);
     if (ids.length) {
       r.setStatus(ids, 'booked');
       r.deselect(ids);
     }
     this.clearHold();
+    this.resetTableQuantitiesForLabels(labels);
     this.emitSelectionChange();
     this.opts.onBook?.(bookingRef);
     return labels;
@@ -846,7 +1192,8 @@ export class PickerController {
     }
     if (this.hold_?.holdId !== hold.holdId) return true;
     this.clearHold();
-    const ids = hold.labels.map((l) => this.labelToId.get(l)).filter((v): v is string => !!v);
+    this.resetTableQuantitiesForLabels(hold.labels);
+    const ids = this.idsForLabels(hold.labels);
     if (ids.length) {
       this.renderer?.deselect(ids);
       this.renderer?.setStatus(ids, 'free');
@@ -878,7 +1225,8 @@ export class PickerController {
     const remainingItems = hold.items?.filter((item) => !drop.includes(item.label));
     if (remaining.length) this.setHold({ ...hold, labels: remaining, items: remainingItems });
     else this.clearHold();
-    const ids = drop.map((l) => this.labelToId.get(l)).filter((v): v is string => !!v);
+    this.resetTableQuantitiesForLabels(drop);
+    const ids = this.idsForLabels(drop);
     if (ids.length) {
       this.renderer?.deselect(ids);
       this.renderer?.setStatus(ids, 'free');
@@ -977,11 +1325,11 @@ export class PickerController {
 
   // ---- big-venue: sections / rungs / projection (Slice 5) -------------------
 
-  /** Switch the map projection (2D flat ⇄ 3D isometric). No-op on a flat renderer. */
-  setViewMode(mode: 'flat' | 'isometric'): void {
+  /** Switch the map projection. No-op on a flat-only renderer. */
+  setViewMode(mode: RendererViewMode): void {
     this.renderer?.setViewMode?.(mode);
   }
-  getViewMode(): 'flat' | 'isometric' {
+  getViewMode(): RendererViewMode {
     return this.renderer?.getViewMode?.() ?? 'flat';
   }
   /** Current LOD rung (for the ZONES/SECTIONS/SEATS pill). */
@@ -1090,12 +1438,21 @@ export class PickerController {
 
     const memberIds = r.sectionMembers?.(id) ?? [];
     const byCat = new Map<string, number>();
+    const seenTables = new Set<string>();
     let seatsLeft = 0;
     for (const sid of memberIds) {
       const seat = this.seatById.get(sid);
       if (!seat) continue;
-      byCat.set(seat.categoryKey, (byCat.get(seat.categoryKey) ?? 0) + 1);
-      if (r.getStatus(sid) === 'free') seatsLeft++;
+      const table = this.groupedTableBySeatId.get(sid);
+      if (table) {
+        if (seenTables.has(table.label)) continue;
+        seenTables.add(table.label);
+        byCat.set(table.categoryKey, (byCat.get(table.categoryKey) ?? 0) + table.maxOccupancy);
+        if (r.getStatus(table.chairs[0]?.id ?? sid) === 'free') seatsLeft += table.maxOccupancy;
+      } else {
+        byCat.set(seat.categoryKey, (byCat.get(seat.categoryKey) ?? 0) + 1);
+        if (r.getStatus(sid) === 'free') seatsLeft++;
+      }
     }
 
     const categories: SectionCategory[] = [...byCat.entries()]
@@ -1154,22 +1511,56 @@ export class PickerController {
   // ---- internals ------------------------------------------------------------
 
   private toSeat(s: ExpandedSeat): PickerSeat {
+    const table = this.groupedTableBySeatId.get(s.id);
+    if (table) return this.toTableSeat(table);
     const commercial = s.commercial ? { commercial: s.commercial } : undefined;
     const display = s.displayLabel ? { displayLabel: s.displayLabel } : undefined;
+    const accessibility = s.accessibility?.length ? { accessibility: s.accessibility } : undefined;
+    const wheelchair = s.wheelchairSpaceType ? { wheelchairSpaceType: s.wheelchairSpaceType } : undefined;
+    const context = this.seatContext.get(s.id);
     const tiers = this.tiersFor(s.categoryKey);
     if (!tiers) {
-      return { id: s.id, label: s.label, ...display, categoryKey: s.categoryKey, price: this.priceFor(s.categoryKey), ...commercial };
+      return { id: s.id, label: s.label, ...display, ...context, categoryKey: s.categoryKey, price: this.priceFor(s.categoryKey), ...commercial, ...accessibility, ...wheelchair };
     }
     const chosen = tiers.find((t) => t.id === this.seatTiers.get(s.id)) ?? tiers[0];
     return {
       id: s.id,
       label: s.label,
       ...display,
+      ...context,
       categoryKey: s.categoryKey,
       price: chosen.price,
       tiers,
       tierId: chosen.id,
       ...commercial,
+      ...accessibility,
+      ...wheelchair,
+    };
+  }
+
+  private toTableSeat(table: GroupedTableInventoryUnit): TableSelectionDetails {
+    const representative = table.chairs[0];
+    const tiers = this.tiersFor(table.categoryKey);
+    const chosen = tiers?.find((tier) => tier.id === this.seatTiers.get(representative?.id ?? '')) ?? tiers?.[0];
+    return {
+      id: representative?.id ?? table.objectId,
+      label: table.label,
+      displayLabel: table.displayLabel ?? table.label,
+      ...(table.displayType ? { displayType: table.displayType, rowType: table.displayType } : {}),
+      objectId: table.objectId,
+      sectionLabel: representative ? this.seatContext.get(representative.id)?.sectionLabel : undefined,
+      rowLabel: table.displayLabel ?? table.label,
+      categoryKey: table.categoryKey,
+      price: chosen?.price ?? this.priceFor(table.categoryKey),
+      ...(tiers ? { tiers, tierId: chosen?.id } : {}),
+      objectType: 'table',
+      bookingMode: table.mode,
+      quantity: this.tableQuantities.get(table.label)
+        ?? (table.mode === 'whole' ? table.capacity : table.minOccupancy),
+      capacity: table.capacity,
+      minOccupancy: table.minOccupancy,
+      maxOccupancy: table.maxOccupancy,
+      physicalSeatIds: table.chairs.map((chair) => chair.id),
     };
   }
   /** Tooltip payload for a hovered seat — see PickerCallbacks.onSeatHover. */
@@ -1264,10 +1655,15 @@ export class PickerController {
     const h = this.hold_;
     if (!h || h.labels.length !== labels.length || !labels.every((l) => h.labels.includes(l))) return false;
     const tiers = new Map((h.items ?? []).map((item) => [item.label, item.tierId]));
+    const quantities = new Map((h.items ?? []).map((item) => [item.label, item.quantity ?? 1]));
     return labels.every((label) => {
       const seat = this.labelToSeat.get(label);
-      const currentTier = seat ? this.toSeat(seat).tierId ?? null : null;
-      return !tiers.has(label) || tiers.get(label) === currentTier;
+      const resolved = seat ? this.toSeat(seat) : null;
+      const currentTier = resolved?.tierId ?? null;
+      const quantityMatches = resolved?.objectType !== 'table'
+        || (resolved.bookingMode !== 'variable' || this.confirmedVariableTables.has(label))
+          && (!quantities.has(label) || quantities.get(label) === resolved.quantity);
+      return quantityMatches && (!tiers.has(label) || tiers.get(label) === currentTier);
     });
   }
 
@@ -1276,10 +1672,11 @@ export class PickerController {
     if (status !== 409 || !conflicts?.length) return;
     const r = this.renderer;
     if (!r) return;
-    const takenIds = conflicts.map((c) => this.labelToId.get(c.label)).filter((v): v is string => !!v);
+    const takenIds = this.idsForLabels(conflicts.map((conflict) => conflict.label));
     if (takenIds.length) {
       r.deselect(takenIds);
       r.setStatus(takenIds, 'held');
+      this.resetTableQuantitiesForLabels(conflicts.map((conflict) => conflict.label));
     }
     this.emitSelectionChange();
   }
@@ -1289,12 +1686,20 @@ export class PickerController {
     hold: Omit<HoldInfo, 'seats'> & { seats?: PickerSeat[] },
     source: 'created' | 'restored' = 'created',
   ): void {
+    for (const item of hold.items ?? []) {
+      if (this.groupedTablesByLabel.has(item.label) && item.quantity != null) {
+        this.tableQuantities.set(item.label, item.quantity);
+        if (this.groupedTablesByLabel.get(item.label)?.mode === 'variable') {
+          this.confirmedVariableTables.add(item.label);
+        }
+      }
+    }
     // Always resolve seats (with chosen tier) from the held labels so the host's
     // onHold — and any later book — carries the tier the buyer picked per seat.
     const full: HoldInfo = { ...hold, seats: this.seatsForLabels(hold.labels) };
     this.hold_ = full;
     this.renderer?.setOwnedHold?.(
-      full.labels.map((label) => this.labelToId.get(label)).filter((id): id is string => !!id),
+      this.idsForLabels(full.labels),
     );
     if (this.expiryTimer) clearTimeout(this.expiryTimer);
     const ms = Math.max(0, full.expiresAt - Date.now());
@@ -1342,14 +1747,11 @@ export class PickerController {
     // setChart() rebuilds renderer state (floor/hidden-section changes), so
     // restore the buyer-ownership layer before repainting held statuses.
     r.setOwnedHold?.(
-      (this.hold_?.labels ?? [])
-        .map((label) => this.labelToId.get(label))
-        .filter((id): id is string => !!id),
+      this.idsForLabels(this.hold_?.labels ?? []),
     );
     const byStatus: Record<SeatStatus, string[]> = { free: [], held: [], booked: [], not_for_sale: [] };
     for (const [label, st] of Object.entries(seats)) {
-      const id = this.labelToId.get(label);
-      if (id) byStatus[mapStatus(st)].push(id);
+      byStatus[mapStatus(st)].push(...this.idsForLabel(label));
     }
     (['held', 'booked', 'not_for_sale'] as SeatStatus[]).forEach((st) => {
       if (byStatus[st].length) r.setStatus(byStatus[st], st);
@@ -1359,7 +1761,11 @@ export class PickerController {
   }
 
   private clearBookedHoldIfSettled(): void {
-    if (this.hold_?.labels.every((label) => this.liveStatuses.get(label) === 'booked')) this.clearHold();
+    const hold = this.hold_;
+    if (hold?.labels.every((label) => this.liveStatuses.get(label) === 'booked')) {
+      this.clearHold();
+      this.resetTableQuantitiesForLabels(hold.labels);
+    }
   }
 
   private async resnapshot(): Promise<void> {
@@ -1463,8 +1869,8 @@ export class PickerController {
       } else if (Array.isArray(m.changes)) {
         for (const ch of m.changes) {
           this.liveStatuses.set(ch.label, ch.status);
-          const id = this.labelToId.get(ch.label);
-          if (!id) continue;
+          const ids = this.idsForLabel(ch.label);
+          if (!ids.length) continue;
           const next = mapStatus(ch.status);
           // Flash a live free→taken change — but not the buyer's OWN just-held
           // seats (a manual hold leaves them 'free' locally, so the server's
@@ -1472,14 +1878,14 @@ export class PickerController {
           if (
             this.opts.flashOnLiveChange &&
             next !== 'free' &&
-            r.getStatus(id) === 'free' &&
+            ids.some((id) => r.getStatus(id) === 'free') &&
             !this.hold_?.labels.includes(ch.label)
           ) {
             // Pulse color mirrors the manager board's status language:
             // amber for a hold landing, red for a booking.
-            r.flashSeat(id, next === 'held' ? '#f4b740' : '#f43f5e');
+            ids.forEach((id) => r.flashSeat(id, next === 'held' ? '#f4b740' : '#f43f5e'));
           }
-          r.setStatus([id], next);
+          r.setStatus(ids, next);
         }
         // Stay-live-while-hidden (opt-in, default OFF). setStatus paints via
         // batchDraw (rAF), which Chrome pauses on a hidden tab — so an always-on

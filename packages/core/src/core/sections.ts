@@ -14,8 +14,15 @@
  * catch-all bucket of seat objects that sit in no section).
  */
 import type { ChartDoc, ChartObject, SectionObject } from './types';
-import { allObjects, expandBooth, expandRow, expandTable, objectCenter, pointInPolygonWithHoles } from './layout';
+import { allObjects, expandBooth, expandRow, expandTable, owningSectionForObject } from './layout';
 import { gaUnitLabels } from './ga';
+
+/**
+ * The section 3D-geometry resolver + tier fallback constant now live in the leaf
+ * `units.ts` module (so `layout.ts` can consume them without an import cycle).
+ * Re-exported here to keep the historical `from './sections'` import path working.
+ */
+export { sectionGeometry, TIER_HEIGHT_M } from './units';
 
 /** Synthetic section id for seat objects that fall in no drawn section. */
 export const UNGROUPED_ID = '__ungrouped__';
@@ -65,19 +72,6 @@ function isSeatObject(o: ChartObject): o is Extract<ChartObject, { type: 'row' |
   return o.type === 'row' || o.type === 'table' || o.type === 'booth' || o.type === 'gaArea';
 }
 
-function samePoints(left: Array<{ x: number; y: number }>, right: Array<{ x: number; y: number }>): boolean {
-  return left.length === right.length
-    && left.every((point, index) => point.x === right[index].x && point.y === right[index].y);
-}
-
-function sameGASurfaceAsSection(object: ChartObject, section: SectionObject): boolean {
-  if (object.type !== 'gaArea' || !samePoints(object.points, section.outline)) return false;
-  const objectHoles = object.holes ?? [];
-  const sectionHoles = section.holes ?? [];
-  return objectHoles.length === sectionHoles.length
-    && objectHoles.every((hole, index) => samePoints(hole, sectionHoles[index]));
-}
-
 /**
  * Resolve section membership for a chart. Returns one node per drawn section
  * (doc order), a synthetic "Ungrouped" node for loose seat objects (null when
@@ -118,21 +112,7 @@ export function computeSections(doc: ChartDoc): {
     if (!isSeatObject(obj)) continue;
     const labels = objectSeatLabels(obj);
     if (labels.length === 0) continue;
-    // Deterministically generated reference inventory carries durable ownership.
-    // Prefer the named logical section when its geometry confirms that claim: a
-    // concave GA surface can have an arithmetic centre outside its own shell,
-    // while malformed provenance must not pull a truly standalone area inside.
-    const referencedLogicalId = obj.referenceInventorySource?.logicalSectionId;
-    const c = objectCenter(obj);
-    const referencedOwner = referencedLogicalId
-      ? sectionObjs.find((section) => (
-          (section.logicalSectionId ?? section.id) === referencedLogicalId
-          && (sameGASurfaceAsSection(obj, section) || pointInPolygonWithHoles(c, section.outline, section.holes))
-        ))
-      : undefined;
-    // Ordinary authored inventory still uses the first drawn section (doc order)
-    // whose outline contains the visual centre.
-    const owner = referencedOwner ?? sectionObjs.find((s) => pointInPolygonWithHoles(c, s.outline, s.holes));
+    const owner = owningSectionForObject(objs, obj);
     const node = owner ? nodes.get(owner.logicalSectionId ?? owner.id)! : ungrouped;
     node.seatCount += labels.length;
     node.objectIds.push(obj.id);

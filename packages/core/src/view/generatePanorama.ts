@@ -12,11 +12,13 @@
  */
 
 import type { ExpandedSeat, Point } from '../core/types';
+import { METRES_PER_CHART_UNIT, SEATED_EYE_HEIGHT_M } from '../core/units';
+import { stageSightlinePitch } from './sightline';
 
 const W = 2048;
 const H = 1024;
 /** Chart units → meters, for plausible eye-level proportions (seatSpacing 24 ≈ 0.55m). */
-const UNIT = 0.55 / 24;
+const UNIT = METRES_PER_CHART_UNIT;
 
 const yawToX = (yawDeg: number) => ((yawDeg + 180) / 360) * W;
 const pitchToY = (pitchDeg: number) => ((90 - pitchDeg) / 180) * H;
@@ -54,9 +56,12 @@ export function generateSeatPanorama(
 
   // ---- stage, centered at yaw 0 (the viewer opens facing it) -------------
   // Angular size from real proportions: stage ~8m wide, ~1m platform + 6m set.
+  // Pitch is eye-height-aware (Phase B2): a raised/raked seat looks down at it.
+  const eyeM = seat.eyeHeightM ?? SEATED_EYE_HEIGHT_M;
   const stageHalfYaw = Math.min(80, (Math.atan2(4, distM) * 180) / Math.PI);
-  const stageTopPitch = Math.min(45, (Math.atan2(5, distM) * 180) / Math.PI);
-  const stageBasePitch = Math.max(-30, (-Math.atan2(1.1, distM) * 180) / Math.PI);
+  const sightline = stageSightlinePitch(eyeM, distM);
+  const stageTopPitch = Math.min(45, sightline.topPitch);
+  const stageBasePitch = sightline.basePitch;
 
   const sx0 = yawToX(-stageHalfYaw);
   const sx1 = yawToX(stageHalfYaw);
@@ -196,10 +201,12 @@ export function generateSeatThumb(seat: ExpandedSeat, focalPoint: Point, _neighb
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, TW, TH);
 
-  // stage geometry (identical formulas to the full panorama)
+  // stage geometry (identical formulas to the full panorama, eye-height-aware)
+  const eyeM = seat.eyeHeightM ?? SEATED_EYE_HEIGHT_M;
+  const sightline = stageSightlinePitch(eyeM, distM);
   const stageHalfYaw = Math.min(HALF_HFOV - 2, (Math.atan2(4, distM) * 180) / Math.PI);
-  const stageTopPitch = Math.min(HALF_VFOV - 2, (Math.atan2(5, distM) * 180) / Math.PI);
-  const stageBasePitch = Math.max(-HALF_VFOV + 2, (-Math.atan2(1.1, distM) * 180) / Math.PI);
+  const stageTopPitch = Math.min(HALF_VFOV - 2, sightline.topPitch);
+  const stageBasePitch = Math.max(-HALF_VFOV + 2, sightline.basePitch);
   const sx0 = yawToTX(-stageHalfYaw);
   const sx1 = yawToTX(stageHalfYaw);
   const sy0 = pitchToTY(stageTopPitch);

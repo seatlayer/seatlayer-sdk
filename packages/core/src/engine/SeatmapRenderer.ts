@@ -18,6 +18,7 @@ import { Circle } from 'konva/lib/shapes/Circle';
 import { Rect } from 'konva/lib/shapes/Rect';
 import { Ellipse } from 'konva/lib/shapes/Ellipse';
 import { Line } from 'konva/lib/shapes/Line';
+import { Arrow } from 'konva/lib/shapes/Arrow';
 import { Text } from 'konva/lib/shapes/Text';
 import { Path } from 'konva/lib/shapes/Path';
 import { Image as KImage } from 'konva/lib/shapes/Image';
@@ -37,12 +38,28 @@ import type {
   RenderedFreeTextEvidence,
   RendererQualityEvidence,
   RendererOptions,
+  RendererViewMode,
   SeatStatus,
   SectionOutlinePath,
   SectionObject,
 } from '../core/types';
 import { accessibilityRingColor } from '../core/types';
 import { chartBounds, expandChart, floorsOf, pointInPolygonWithHoles, polygonLabelPoint, stackFloors } from '../core/layout';
+import { buyerBackgroundImage } from '../core/chartBackgrounds';
+import { sectionGeometry } from '../core/sections';
+import { buildSeatIndex, queryRect, type SeatIndex } from '../core/spatialIndex';
+import { CHART_UNITS_PER_METRE, SEATED_EYE_HEIGHT_M, sectionElevationTier } from '../core/units';
+import {
+  applyAffine,
+  composeAffine,
+  createPerspectiveCamera,
+  decomposeAffineLinear,
+  invertAffine,
+  perspectiveTangentAffine,
+  projectPerspectivePoint,
+  type Affine2D,
+  type PerspectiveCamera,
+} from '../core/perspectiveProjection';
 import {
   ACCESS_GLYPH_PATH,
   ACCESS_GLYPH_VIEWBOX,
@@ -59,6 +76,7 @@ import {
 } from '../core/chartRenderRules';
 import { t } from '../i18n';
 import { formatMoney } from '../lib/money';
+import { resolvedShapeLineStyle, shapeArrowMetrics } from '../core/shapeLineStyle';
 
 const SEAT_RADIUS = 9;
 /** Absolute scale at which a seat (r=9) renders ~legibly (~8px). */
@@ -72,12 +90,16 @@ const MIN_FITTED_SEAT_LABEL_FONT_SIZE = 4;
  *  it. Gives small seats a finger-friendly hit target (§4 "hit ≥ 24px") so a
  *  near-miss on mobile still selects the nearest seat instead of doing nothing. */
 const SEAT_TAP_SLOP_PX = 14;
+/** Wheelchair provision remains identifiable in the normal All-seats view. */
+const WHEELCHAIR_GLYPH_MIN_PX = 10;
 /**
- * Min effective on-screen seat radius (CSS px) at which the accessibility glyph
- * becomes legible and is drawn centred on the seat. Below this the seat is too
- * small for a symbol, so the coloured ring alone carries the accommodation.
+ * Minimum screen-space size of the wheelchair glyph while the buyer is
+ * explicitly filtering for wheelchair provision. At venue-fit LOD a normal
+ * seat can be only a couple of pixels wide; keeping the selected filter's
+ * semantic marker at a stable size makes the result recognizable without
+ * changing the seat's inventory silhouette or hit target.
  */
-const SEAT_GLYPH_MIN_PX = 6.5;
+const FILTERED_WHEELCHAIR_GLYPH_MIN_PX = 14;
 /** At/below this scale, sections read as clean labelled shells (seats hidden). */
 const SECTION_PROMINENT_SCALE = 0.45 * SEAT_LEGIBLE_SCALE;
 /**
@@ -92,6 +114,10 @@ const BLOCK_MELT_TOP = 0.9 * SEAT_LEGIBLE_SCALE;
 const SEAT_FOCUS_SCALE = Math.max(SEAT_LEGIBLE_SCALE * 1.1, BLOCK_MELT_TOP);
 /** Ignore normal finger jitter before treating a tap as a map pan. */
 const PAN_START_SLOP_PX = 8;
+/** Window after a `tap` in which a `click` is the browser's ghost, not a real
+ *  mouse click. 700ms covers the legacy 300ms click delay with margin; mouse
+ *  and pen paths never set the timestamp, so they are unaffected. */
+const GHOST_CLICK_MS = 700;
 /**
  * Below this scale, ZONE blocks/labels take over from per-section detail (the
  * farthest rung). ~0.55× the section rung so: seats → section blocks → zones.
@@ -112,8 +138,6 @@ const MARQUEE_RING_CAP = 2500;
 const ISO_ANGLE_DEG = -11.5;
 /** Full-iso vertical squash (1 = flat). */
 const ISO_SQUASH = 0.58;
-/** World units a section (and its members) lift per elevation step at full iso. */
-const LIFT_PER_STEP = 58;
 /** Flat⇄iso tween duration (ms); reduced-motion snaps. */
 const ISO_TWEEN_MS = 320;
 /** Buyer camera travel should be easy to follow without feeling sluggish. */
@@ -169,6 +193,12 @@ const DEF_SELECTION = '#ffffff';
 const DEF_SELECTION_ON_LIGHT = '#0b1220';
 const DEF_DECOR_FILL = '#232c40';
 const DEF_TEXT = '#8b93a7';
+
+/** Konva `fontStyle` string from bold/italic flags (mirrors the designer). */
+function konvaFontStyle(bold?: boolean, italic?: boolean, defaultWeight = 'normal'): string {
+  const weight = bold ? 'bold' : defaultWeight;
+  return italic ? `italic ${weight}`.trim() : weight;
+}
 const DEF_CANVAS_BACKGROUND = '#0e1117';
 
 /**
@@ -430,6 +460,45 @@ function rgba(hex: string, a: number): string {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
+/** A section container that can be omitted from scene + hit paints without
+ *  toggling Konva's public `visible` attribute. `visible(false)` recursively
+ *  invalidates every descendant's absolute-visibility cache — exactly the O(N)
+ *  cliff viewport culling is meant to avoid on a 14k-seat chart. */
+class ViewportGroup extends Group {
+  private viewportCulled = false;
+
+  setViewportCulled(culled: boolean): void {
+    if (culled === this.viewportCulled) return;
+    this.viewportCulled = culled;
+    // Descendants may have cached absolute transforms from before an offscreen
+    // camera move. Clear them once when the section re-enters, not on every
+    // frame while it remains outside the viewport.
+    if (!culled) super._clearSelfAndDescendantCache();
+  }
+
+  isViewportCulled(): boolean {
+    return this.viewportCulled;
+  }
+
+  override drawScene(...args: Parameters<Group['drawScene']>): this {
+    return this.viewportCulled ? this : super.drawScene(...args);
+  }
+
+  override drawHit(...args: Parameters<Group['drawHit']>): this {
+    return this.viewportCulled ? this : super.drawHit(...args);
+  }
+
+  override _clearSelfAndDescendantCache(attr?: string): void {
+    if (!this.viewportCulled) {
+      super._clearSelfAndDescendantCache(attr);
+      return;
+    }
+    // The group itself must follow its parent camera, but culled children are
+    // neither drawn nor hit-tested. Their caches are refreshed on re-entry.
+    this._clearCache(attr);
+  }
+}
+
 /** Parse #rrggbb → [r,g,b] (0..255); null for non-hex. */
 function hexToRgb(hex: string): [number, number, number] | null {
   const m = /^#?([\da-f]{6})$/i.exec(hex.trim());
@@ -509,11 +578,39 @@ interface SectionRender {
   /** Tier height (0 = floor). Lifts the section + members in iso ("3D") view. */
   elevation: number;
   /**
-   * When elevation > 0, the section's bg nodes + member seats live in these
-   * groups so a single position offset lifts the whole tier in iso view.
+   * Resolved iso lift in world units = `sectionGeometry(section).height ×
+   * CHART_UNITS_PER_METRE` (Phase B1). Uses the section's authored real height when
+   * present, else the legacy `elevation × TIER_HEIGHT_M` fallback — which equals the
+   * old `elevation × LIFT_PER_STEP`, so un-authored charts stay pixel-identical.
+   * Computed once at build time; never per frame.
    */
-  liftGroupBg: Group | null;
-  liftGroupSeat: Group | null;
+  liftWorld: number;
+  /** Authored section rake used by the Phase-C tangent surface. */
+  rakeDeg: number;
+  /** Focal point that defines front→back depth for this physical surface. */
+  surfaceFocal: Point;
+  /** Nearest member/outline distance to the focal point, in chart units. */
+  frontDistanceWorld: number;
+  /** Desired projected tangent plane, built only while perspective is active. */
+  perspectiveAffine?: Affine2D;
+  /** Child correction after the shared ground-plane affine. */
+  perspectiveCorrection?: Affine2D;
+  /** Camera depth used to order far sections before near sections. */
+  perspectiveDepth?: number;
+  /** Section-owned background root: side faces + top-surface child group. */
+  rootGroupBg: Group;
+  /** Original sibling order restored when leaving perspective. */
+  bgZIndex: number;
+  seatZIndex: number;
+  /** Elevated background container; null for a flat section. */
+  liftGroupBg: Group;
+  /**
+   * Every section owns one seat group. Besides making elevation one group
+   * transform, this is the production viewport-culling boundary: offscreen
+   * sections do not make Konva repaint thousands of invisible seats while a
+   * buyer pans or zooms a focused part of a large venue.
+   */
+  liftGroupSeat: ViewportGroup;
   /** Extruded side faces (one per outline edge) shown only as isoT rises. */
   sideFaces: Line[];
 }
@@ -537,9 +634,18 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private seatLayer: Layer;
   private overlayLayer: Layer;
   private labelGroup: Group;
+  /** Per-elevated-section label containers. Keeping the labels grouped lets the
+   *  Phase-B lift move thousands of seat labels with one transform per section
+   *  instead of rewriting every label on every tween frame. */
+  private labelLiftGroups = new Map<string, ViewportGroup>();
+  /** Foreground decor images — drawn on the overlay layer, ABOVE the seats. */
+  private fgDecorGroup: Group;
 
   private seats: ExpandedSeat[] = [];
   private seatById = new Map<string, ExpandedSeat>();
+  /** One build per chart/floor; section membership queries only inspect seats in
+   *  the section bounds instead of rescanning the full 13k venue per section. */
+  private seatIndex: SeatIndex | null = null;
   /** Multi-floor (Batch 5): the last-set chart + which floor we're rendering. */
   private chartDoc: ChartDoc | null = null;
   private activeFloorId = '';
@@ -555,13 +661,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private seatLabelById = new Map<string, Text>();
   /** Coloured accommodation ring per accessible seat (few per chart). */
   private accessRingById = new Map<string, Circle>();
-  /** Centred accessibility glyph per accessible seat — shown once the seat is
-   *  big enough on-screen (see {@link SEAT_GLYPH_MIN_PX}); the ring is the
-   *  smaller-zoom fallback. Kept in a map so zoom toggles touch only the handful
-   *  of accessible seats, never all 13k nodes. */
+  /** Centred ♿ glyph per physical wheelchair provision. It keeps a small
+   *  screen-space floor at every LOD and grows when the Wheelchair filter is
+   *  active. Kept in a map so zoom updates touch only the handful of matching
+   *  seats, never all 13k nodes. */
   private accessGlyphById = new Map<string, Path>();
-  /** Whether the accessibility glyph is legible at the current camera scale. */
-  private accessGlyphVisible = false;
   /** Authored free-text nodes obey the same rendered-size visibility floor. */
   private freeTextById = new Map<string, {
     objectId?: string;
@@ -603,6 +707,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   /** One selected seat being inspected before it is committed to the cart. */
   private selectionFocusId: string | null = null;
   private hoverRing: Circle;
+  /** Seat currently owning the shared hover ring (null while not hovering). */
+  private hoveredId: string | null = null;
   /** Keyboard-navigation focus ring + the currently focused seat id. */
   private focusRing: Circle;
   private focusedId: string | null = null;
@@ -624,6 +730,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private sections: SectionRender[] = [];
   private zones: ZoneRender[] = [];
   private seatSection = new Map<string, SectionRender>();
+  /** Seats outside every authored section retain the legacy path in one group. */
+  private unsectionedSeatGroup: Group | null = null;
   private catPrice = new Map<string, number>();
   /** ISO 4217 currency for on-map "FROM …" prices (undefined ⇒ money default). */
   private currency: string | undefined;
@@ -638,6 +746,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private focusedSectionId: string | null = null;
   /** Light backdrop panel drawn behind the focused section (removed on clear). */
   private focusBackdrop: Group | null = null;
+  /** Non-listening visual dim outside the focused section. One overlay replaces
+   *  descendant opacity mutations across every seat in the venue. */
+  private focusDimOverlay: Shape | null = null;
   /** Object id → floor id (multi-floor only) — resolves a deck tap in the 3D stack. */
   private objectFloor = new Map<string, string>();
   /** Zone id → colour (drives extruded side faces in iso view). */
@@ -651,10 +762,33 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private isoT = 0;
   private isoTarget = 0;
   private isoRaf = 0;
+  /** Public view target; perspective is a separate non-affine Phase-C lane. */
+  private viewMode: RendererViewMode = 'flat';
+  private perspectiveCamera: PerspectiveCamera | null = null;
+  /** Ground-plane tangent applied once to every renderer layer. */
+  private perspectiveBaseAffine: Affine2D | null = null;
+  private perspectiveBaseInverse: Affine2D | null = null;
+  /** Exact pinhole anchor expressed in the overlay tangent-layer coordinates. */
+  private perspectiveSeatLocal = new Map<string, Point>();
+  /** Exact projected point (before Stage pan/zoom), keyed by seat. */
+  private perspectiveSeatProjected = new Map<string, Point>();
+  /** Positive camera depth, used for deterministic far→near paint order. */
+  private perspectiveSeatDepth = new Map<string, number>();
+  /** Exact pinhole size ratio at each seat anchor. */
+  private perspectiveSeatScale = new Map<string, number>();
+  /** Seats whose native Konva nodes currently carry the exact projected pose.
+   * Large sectioned venues apply these lazily as a section enters the live-seat
+   * viewport; the overview rung hides the seat layer completely. */
+  private perspectiveAppliedSeats = new Set<string>();
+  private perspectiveBounds: { x: number; y: number; width: number; height: number } | null = null;
   /** Chart centre the iso projection pivots about (bounds centre). */
   private isoCentre = { x: 0, y: 0 };
   /** rAF for an in-flight camera glide (focusRegion / setRung); 0 = none. */
   private glideRaf = 0;
+  /** While the camera tween is active, defer polygon label fitting/collision to
+   *  the settled frame. Geometry remains smoothly stage-scaled, while expensive
+   *  point-in-polygon text work no longer repeats at 120 Hz. */
+  private glideInProgress = false;
   /** Set in destroy() so an in-flight iso tween bails. */
   private destroyed = false;
   /** Cached scale the section/zone labels were last sized for (scale-compensation). */
@@ -690,6 +824,32 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private panStarted = false;
   /** Maximum displacement from gesture start — suppress taps only after a real pan/pinch. */
   private moved = 0;
+  /**
+   * Ghost-click guard. Konva binds `_pointerup` to mouseup, touchend AND
+   * pointerup, so `on('click tap')` is two handlers for one finger tap unless
+   * the browser's synthesized compatibility click is suppressed. Konva only
+   * suppresses it when the touch lands on a LISTENING SHAPE (Stage.js returns
+   * early before its preventDefault() when `!shape || !shape.isListening()`),
+   * so a near-miss rescued by nearestSeatToScreen used to fire `tap` (select)
+   * then `click` (deselect) 1-3ms apart and net to nothing. With
+   * SEAT_TAP_SLOP_PX=14 against a ~12px seat radius, that broken annulus is
+   * ~3.7x the area of the seat itself — i.e. most successful mobile taps.
+   * `touch-action: none` does NOT suppress compatibility mouse events.
+   */
+  private lastTapAt = 0;
+
+  /**
+   * True when this is the browser's synthesized compatibility click following a
+   * finger tap we already handled. Discriminates on `e.type` deliberately —
+   * `PointerEvent extends MouseEvent`, so an `instanceof MouseEvent` test
+   * matches genuine pointer taps too. One shared timestamp across the layer and
+   * stage handlers: a tap consumed at the layer must also suppress the ghost at
+   * the stage, and only `click` is ever rejected, so bubbling stays intact.
+   */
+  private isGhostClick(e: KonvaEventObject<Event>): boolean {
+    if (e.type === 'tap') { this.lastTapAt = performance.now(); return false; }
+    return this.lastTapAt > 0 && performance.now() - this.lastTapAt < GHOST_CLICK_MS;
+  }
   /**
    * Manage-mode rubber-band marquee (option-gated). `start`/`cur` are WORLD-space
    * points (overlayLayer rides the stage transform); `rect` is the on-canvas
@@ -731,6 +891,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.overlayLayer = new Layer({ listening: false });
     this.labelGroup = new Group({ listening: false });
     this.overlayLayer.add(this.labelGroup);
+    // Foreground decor sits above seats but below the hover/focus rings.
+    this.fgDecorGroup = new Group({ listening: false });
+    this.overlayLayer.add(this.fgDecorGroup);
 
     this.hoverRing = new Circle({
       radius: SEAT_RADIUS + 2,
@@ -791,8 +954,18 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.focusedId = null;
     this.focusRing.visible(false);
     this.bgLayer.destroyChildren();
+    this.focusDimOverlay?.destroy();
+    this.focusDimOverlay = null;
+    // A prior overview may have left the layer bitmap-cached and non-listening.
+    // A floor/chart replacement is a fresh live scene: clear both pieces of
+    // cache state before adding its seats so direct Konva picking is truthful.
+    this.seatLayer.clearCache();
+    this.seatLayer.listening(true);
     this.seatLayer.destroyChildren();
+    this.unsectionedSeatGroup = null;
     this.labelGroup.destroyChildren();
+    this.labelLiftGroups.clear();
+    this.fgDecorGroup.destroyChildren();
     this.circleById.clear();
     this.boothDims.clear();
     this.boothLabelById.clear();
@@ -809,6 +982,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.statusById.clear();
     this.selection.clear();
     this.seatById.clear();
+    this.seatIndex = null;
     this.cached = false;
     this.accessFilter = null;
     this.sections = [];
@@ -827,12 +1001,23 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (this.isoRaf) { cancelAnimationFrame(this.isoRaf); this.isoRaf = 0; }
     this.isoT = 0;
     this.isoTarget = 0;
+    this.viewMode = 'flat';
+    this.perspectiveCamera = null;
+    this.perspectiveBaseAffine = null;
+    this.perspectiveBaseInverse = null;
+    this.perspectiveSeatLocal.clear();
+    this.perspectiveSeatProjected.clear();
+    this.perspectiveSeatDepth.clear();
+    this.perspectiveSeatScale.clear();
+    this.perspectiveAppliedSeats.clear();
+    this.perspectiveBounds = null;
     this.resetLayerTransforms();
     this.hasSections = view.objects.some((o) => o.type === 'section');
     for (const z of doc.zones ?? []) if (z.color) this.zoneColor.set(z.id, z.color);
     // Seats fade against the block fill during the melt; reset to fully opaque.
     this.seatLayer.opacity(1);
     this.hoverRing.visible(false);
+    this.hoveredId = null;
 
     this.theme = doc.theme ?? {};
     // Adjustable seat size: a chart-level scale on the base radius. Clamped so
@@ -862,30 +1047,76 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       }
     }
 
-    this.seats = expandChart(view);
+    this.seats = expandChart(view, {
+      // A stacked overview is presentation-only and never opens a seat POV. The
+      // per-section renderer below still resolves each object's real floor base.
+      floorBaseHeightM: this.stacked ? 0 : this.floorBaseHeightMFor(),
+    });
     for (const s of this.seats) {
       this.seatById.set(s.id, s);
       this.statusById.set(s.id, 'free');
     }
-
-    this.renderBackground(view);
-    this.renderSeats();
-    // re-add overlay furniture wiped by destroyChildren above
-    this.overlayLayer.add(this.labelGroup);
-    this.overlayLayer.add(this.hoverRing);
+    this.seatIndex = buildSeatIndex(this.seats, { seatRadius: this.seatR });
 
     this.bounds = chartBounds(view);
     this.isoCentre = { x: this.bounds.x + this.bounds.width / 2, y: this.bounds.y + this.bounds.height / 2 };
+    // Phase C projection is precomputed once per chart/floor. Entering the view
+    // only moves existing Konva hit shapes to these exact anchors; pan/zoom never
+    // recomputes pinhole geometry.
+    this.buildPerspectiveProjection(view);
+
+    this.renderBackground(view);
+    // Rows/booths outside an authored section retain one always-visible legacy
+    // container. Every section has its own group (created by renderSection), so
+    // large venues can omit only whole, safely offscreen sections from paints.
+    this.unsectionedSeatGroup = new Group({ listening: true });
+    this.seatLayer.add(this.unsectionedSeatGroup);
+    this.renderSeats();
+    // re-add overlay furniture wiped by destroyChildren above (order sets z:
+    // labels + foreground decor sit under the hover/focus rings).
+    this.overlayLayer.add(this.labelGroup);
+    this.overlayLayer.add(this.fgDecorGroup);
+    this.overlayLayer.add(this.hoverRing);
+    this.overlayLayer.add(this.focusRing);
+
     this.zoomToFit();
   }
 
   /** The chart to render: all floors stacked (3D overview), the active floor, or
    *  the whole chart for single-floor charts. */
   private floorView(doc: ChartDoc): ChartDoc {
-    if (!doc.floors || !doc.floors.length) return doc;
-    if (this.stacked && doc.floors.length >= 2) return stackFloors(doc);
+    if (!doc.floors || !doc.floors.length) return {
+      ...doc,
+      referenceImage: undefined,
+      backgroundImage: buyerBackgroundImage(doc),
+    };
+    if (this.stacked && doc.floors.length >= 2) {
+      return {
+        ...stackFloors(doc),
+        referenceImage: undefined,
+        backgroundImage: buyerBackgroundImage(doc),
+      };
+    }
     const floor = doc.floors.find((f) => f.id === this.activeFloorId) ?? doc.floors[0];
-    return { ...doc, objects: floor.objects, focalPoint: floor.focalPoint, backgroundImage: floor.backgroundImage, floors: undefined };
+    return {
+      ...doc,
+      objects: floor.objects,
+      focalPoint: floor.focalPoint,
+      referenceImage: undefined,
+      backgroundImage: buyerBackgroundImage(floor),
+      floors: undefined,
+    };
+  }
+
+  /** Physical floor height is authored data; the 900-unit stacked overview
+   * spread is presentation-only and must never leak into real 3D geometry. */
+  private floorBaseHeightMFor(objectId?: string): number {
+    const floors = this.chartDoc?.floors;
+    if (!floors?.length) return 0;
+    const floorId = this.stacked && objectId
+      ? this.objectFloor.get(objectId) ?? this.activeFloorId
+      : this.activeFloorId;
+    return floors.find((floor) => floor.id === floorId)?.baseHeightM ?? 0;
   }
 
   /** Toggle the 3D all-floors stacked overview (Batch 5). Re-renders; no-op on
@@ -1235,7 +1466,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     }
     const ids: string[] = [];
     for (const seat of this.seats) {
-      if (seat.x < x0 || seat.x > x1 || seat.y < y0 || seat.y > y1) continue;
+      const rendered = this.renderedSeatPoint(seat);
+      if (rendered.x < x0 || rendered.x > x1 || rendered.y < y0 || rendered.y > y1) continue;
       if (!this.isSelectable(seat.id)) continue;
       ids.push(seat.id);
     }
@@ -1246,9 +1478,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   flashSeat(seatId: string, color = '#f43f5e'): void {
     const seat = this.seatById.get(seatId);
     if (!seat) return;
+    const rendered = this.renderedSeatPoint(seat);
     const ring = new Circle({
-      x: seat.x,
-      y: seat.y,
+      x: rendered.x,
+      y: rendered.y,
       radius: this.seatR,
       stroke: color,
       strokeWidth: 3,
@@ -1257,6 +1490,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       perfectDrawEnabled: false,
       shadowForStrokeEnabled: false,
     });
+    const projectionScale = this.viewMode === 'perspective'
+      ? this.perspectiveSeatScale.get(seatId) ?? 1
+      : 1;
+    ring.scale({ x: projectionScale, y: projectionScale });
     this.overlayLayer.add(ring);
     const start = performance.now();
     const dur = 620;
@@ -1287,17 +1524,22 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (!matches.length) return;
 
     for (const section of matches) {
-      const centre = section.outline.reduce(
+      const outline = this.viewMode === 'perspective' && section.perspectiveAffine
+        ? section.outline.map((point) => this.perspectiveLocalPoint(this.projectedSectionPoint(section, point)))
+        : section.outline.map((point) => {
+            const lift = section.liftWorld > 0 ? this.isoLiftLocal(section.liftWorld) : { x: 0, y: 0 };
+            return { x: point.x + lift.x, y: point.y + lift.y };
+          });
+      const centre = outline.reduce(
         (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
         { x: 0, y: 0 },
       );
-      centre.x /= section.outline.length;
-      centre.y /= section.outline.length;
-      const lift = section.elevation > 0 ? this.isoLiftLocal(section.elevation) : { x: 0, y: 0 };
+      centre.x /= outline.length;
+      centre.y /= outline.length;
       const halo = new Line({
-        x: centre.x + lift.x,
-        y: centre.y + lift.y,
-        points: section.outline.flatMap((point) => [point.x - centre.x, point.y - centre.y]),
+        x: centre.x,
+        y: centre.y,
+        points: outline.flatMap((point) => [point.x - centre.x, point.y - centre.y]),
         closed: true,
         stroke: color,
         strokeWidth: 3,
@@ -1382,12 +1624,18 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private nearestSeat(fromId: string, dir: { x: number; y: number }): string | null {
     const from = this.seatById.get(fromId);
     if (!from) return null;
+    const fromPoint = this.viewMode === 'perspective'
+      ? this.perspectiveSeatProjected.get(from.id) ?? from
+      : from;
     let best: string | null = null;
     let bestScore = Infinity;
     for (const s of this.seats) {
       if (s.id === fromId) continue;
-      const dx = s.x - from.x;
-      const dy = s.y - from.y;
+      const candidatePoint = this.viewMode === 'perspective'
+        ? this.perspectiveSeatProjected.get(s.id) ?? s
+        : s;
+      const dx = candidatePoint.x - fromPoint.x;
+      const dy = candidatePoint.y - fromPoint.y;
       const proj = dx * dir.x + dy * dir.y; // along the chosen direction
       if (proj <= 0.5) continue; // must lie in that direction
       const perp = Math.abs(dx * dir.y - dy * dir.x); // lateral offset
@@ -1405,7 +1653,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (!seat) return;
     this.focusedId = id;
     this.focusRing.radius(this.seatR + 3);
-    this.focusRing.position({ x: seat.x, y: seat.y });
+    this.focusRing.position(this.renderedSeatPoint(seat));
+    const projectionScale = this.viewMode === 'perspective' ? this.perspectiveSeatScale.get(id) ?? 1 : 1;
+    this.focusRing.scale({ x: projectionScale, y: projectionScale });
     this.focusRing.visible(true);
     this.ensureVisible(seat);
     this.overlayLayer.batchDraw();
@@ -1422,7 +1672,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const offscreen = p.x < margin || p.x > w - margin || p.y < margin || p.y > h - margin;
     if (this.stage.scaleX() < target || offscreen) {
       // Centre on the PROJECTED seat position so iso view frames it correctly.
-      const ip = this.isoT === 0 ? seat : this.isoForward(seat);
+      const rendered = this.renderedSeatPoint(seat);
+      const ip = this.viewMode === 'perspective' && this.perspectiveBaseAffine
+        ? applyAffine(this.perspectiveBaseAffine, rendered)
+        : this.isoT === 0 ? rendered : this.isoForward(rendered);
       this.stage.scale({ x: target, y: target });
       this.stage.position({ x: w / 2 - ip.x * target, y: h / 2 - ip.y * target });
       this.afterViewChange();
@@ -1433,7 +1686,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   zoomToFit(): void {
     const w = this.stage.width();
     const h = this.stage.height();
-    const b = this.bounds;
+    const b = this.viewMode === 'perspective' && this.perspectiveBounds
+      ? this.perspectiveBounds
+      : this.bounds;
     this.fitScale = Math.min(w / b.width, h / b.height) || 1;
     const s = this.fitScale;
     this.stage.scale({ x: s, y: s });
@@ -1470,10 +1725,23 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   worldToScreen(point: Point): { x: number; y: number } {
     const s = this.stage.scaleX();
+    // Picker hosts pass the ExpandedSeat object they received from callbacks.
+    // Recognise that richer runtime shape so elevated-seat popovers anchor to
+    // the painted seat rather than its pre-lift authoring coordinate. Plain
+    // chart points retain the public Point contract and remain unchanged.
+    const candidateId = (point as Partial<ExpandedSeat>).id;
+    const seat = typeof candidateId === 'string' ? this.seatById.get(candidateId) : undefined;
+    if (this.viewMode === 'perspective' && this.perspectiveBaseAffine) {
+      const projected = seat
+        ? this.perspectiveSeatProjected.get(seat.id) ?? applyAffine(this.perspectiveBaseAffine, point)
+        : applyAffine(this.perspectiveBaseAffine, point);
+      return { x: projected.x * s + this.stage.x(), y: projected.y * s + this.stage.y() };
+    }
+    const localPoint = seat ? this.renderedSeatPoint(seat) : point;
     // In iso view, host overlays (confirm card, tooltip) must anchor to the
     // PROJECTED seat, so run the point through the iso affine first. At isoT=0
     // isoForward is the identity — byte-for-byte the flat behaviour.
-    const p = this.isoT === 0 ? point : this.isoForward(point);
+    const p = this.isoT === 0 ? localPoint : this.isoForward(localPoint);
     return { x: p.x * s + this.stage.x(), y: p.y * s + this.stage.y() };
   }
 
@@ -1485,12 +1753,18 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const next = types === null ? null : [...types];
     if (this.sameAccessFilter(next)) return;
     this.accessFilter = next;
+    // A wheelchair filter can promote its matching glyphs above the normal
+    // camera-size threshold, so recompute their visibility and screen-size
+    // before repainting opacity for matching/nonmatching seats.
+    this.updateAccessGlyphs(this.effScale());
     for (const seat of this.seats) {
       const c = this.circleById.get(seat.id);
       if (c) this.paintSeat(c, seat.id);
     }
     this.updateLabels();
     if (this.cached) {
+      // The overview is a bitmap; rebuild it so filter dimming and the promoted
+      // wheelchair glyph are visible immediately instead of only after zoom.
       this.seatLayer.clearCache();
       this.cacheSeatLayer();
     } else {
@@ -1599,10 +1873,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     let minY = Infinity;
     let maxY = -Infinity;
     for (const seat of matching) {
-      minX = Math.min(minX, seat.x);
-      maxX = Math.max(maxX, seat.x);
-      minY = Math.min(minY, seat.y);
-      maxY = Math.max(maxY, seat.y);
+      const point = this.renderedSeatPoint(seat);
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minY = Math.min(minY, point.y);
+      maxY = Math.max(maxY, point.y);
     }
     const pad = Math.max(24, this.seatR * 3);
     minX -= pad;
@@ -1624,10 +1899,36 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    * geometry stays flat, so hit-testing (Konva's own, plus the manual section
    * inverse) keeps landing on the projected seats/sections.
    */
-  setViewMode(mode: 'flat' | 'isometric'): void {
+  setViewMode(mode: RendererViewMode): void {
+    if (mode === 'perspective') {
+      if (this.viewMode === mode) {
+        this.afterViewChange();
+        return;
+      }
+      const resetElevatedSeatGroups = this.viewMode === 'isometric' && this.isoT > 0;
+      this.viewMode = mode;
+      this.isoTarget = 1;
+      this.isoT = 1;
+      if (this.isoRaf) { cancelAnimationFrame(this.isoRaf); this.isoRaf = 0; }
+      this.applyPerspective(resetElevatedSeatGroups);
+      this.zoomToFit();
+      return;
+    }
+
     const target = mode === 'isometric' ? 1 : 0;
+    const leavingPerspective = this.viewMode === 'perspective';
+    this.viewMode = mode;
     this.isoTarget = target;
     if (this.isoRaf) { cancelAnimationFrame(this.isoRaf); this.isoRaf = 0; }
+    if (leavingPerspective) {
+      // A non-affine view cannot meaningfully tween through the old affine lean.
+      // Snap to the requested endpoint (also the reduced-motion behaviour), then
+      // let future flat⇄iso switches use the established 320-ms animation.
+      this.isoT = target;
+      this.applyIso();
+      this.afterViewChange();
+      return;
+    }
     if (this.reducedMotion) {
       this.isoT = target;
       this.applyIso();
@@ -1658,8 +1959,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   }
 
   /** Current projection — reflects the tween target, not the mid-tween isoT. */
-  getViewMode(): 'flat' | 'isometric' {
-    return this.isoTarget === 1 ? 'isometric' : 'flat';
+  getViewMode(): RendererViewMode {
+    return this.viewMode;
   }
 
   /** Iso angle (rad) + y-squash for the current isoT. */
@@ -1669,6 +1970,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   /** Effective vertical scale = stage scale × iso squash — legibility math uses this. */
   private effScale(): number {
+    if (this.viewMode === 'perspective' && this.perspectiveBaseAffine) {
+      const xScale = Math.hypot(this.perspectiveBaseAffine.a, this.perspectiveBaseAffine.b);
+      const yScale = Math.hypot(this.perspectiveBaseAffine.c, this.perspectiveBaseAffine.d);
+      return this.stage.scaleX() * Math.min(xScale, yScale);
+    }
     return this.stage.scaleX() * (1 - (1 - ISO_SQUASH) * this.isoT);
   }
 
@@ -1695,20 +2001,127 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     return { x: c.x + wx, y: c.y + wy };
   }
 
+  /** Precompute the Phase-C pinhole camera and every exact seat anchor. */
+  private buildPerspectiveProjection(view: ChartDoc): void {
+    let maxSurfaceHeightWorld = 0;
+    for (const seat of this.seats) {
+      const surfaceM = Math.max(0, (seat.eyeHeightM ?? SEATED_EYE_HEIGHT_M) - SEATED_EYE_HEIGHT_M);
+      maxSurfaceHeightWorld = Math.max(maxSurfaceHeightWorld, surfaceM * CHART_UNITS_PER_METRE);
+    }
+    for (const object of view.objects) {
+      if (object.type !== 'section') continue;
+      maxSurfaceHeightWorld = Math.max(
+        maxSurfaceHeightWorld,
+        sectionGeometry(object, { floorBaseHeightM: this.floorBaseHeightMFor(object.id) }).height
+          * CHART_UNITS_PER_METRE,
+      );
+    }
+    const camera = createPerspectiveCamera(this.bounds, maxSurfaceHeightWorld);
+    const base = perspectiveTangentAffine(camera, camera.target);
+    const inverse = invertAffine(base);
+    this.perspectiveCamera = camera;
+    this.perspectiveBaseAffine = base;
+    this.perspectiveBaseInverse = inverse;
+    this.perspectiveSeatLocal.clear();
+    this.perspectiveSeatProjected.clear();
+    this.perspectiveSeatDepth.clear();
+    this.perspectiveSeatScale.clear();
+    this.perspectiveBounds = null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const seat of this.seats) {
+      const surfaceM = Math.max(0, (seat.eyeHeightM ?? SEATED_EYE_HEIGHT_M) - SEATED_EYE_HEIGHT_M);
+      const projected = projectPerspectivePoint(camera, seat, surfaceM * CHART_UNITS_PER_METRE);
+      const point = { x: projected.x, y: projected.y };
+      this.perspectiveSeatProjected.set(seat.id, point);
+      this.perspectiveSeatLocal.set(seat.id, applyAffine(inverse, point));
+      this.perspectiveSeatDepth.set(seat.id, projected.depth);
+      this.perspectiveSeatScale.set(seat.id, projected.scale);
+      minX = Math.min(minX, projected.x);
+      minY = Math.min(minY, projected.y);
+      maxX = Math.max(maxX, projected.x);
+      maxY = Math.max(maxY, projected.y);
+    }
+    for (const point of [
+      { x: this.bounds.x, y: this.bounds.y },
+      { x: this.bounds.x + this.bounds.width, y: this.bounds.y },
+      { x: this.bounds.x + this.bounds.width, y: this.bounds.y + this.bounds.height },
+      { x: this.bounds.x, y: this.bounds.y + this.bounds.height },
+    ]) {
+      const projected = projectPerspectivePoint(camera, point, 0);
+      minX = Math.min(minX, projected.x);
+      minY = Math.min(minY, projected.y);
+      maxX = Math.max(maxX, projected.x);
+      maxY = Math.max(maxY, projected.y);
+    }
+    const pad = Math.max(24, this.seatR * 3);
+    this.perspectiveBounds = Number.isFinite(minX)
+      ? { x: minX - pad, y: minY - pad, width: Math.max(1, maxX - minX + pad * 2), height: Math.max(1, maxY - minY + pad * 2) }
+      : null;
+  }
+
+  /** Apply an affine to a Konva container while keeping `pivot` fixed logically. */
+  private setContainerAffine(node: Group | Layer, affine: Affine2D, pivot: Point): void {
+    const decomposed = decomposeAffineLinear(affine);
+    node.offset(pivot);
+    node.position(applyAffine(affine, pivot));
+    node.rotation(decomposed.rotationDeg);
+    node.scale({ x: decomposed.scaleX, y: decomposed.scaleY });
+    node.skewX(decomposed.skewX);
+    node.skewY(0);
+  }
+
+  private resetContainerTransform(node: Group | Layer): void {
+    node.position({ x: 0, y: 0 });
+    node.offset({ x: 0, y: 0 });
+    node.scale({ x: 1, y: 1 });
+    node.rotation(0);
+    node.skewX(0);
+    node.skewY(0);
+  }
+
+  /** Exact raked surface height used for the bounded section tangent plane. */
+  private sectionSurfaceHeight(section: SectionRender, point: Point): number {
+    const radial = Math.hypot(point.x - section.surfaceFocal.x, point.y - section.surfaceFocal.y);
+    const depth = Math.max(0, radial - section.frontDistanceWorld);
+    return section.liftWorld + depth * Math.tan((section.rakeDeg * Math.PI) / 180);
+  }
+
+  /** Desired perspective-space point for a section surface, before Stage pan/zoom. */
+  private projectedSectionPoint(section: SectionRender, point: Point): Point {
+    return section.perspectiveAffine
+      ? applyAffine(section.perspectiveAffine, point)
+      : applyAffine(this.perspectiveBaseAffine!, point);
+  }
+
+  /** Shared-layer local point which the ground affine paints at `projected`. */
+  private perspectiveLocalPoint(projected: Point): Point {
+    return this.perspectiveBaseInverse ? applyAffine(this.perspectiveBaseInverse, projected) : projected;
+  }
+
   /**
    * Local-space offset that, once the layer applies the iso affine, lifts an
-   * object straight UP in iso-world by `elevation × LIFT_PER_STEP × isoT`
-   * (= inverse-linear of the pure vertical lift). Zero at isoT=0.
+   * object straight UP in iso-world by `liftWorld × isoT` world units
+   * (= inverse-linear of the pure vertical lift). Zero at isoT=0. `liftWorld` is
+   * the section's resolved real height in world units (Phase B1).
    */
-  private isoLiftLocal(elevation: number): { x: number; y: number } {
+  private isoLiftLocal(liftWorld: number): { x: number; y: number } {
     const { th, sg } = this.isoParams();
-    const delta = elevation * LIFT_PER_STEP * this.isoT;
+    const delta = liftWorld * this.isoT;
     return { x: -(delta / sg) * Math.sin(th), y: -(delta / sg) * Math.cos(th) };
   }
 
-  /** Restore the three layers to identity (flat) — byte-for-byte the original. */
-  private resetLayerTransforms(): void {
-    for (const layer of [this.bgLayer, this.seatLayer, this.overlayLayer]) {
+  /** Restore projection layers to identity (flat) — byte-for-byte the original.
+   * `seatLayer` can be skipped when entering perspective from flat: assigning a
+   * top-level transform invalidates all 14k descendant absolute transforms even
+   * while the semantic overview keeps that layer fully transparent. */
+  private resetLayerTransforms(includeSeatLayer = true): void {
+    const layers = includeSeatLayer
+      ? [this.bgLayer, this.seatLayer, this.overlayLayer]
+      : [this.bgLayer, this.overlayLayer];
+    for (const layer of layers) {
       layer.position({ x: 0, y: 0 });
       layer.offset({ x: 0, y: 0 });
       layer.scale({ x: 1, y: 1 });
@@ -1718,6 +2131,153 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     }
   }
 
+  /** Restore section-owned containers before applying another projection. */
+  private resetSectionProjection(resetSeatGroups = true): void {
+    for (const section of this.sections) {
+      this.resetContainerTransform(section.rootGroupBg);
+      this.resetContainerTransform(section.liftGroupBg);
+      if (resetSeatGroups) this.resetContainerTransform(section.liftGroupSeat);
+      section.rootGroupBg.zIndex(section.bgZIndex);
+      if (resetSeatGroups) section.liftGroupSeat.zIndex(section.seatZIndex);
+      const labelGroup = this.labelLiftGroups.get(section.id);
+      if (labelGroup && resetSeatGroups) this.resetContainerTransform(labelGroup);
+      section.perspectiveAffine = undefined;
+      section.perspectiveCorrection = undefined;
+      section.perspectiveDepth = undefined;
+    }
+  }
+
+  /** Move native seat/booth hit shapes to or from their exact pinhole anchors. */
+  private applyExactSeatAnchors(perspective: boolean, seatIds?: Iterable<string>): void {
+    const seats = seatIds
+      ? [...seatIds].map((id) => this.seatById.get(id)).filter((seat): seat is ExpandedSeat => !!seat)
+      : perspective
+        ? this.seats
+        : [...this.perspectiveAppliedSeats]
+            .map((id) => this.seatById.get(id))
+            .filter((seat): seat is ExpandedSeat => !!seat);
+    for (const seat of seats) {
+      if (perspective && this.perspectiveAppliedSeats.has(seat.id)) continue;
+      // Seat-layer nodes use absolute projected coordinates instead of a
+      // transformed 14k-descendant Layer. Overlay nodes continue to use the
+      // inverse-base local point and are projected by overlayLayer itself.
+      const point = perspective ? this.perspectiveSeatProjected.get(seat.id) ?? seat : seat;
+      const scale = perspective ? this.perspectiveSeatScale.get(seat.id) ?? 1 : 1;
+      const shape = this.circleById.get(seat.id);
+      shape?.position(point);
+      shape?.scale({ x: scale, y: scale });
+      const ring = this.accessRingById.get(seat.id);
+      ring?.position(point);
+      ring?.scale({ x: scale, y: scale });
+      const glyph = this.accessGlyphById.get(seat.id);
+      if (glyph) {
+        const baseGlyphScale = (this.seatR * 1.5) / ACCESS_GLYPH_VIEWBOX;
+        glyph.position(point);
+        glyph.scale({ x: baseGlyphScale * scale, y: baseGlyphScale * scale });
+      }
+      const boothLabel = this.boothLabelById.get(seat.id);
+      boothLabel?.position(point);
+      boothLabel?.scale({ x: scale, y: scale });
+      if (perspective) this.perspectiveAppliedSeats.add(seat.id);
+    }
+    if (!perspective) this.perspectiveAppliedSeats.clear();
+  }
+
+  /**
+   * Phase C projected 2.5D. Seat/booth anchors are exact pinhole projections;
+   * section top surfaces use one explicitly bounded tangent plane per authored
+   * section. Native Konva shapes move with the anchors, so direct hit testing is
+   * the same graph that paints the buyer-visible unit.
+   */
+  private applyPerspective(resetElevatedSeatGroups = true): void {
+    const camera = this.perspectiveCamera;
+    const base = this.perspectiveBaseAffine;
+    const inverse = this.perspectiveBaseInverse;
+    if (!camera || !base || !inverse) return;
+
+    const lazySectionSeats = this.seats.length > 2_500 && this.sections.length > 0;
+    // A large sectioned overview already owns a flat cached seat bitmap, but
+    // the section LOD makes seatLayer fully transparent. Keep that dormant
+    // bitmap until the camera reaches live seats: rebuilding 14k invisible
+    // descendants during this mode switch costs ~95 ms and paints no pixels.
+    if (this.cached && !lazySectionSeats) {
+      this.seatLayer.clearCache();
+      this.seatLayer.listening(true);
+      this.cached = false;
+    }
+    this.resetLayerTransforms(resetElevatedSeatGroups);
+    // Flat groups are already identity. Re-setting an identity transform on a
+    // group with hundreds of children invalidates every descendant transform;
+    // across 14k seats that alone blows the two-frame gate. Only an isometric
+    // source view needs its elevated seat-group offsets explicitly cleared.
+    this.resetSectionProjection(resetElevatedSeatGroups);
+    // Background/overlay geometry benefits from one bounded tangent affine.
+    // Exact native seat and booth nodes are placed directly at their pinhole
+    // anchors, keeping hit testing exact without invalidating the full seat
+    // graph through a top-level Layer transform.
+    for (const layer of [this.bgLayer, this.overlayLayer]) {
+      this.setContainerAffine(layer, base, camera.target);
+    }
+    this.perspectiveAppliedSeats.clear();
+    // The semantic overview paints section shells and sets seatLayer opacity to
+    // zero, so touching 14k invisible nodes here would create a ~200 ms toggle
+    // stall for no pixels. Small charts stay eager; large sectioned charts move
+    // each native hit shape exactly when its section reaches the live-seat rung.
+    if (!lazySectionSeats) this.applyExactSeatAnchors(true);
+
+    for (const section of this.sections) {
+      const heightAt = (point: Point): number => this.sectionSurfaceHeight(section, point);
+      const desired = perspectiveTangentAffine(camera, section.centroid, heightAt);
+      const correction = composeAffine(inverse, desired);
+      section.perspectiveAffine = desired;
+      section.perspectiveCorrection = correction;
+      section.perspectiveDepth = projectPerspectivePoint(
+        camera,
+        section.centroid,
+        heightAt(section.centroid),
+      ).depth;
+      // Only the top shell uses the tangent plane. Seats remain in the root
+      // section group at their exact precomputed anchors.
+      this.setContainerAffine(section.liftGroupBg, correction, section.centroid);
+
+      for (let index = 0; index < section.sideFaces.length; index++) {
+        const p0 = section.outline[index];
+        const p1 = section.outline[(index + 1) % section.outline.length];
+        const base0 = this.perspectiveLocalPoint(projectPerspectivePoint(camera, p0, 0));
+        const base1 = this.perspectiveLocalPoint(projectPerspectivePoint(camera, p1, 0));
+        const top1 = this.perspectiveLocalPoint(projectPerspectivePoint(camera, p1, heightAt(p1)));
+        const top0 = this.perspectiveLocalPoint(projectPerspectivePoint(camera, p0, heightAt(p0)));
+        section.sideFaces[index].points([
+          base0.x, base0.y,
+          base1.x, base1.y,
+          top1.x, top1.y,
+          top0.x, top0.y,
+        ]);
+        section.sideFaces[index].opacity(0.9);
+      }
+    }
+
+    // Far sections paint first; near sections and their exact hit shapes win an
+    // overlap. Sorting O(section count), never O(seat count), on view entry only.
+    const farToNear = [...this.sections].sort(
+      (left, right) => (right.perspectiveDepth ?? 0) - (left.perspectiveDepth ?? 0),
+    );
+    for (const section of farToNear) {
+      section.rootGroupBg.moveToTop();
+      section.liftGroupSeat.moveToTop();
+    }
+    this.unsectionedSeatGroup?.moveToTop();
+
+    this.syncSeatOverlayPositions();
+    // setViewMode() fits the projected bounds immediately after this method.
+    // Running viewport culling against the *old flat camera* would eagerly move
+    // most 14k native seats even though the fitted overview hides seatLayer.
+    if (!lazySectionSeats) this.updateSeatGroupVisibility();
+    this.bgLayer.batchDraw();
+    this.seatLayer.batchDraw();
+    this.overlayLayer.batchDraw();
+  }
+
   /**
    * Apply the current isoT to the scene: the base rotate+squash as a decomposed
    * layer transform (so seats/décor/rings project together and Konva's own
@@ -1725,6 +2285,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    * lift + extruded side faces on elevated sections.
    */
   private applyIso(): void {
+    this.resetSectionProjection();
+    this.applyExactSeatAnchors(false);
     const t = this.isoT;
     if (t === 0) {
       this.resetLayerTransforms();
@@ -1755,6 +2317,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
     this.applyUprightLabels();
     this.applyElevation();
+    this.updateSeatGroupVisibility();
 
     this.bgLayer.batchDraw();
     this.seatLayer.batchDraw();
@@ -1791,10 +2354,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private applyElevation(): void {
     const t = this.isoT;
     for (const sec of this.sections) {
-      if (sec.elevation <= 0) continue;
-      const off = this.isoLiftLocal(sec.elevation);
+      if (sec.liftWorld <= 0) continue;
+      const off = this.isoLiftLocal(sec.liftWorld);
       sec.liftGroupBg?.position(off);
-      sec.liftGroupSeat?.position(off);
+      sec.liftGroupSeat.position(off);
+      this.labelLiftGroups.get(sec.id)?.position(off);
       // Side faces: quad per edge from base outline to the lifted outline, in
       // local (world) space — the layer projects them. Invisible at isoT=0.
       const alpha = 0.9 * t;
@@ -1806,6 +2370,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         face.opacity(alpha);
       }
     }
+    this.syncSeatOverlayPositions();
   }
 
   destroy(): void {
@@ -1836,48 +2401,236 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    * tier shifts with one offset in iso view) or the seat layer directly.
    */
   private seatContainer(id: string): Group | Layer {
-    return this.seatSection.get(id)?.liftGroupSeat ?? this.seatLayer;
+    return this.seatSection.get(id)?.liftGroupSeat ?? this.unsectionedSeatGroup ?? this.seatLayer;
+  }
+
+  /** True when a section belongs to the active logical section/zone focus. */
+  private sectionMatchesFocus(section: SectionRender): boolean {
+    const focus = this.focusedSectionId;
+    return focus == null
+      || section.id === focus
+      || section.logicalId === focus
+      || section.zone === focus;
+  }
+
+  /** Visual opacity after the section-focus overlay is composed. */
+  private focusedSeatOpacity(id: string, localOpacity: number): number {
+    if (!this.focusedSectionId) return localOpacity;
+    const section = this.seatSection.get(id);
+    return localOpacity * (section && this.sectionMatchesFocus(section) ? 1 : FOCUS_DIM_OPACITY);
+  }
+
+  /** Project a section outline through elevation + the active affine view and
+   *  then into viewport pixels. The result is conservative (AABB), so a visible
+   *  section is never clipped even for rotated or isometric outlines. */
+  private sectionScreenBounds(section: SectionRender): { x: number; y: number; width: number; height: number } {
+    if (this.viewMode === 'perspective' && section.perspectiveAffine) {
+      const scale = this.stage.scaleX();
+      const stageX = this.stage.x();
+      const stageY = this.stage.y();
+      return polyBounds(section.outline.map((point) => {
+        const projected = this.projectedSectionPoint(section, point);
+        return { x: projected.x * scale + stageX, y: projected.y * scale + stageY };
+      }));
+    }
+    const offset = section.liftWorld > 0 ? this.isoLiftLocal(section.liftWorld) : { x: 0, y: 0 };
+    const scale = this.stage.scaleX();
+    const stageX = this.stage.x();
+    const stageY = this.stage.y();
+    return polyBounds(section.outline.map((point) => {
+      const local = { x: point.x + offset.x, y: point.y + offset.y };
+      const projected = this.isoT === 0 ? local : this.isoForward(local);
+      return { x: projected.x * scale + stageX, y: projected.y * scale + stageY };
+    }));
+  }
+
+  /** Hide only section groups wholly outside a padded viewport at the live-seat
+   *  rung. Overview caching always restores all groups first, so panning a
+   *  cached whole-venue bitmap can never reveal missing inventory. */
+  private updateSeatGroupVisibility(): void {
+    const liveSeats = this.effScale() >= CACHE_THRESHOLD;
+    // During a large-venue focus glide, transient camera rectangles can sweep
+    // across thousands of seats that will be offscreen at the endpoint. Keep
+    // the semantic shells visible through the motion and project native seats
+    // once, for the settled viewport, rather than generating several expensive
+    // intermediate scene paints that buyers never interact with.
+    const deferPerspectiveSeatReveal = this.viewMode === 'perspective'
+      && this.glideInProgress
+      && this.seats.length > 2_500;
+    const padding = 96;
+    const width = this.stage.width();
+    const height = this.stage.height();
+    for (const section of this.sections) {
+      let visible = true;
+      if (liveSeats) {
+        const bounds = this.sectionScreenBounds(section);
+        visible = bounds.x + bounds.width >= -padding
+          && bounds.y + bounds.height >= -padding
+          && bounds.x <= width + padding
+          && bounds.y <= height + padding;
+        if (visible && this.viewMode === 'perspective' && !deferPerspectiveSeatReveal) {
+          this.applyExactSeatAnchors(true, section.memberIds);
+        }
+      }
+      section.liftGroupSeat.setViewportCulled(!visible);
+      const labelGroup = this.labelLiftGroups.get(section.id);
+      labelGroup?.setViewportCulled(!visible);
+    }
+    if (this.unsectionedSeatGroup && !this.unsectionedSeatGroup.visible()) {
+      this.unsectionedSeatGroup.visible(true);
+    }
+    if (liveSeats && this.viewMode === 'perspective' && !deferPerspectiveSeatReveal) {
+      this.applyExactSeatAnchors(true, this.seats
+        .filter((seat) => !this.seatSection.has(seat.id))
+        .map((seat) => seat.id));
+    }
+  }
+
+  /** Seats worth considering for viewport labels. Section culling is a safe
+   *  coarse index; the later screen test remains the exact filter. */
+  private visibleSeatCandidates(): ExpandedSeat[] {
+    if (!this.sections.length) return this.seats;
+    const candidates: ExpandedSeat[] = [];
+    for (const section of this.sections) {
+      if (section.liftGroupSeat.isViewportCulled()) continue;
+      for (const id of section.memberIds) {
+        const seat = this.seatById.get(id);
+        if (seat) candidates.push(seat);
+      }
+    }
+    for (const seat of this.seats) {
+      if (!this.seatSection.has(seat.id)) candidates.push(seat);
+    }
+    return candidates;
+  }
+
+  private seatViewportCulled(id: string): boolean {
+    return this.seatSection.get(id)?.liftGroupSeat.isViewportCulled() ?? false;
+  }
+
+  /** Local world coordinate at which an elevated seat is actually painted for
+   *  the current iso tween. Flat seats and the 2D endpoint are unchanged. */
+  private renderedSeatPoint(seat: ExpandedSeat): Point {
+    if (this.viewMode === 'perspective') return this.perspectiveSeatLocal.get(seat.id) ?? seat;
+    const section = this.seatSection.get(seat.id);
+    if (!section || section.liftWorld <= 0 || this.isoT === 0) return seat;
+    const offset = this.isoLiftLocal(section.liftWorld);
+    return { x: seat.x + offset.x, y: seat.y + offset.y };
+  }
+
+  /** Overlay labels mirror the seat-layer lift without an O(seats) per-frame
+   *  rewrite. The groups are rebuilt with the zoom-dependent label set. */
+  private seatLabelContainer(id: string): Group {
+    const section = this.seatSection.get(id);
+    if (!section) return this.labelGroup;
+    let group = this.labelLiftGroups.get(section.id);
+    if (!group) {
+      group = new ViewportGroup({
+        listening: false,
+      });
+      group.setViewportCulled(section.liftGroupSeat.isViewportCulled());
+      group.position(this.viewMode === 'perspective'
+        ? { x: 0, y: 0 }
+        : this.isoLiftLocal(section.liftWorld));
+      this.labelGroup.add(group);
+      this.labelLiftGroups.set(section.id, group);
+    }
+    return group;
+  }
+
+  /** Shared overlay furniture is not parented to section lift groups, so keep
+   *  the small transient set aligned explicitly. Selection is capped in buyer
+   *  mode, making this constant-sized work during the iso tween. */
+  private syncSeatOverlayPositions(): void {
+    if (this.hoveredId) {
+      const seat = this.seatById.get(this.hoveredId);
+      if (seat) {
+        this.hoverRing.position(this.renderedSeatPoint(seat));
+        const scale = this.viewMode === 'perspective' ? this.perspectiveSeatScale.get(seat.id) ?? 1 : 1;
+        this.hoverRing.scale({ x: scale, y: scale });
+      }
+    }
+    if (this.focusedId) {
+      const seat = this.seatById.get(this.focusedId);
+      if (seat) {
+        this.focusRing.position(this.renderedSeatPoint(seat));
+        const scale = this.viewMode === 'perspective' ? this.perspectiveSeatScale.get(seat.id) ?? 1 : 1;
+        this.focusRing.scale({ x: scale, y: scale });
+      }
+    }
+    for (const [id, marker] of this.selectionMarkers) {
+      const seat = this.seatById.get(id);
+      if (seat) {
+        marker.position(this.renderedSeatPoint(seat));
+        const scale = this.viewMode === 'perspective' ? this.perspectiveSeatScale.get(seat.id) ?? 1 : 1;
+        marker.scale({ x: scale, y: scale });
+      }
+    }
   }
 
   private renderSeats(): void {
-    for (const seat of this.seats) {
+    // Stable far→near insertion makes exact perspective anchors occlude in the
+    // camera-correct order without an O(seats) reorder when the buyer toggles
+    // the view. Flat charts rarely overlap units; id is the deterministic tie.
+    const paintOrder = [...this.seats].sort((left, right) =>
+      (this.perspectiveSeatDepth.get(right.id) ?? 0) - (this.perspectiveSeatDepth.get(left.id) ?? 0));
+    for (const seat of paintOrder) {
       if (seat.kind === 'booth') {
         this.renderBoothUnit(seat);
         continue;
       }
       const target = this.seatContainer(seat.id);
-      const c = new Circle({
-        x: seat.x,
-        y: seat.y,
-        radius: this.seatR,
-        perfectDrawEnabled: false,
-        shadowForStrokeEnabled: false,
-        hitStrokeWidth: 0,
-      });
+      // An empty wheelchair bay is still one sellable inventory unit, but its
+      // square footprint must never masquerade as a fixed chair. `skip` seats
+      // never reach this loop at all, preserving the three distinct states.
+      const c: Shape = seat.wheelchairSpaceType === 'no-seat'
+        ? new Rect({
+            x: seat.x,
+            y: seat.y,
+            width: this.seatR * 2,
+            height: this.seatR * 2,
+            offsetX: this.seatR,
+            offsetY: this.seatR,
+            cornerRadius: 2,
+            perfectDrawEnabled: false,
+            shadowForStrokeEnabled: false,
+            hitStrokeWidth: 0,
+          })
+        : new Circle({
+            x: seat.x,
+            y: seat.y,
+            radius: this.seatR,
+            perfectDrawEnabled: false,
+            shadowForStrokeEnabled: false,
+            hitStrokeWidth: 0,
+          });
       c.setAttr('seatId', seat.id);
       this.circleById.set(seat.id, c);
       this.paintSeat(c, seat.id);
       target.add(c);
-      // Accessible seats get two markers (few per chart, so the extra nodes are
-      // cheap): a colour-coded accommodation ring, plus a centred glyph revealed
-      // once the seat is big enough on-screen. The ring is the small-zoom
-      // fallback, so it is drawn a touch thicker/wider to stay perceptible there.
+      // Every accommodation gets its colour-coded ring. The centred ♿ path is
+      // reserved for actual wheelchair provision; CART, hearing and other
+      // accommodations must never masquerade as wheelchair places.
       if (seat.accessible) {
-        const ring = new Circle({
-          x: seat.x,
-          y: seat.y,
-          radius: this.seatR + 1.5,
-          stroke: accessibilityRingColor(seat.accessibility),
-          strokeWidth: 2.5,
-          listening: false,
-          perfectDrawEnabled: false,
-          shadowForStrokeEnabled: false,
-        });
-        this.accessRingById.set(seat.id, ring);
-        target.add(ring);
-        const glyph = this.buildAccessGlyph(seat, typeof c.fill() === 'string' ? (c.fill() as string) : '');
-        this.accessGlyphById.set(seat.id, glyph);
-        target.add(glyph);
+        if (seat.wheelchairSpaceType !== 'no-seat') {
+          const ring = new Circle({
+            x: seat.x,
+            y: seat.y,
+            radius: this.seatR + 1.5,
+            stroke: accessibilityRingColor(seat.accessibility),
+            strokeWidth: 2.5,
+            listening: false,
+            perfectDrawEnabled: false,
+            shadowForStrokeEnabled: false,
+          });
+          this.accessRingById.set(seat.id, ring);
+          target.add(ring);
+        }
+        if (seat.accessibility?.includes('wheelchair')) {
+          const glyph = this.buildAccessGlyph(seat, typeof c.fill() === 'string' ? (c.fill() as string) : '');
+          this.accessGlyphById.set(seat.id, glyph);
+          target.add(glyph);
+        }
       }
     }
   }
@@ -1917,7 +2670,6 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     t.offsetX(t.width() / 2);
     t.offsetY(t.height() / 2);
     t.visible(false);
-    this.boothLabelById.set(seat.id, t);
     this.hasBoothText = true; // gate the upright-label scan of the seat layer
     this.boothLabelById.set(seat.id, t);
     target.add(t);
@@ -1941,24 +2693,50 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       scaleY: k,
       fill: stateAwareBookableLabelInk(seatFill, '#ffffff'),
       listening: false,
-      visible: this.accessGlyphVisible,
+      visible: false,
       perfectDrawEnabled: false,
       shadowForStrokeEnabled: false,
     });
   }
 
   /**
-   * Toggle the accessibility glyphs for the current camera scale: shown once the
-   * effective on-screen seat radius clears {@link SEAT_GLYPH_MIN_PX}, otherwise
-   * hidden so only the ring remains. Iterates the (small) accessible-seat set,
-   * never the full node graph, so it is cheap to call on every view change.
+   * Keep physical wheelchair provision readable in screen space at every map
+   * LOD. The active Wheelchair filter promotes it further. Iterates the small
+   * wheelchair-seat set, never the full node graph.
    */
   private updateAccessGlyphs(scale: number): void {
     if (!this.accessGlyphById.size) return;
-    this.accessGlyphVisible = this.seatR * scale >= SEAT_GLYPH_MIN_PX;
     for (const [id, glyph] of this.accessGlyphById) {
-      glyph.visible(this.accessGlyphVisible && this.accessGlyphEligible(id));
+      const perspectiveScale = this.viewMode === 'perspective'
+        ? this.perspectiveSeatScale.get(id) ?? 1
+        : 1;
+      const baseScale = ((this.seatR * 1.5) / ACCESS_GLYPH_VIEWBOX) * perspectiveScale;
+      const emphasized = this.accessGlyphFilterEmphasized(id);
+      const minimumScreenPx = emphasized
+        ? FILTERED_WHEELCHAIR_GLYPH_MIN_PX
+        : WHEELCHAIR_GLYPH_MIN_PX;
+      const glyphScale = Math.max(
+        baseScale,
+        minimumScreenPx / (ACCESS_GLYPH_VIEWBOX * Math.max(scale, 0.001)),
+      );
+      glyph.scale({ x: glyphScale, y: glyphScale });
+      glyph.visible(this.accessGlyphShouldShow(id));
     }
+  }
+
+  /** True only for a physical wheelchair provision matching an active buyer filter. */
+  private accessGlyphFilterEmphasized(id: string): boolean {
+    const seat = this.seatById.get(id);
+    const filter = this.accessFilter;
+    return !!seat
+      && filter !== null
+      && !!seat.accessibility?.includes('wheelchair')
+      && (filter.length === 0 || filter.includes('wheelchair'))
+      && seatMatchesAccess(seat, filter);
+  }
+
+  private accessGlyphShouldShow(id: string): boolean {
+    return this.accessGlyphById.has(id) && this.accessGlyphEligible(id);
   }
 
   /**
@@ -2056,6 +2834,15 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         break;
     }
 
+    // The empty bay keeps normal status/category paint for booking truth, while
+    // its dashed square boundary supplies a non-colour cue that it is space for
+    // a wheelchair rather than a physical chair.
+    if (seat.wheelchairSpaceType === 'no-seat' && status === 'free') {
+      c.stroke(accessibilityRingColor(seat.accessibility));
+      c.strokeWidth(selected ? 3 : 2);
+      c.dash([3, 2]);
+    }
+
     if (boothLabel) {
       boothLabel.text(status === 'booked' ? 'SOLD' : status === 'held' ? 'HELD' : seat.label);
       boothLabel.fontSize(status === 'free' ? 10 : Math.min(10, Math.max(6, this.boothDims.get(seat.rowId)?.width ?? 40) / 6));
@@ -2104,17 +2891,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       c.dash([]);
       c.opacity(CLOSED_SEAT_OPACITY);
     }
-    // AXS section-focus: seats outside the focused section desaturate + dim so
-    // the focused block reads against a calm ground (§4 focus spec).
-    if (this.focusedSectionId) {
-      const sec = this.seatSection.get(id);
-      const inFocus = !!sec && (
-        sec.id === this.focusedSectionId
-        || sec.logicalId === this.focusedSectionId
-        || sec.zone === this.focusedSectionId
-      );
-      if (!inFocus) c.opacity(FOCUS_DIM_OPACITY);
-    }
+    // Section-focus dimming belongs to the section's parent Group. Keeping it
+    // out of this per-seat paint path avoids 14k node mutations on focus.
     // Buyer confirmation focus: retain the candidate at full strength while
     // every unrelated seat recedes. Labels use the resulting opacity below so
     // the detail layer follows the same focus hierarchy as the seat geometry.
@@ -2138,7 +2916,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const fill = c.fill();
       accessGlyph.fill(stateAwareBookableLabelInk(typeof fill === 'string' ? fill : '', '#ffffff'));
       accessGlyph.opacity(c.opacity());
-      accessGlyph.visible(this.accessGlyphVisible && this.accessGlyphEligible(id));
+      accessGlyph.visible(this.accessGlyphShouldShow(id));
     }
     this.accessRingById.get(id)?.opacity(c.opacity());
   }
@@ -2216,7 +2994,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (!this.sections.some((section) => section.id === id || section.logicalId === id)) return;
     this.focusedSectionId = id;
     this.drawFocusBackdrop(id);
-    this.repaintSectionsAndSeats();
+    this.bgLayer.batchDraw();
+    this.overlayLayer.batchDraw();
     this.updateLOD();
     this.focusRegion(id, { minScale: SEAT_FOCUS_SCALE });
   }
@@ -2229,7 +3008,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       this.focusBackdrop.destroy();
       this.focusBackdrop = null;
     }
-    this.repaintSectionsAndSeats();
+    this.focusDimOverlay?.destroy();
+    this.focusDimOverlay = null;
+    this.bgLayer.batchDraw();
+    this.overlayLayer.batchDraw();
     this.updateLOD();
   }
 
@@ -2248,16 +3030,79 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (!sections.length) return;
     const backdrop = new Group({ listening: false });
     for (const section of sections) {
-      backdrop.add(polygonWithHolesShape(section.outline, section.holes, {
+      const perspective = this.viewMode === 'perspective' && section.perspectiveAffine;
+      const outline = perspective
+        ? section.outline.map((point) => this.perspectiveLocalPoint(this.projectedSectionPoint(section, point)))
+        : section.outline;
+      const holes = perspective
+        ? section.holes.map((hole) => hole.map((point) =>
+            this.perspectiveLocalPoint(this.projectedSectionPoint(section, point))))
+        : section.holes;
+      backdrop.add(polygonWithHolesShape(outline, holes, {
         fill: FOCUS_BACKDROP_FILL,
         stroke: rgba('#ffffff', 0.1),
         strokeWidth: 1,
         listening: false,
-      }, section.outlinePath));
+      }, perspective ? undefined : section.outlinePath));
     }
     this.bgLayer.add(backdrop);
     backdrop.moveToTop(); // above the dimmed sibling blocks, still under the seat layer
     this.focusBackdrop = backdrop;
+    this.drawFocusDimOverlay(sections);
+  }
+
+  /** Dim everything outside the active section with one paint-only shape. Group
+   *  opacity would make Konva recursively invalidate absolute-opacity caches on
+   *  all 14k descendants. The cut-out follows the live elevation offset and is
+   *  non-listening, so direct seat hit-testing is unchanged. */
+  private drawFocusDimOverlay(sections: SectionRender[]): void {
+    this.focusDimOverlay?.destroy();
+    const span = Math.max(this.bounds.width, this.bounds.height, 1);
+    const padding = span * 4 + 1_000;
+    const outer: Point[] = [
+      { x: this.bounds.x - padding, y: this.bounds.y - padding },
+      { x: this.bounds.x + this.bounds.width + padding, y: this.bounds.y - padding },
+      { x: this.bounds.x + this.bounds.width + padding, y: this.bounds.y + this.bounds.height + padding },
+      { x: this.bounds.x - padding, y: this.bounds.y + this.bounds.height + padding },
+    ];
+    const signedArea = (points: Point[]): number => points.reduce((sum, point, index) => {
+      const next = points[(index + 1) % points.length];
+      return sum + point.x * next.y - next.x * point.y;
+    }, 0);
+    const overlay = new Shape({
+      fill: this.canvasBackground,
+      opacity: 1 - FOCUS_DIM_OPACITY,
+      listening: false,
+      perfectDrawEnabled: false,
+      sceneFunc: (context, shape) => {
+        const polygonPath = (points: Point[]): void => {
+          if (!points.length) return;
+          context.moveTo(points[0].x, points[0].y);
+          for (let index = 1; index < points.length; index++) context.lineTo(points[index].x, points[index].y);
+          context.closePath();
+        };
+        context.beginPath();
+        polygonPath(outer);
+        for (const section of sections) {
+          const hole = this.viewMode === 'perspective' && section.perspectiveAffine
+            ? section.outline.map((point) => this.perspectiveLocalPoint(this.projectedSectionPoint(section, point)))
+            : section.outline.map((point) => {
+                const offset = section.liftWorld > 0 ? this.isoLiftLocal(section.liftWorld) : { x: 0, y: 0 };
+                return { x: point.x + offset.x, y: point.y + offset.y };
+              });
+          // Outer is clockwise in canvas coordinates; reverse same-winding holes
+          // so the default non-zero fill rule cuts a transparent focus window.
+          polygonPath(signedArea(hole) > 0 ? [...hole].reverse() : hole);
+        }
+        context.fillStrokeShape(shape);
+      },
+    });
+    this.overlayLayer.add(overlay);
+    overlay.moveToTop();
+    for (const marker of this.selectionMarkers.values()) marker.moveToTop();
+    this.hoverRing.moveToTop();
+    this.focusRing.moveToTop();
+    this.focusDimOverlay = overlay;
   }
 
   /** Repaint every seat + section block to reflect closed/focus state, then redraw. */
@@ -2326,7 +3171,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   }
 
   private renderBackground(doc: ChartDoc): void {
-    if (doc.backgroundImage) this.renderBackgroundImage(doc.backgroundImage);
+    const buyerBackground = buyerBackgroundImage(doc);
+    if (buyerBackground) this.renderBackgroundImage(buyerBackground);
     // Decor graphics (ice rink, court art) draw first so they sit UNDER the
     // section outlines and — being on bgLayer, below seatLayer entirely — under
     // every seat. listening(false) keeps them out of the hit graph.
@@ -2420,10 +3266,14 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       listening: false,
       perfectDrawEnabled: false,
     });
-    this.bgLayer.add(node);
+    // Foreground decor rides the overlay layer (above every seat); background
+    // decor stays on bgLayer, beneath sections and seats.
+    if (obj.layer === 'foreground') this.fgDecorGroup.add(node);
+    else this.bgLayer.add(node);
     img.onload = () => {
-      if (!node.getLayer()) return; // chart swapped out before the image loaded
-      this.bgLayer.batchDraw();
+      const layer = node.getLayer();
+      if (!layer) return; // chart swapped out before the image loaded
+      layer.batchDraw();
     };
     img.src = obj.href;
   }
@@ -2461,7 +3311,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         }),
       );
     }
-    const label = this.addCentredLabel(this.bgLayer, obj.label, obj.center.x, obj.center.y, '#cbd5e1', 12, true);
+    const label = this.addCentredLabel(this.bgLayer, obj.displayLabel ?? obj.label, obj.center.x, obj.center.y, '#cbd5e1', 12, true);
     this.freeTextById.set(obj.id, { node: label, background: '#232c40', kind: 'table' });
   }
 
@@ -2474,11 +3324,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       text: obj.text,
       fontSize: obj.fontSize,
       rotation: obj.rotation,
+      fontStyle: konvaFontStyle(obj.bold, obj.italic, 'normal'),
       // Authored ink remains preferred, but an embed/theme surface can change
       // the actual canvas. Fail over to readable black/white instead of
       // painting an otherwise valid caption invisibly on that active surface.
       fill: stateAwareBookableLabelInk(background, preferredInk),
-      fontFamily: this.labelFont(),
+      fontFamily: obj.fontFamily ?? this.labelFont(),
       listening: false,
       perfectDrawEnabled: false,
     });
@@ -2501,12 +3352,45 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // hierarchy as the supplied seating-chart target. Source black must not
     // become an unlabelled black hole in the generated chart.
     const fill = referenceFocal ? palette.focalFill : authoredFill;
+    const isOpenPath = obj.kind === 'line' || obj.kind === 'polyline';
+    // Author outline wins; stage keeps its lit edge; open paths always paint a
+    // visible default stroke; reference focals keep their palette outline.
+    const stroke = obj.stroke?.color
+      ?? (isStage ? lighten(fill, 0.28) : referenceFocal ? palette.focalStroke : isOpenPath ? '#9aa3b5' : undefined);
     // Stage: darker at the back (min-y), brighter toward the audience edge (max-y).
-    const stroke = isStage ? lighten(fill, 0.28) : referenceFocal ? palette.focalStroke : undefined;
-    const strokeWidth = isStage ? 1 : referenceFocal ? 2 : 0;
+    const strokeWidth = obj.stroke?.width ?? (isStage ? 1 : referenceFocal ? 2 : isOpenPath ? 2 : 0);
+    const opacity = obj.opacity != null ? clamp(obj.opacity, 0.1, 1) : 1;
     let cx = 0;
     let cy = 0;
-    if (obj.kind === 'rect' && obj.x != null && obj.y != null && obj.width != null && obj.height != null) {
+    if (isOpenPath && obj.points && obj.points.length >= 2) {
+      // Open path: stroke-only, never filled, never hit-tested.
+      cx = obj.points.reduce((a, p) => a + p.x, 0) / obj.points.length;
+      cy = obj.points.reduce((a, p) => a + p.y, 0) / obj.points.length;
+      const lineStyle = resolvedShapeLineStyle(obj);
+      const arrow = shapeArrowMetrics(strokeWidth);
+      const path = new Arrow({
+        points: obj.points.flatMap((p) => [p.x, p.y]),
+        closed: false,
+        x: cx,
+        y: cy,
+        offsetX: cx,
+        offsetY: cy,
+        rotation: obj.rotation ?? 0,
+        stroke,
+        fill: stroke,
+        strokeWidth,
+        opacity,
+        lineCap: lineStyle.lineCap,
+        lineJoin: lineStyle.lineJoin,
+        pointerAtBeginning: lineStyle.startEnding === 'arrow',
+        pointerAtEnding: lineStyle.endEnding === 'arrow',
+        ...arrow,
+        listening: false,
+        name: 'buyer-shape-open-path',
+      });
+      path.setAttr('shapeObjectId', obj.id);
+      this.bgLayer.add(path);
+    } else if (obj.kind === 'rect' && obj.x != null && obj.y != null && obj.width != null && obj.height != null) {
       const grad = isStage
         ? {
             fillLinearGradientStartPoint: { x: 0, y: 0 },
@@ -2530,7 +3414,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
           ...grad,
           stroke,
           strokeWidth,
-          cornerRadius: 4,
+          cornerRadius: clamp(obj.cornerRadius ?? 4, 0, Math.min(obj.width, obj.height) / 2),
+          opacity,
           listening: false,
         }),
       );
@@ -2545,7 +3430,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
           }
         : { fill };
       this.bgLayer.add(
-        new Ellipse({ x: cx, y: cy, rotation: obj.rotation ?? 0, radiusX: obj.width / 2, radiusY: obj.height / 2, ...grad, stroke, strokeWidth, listening: false }),
+        new Ellipse({ x: cx, y: cy, rotation: obj.rotation ?? 0, radiusX: obj.width / 2, radiusY: obj.height / 2, ...grad, stroke, strokeWidth, opacity, listening: false }),
       );
     } else if (obj.kind === 'polygon' && obj.points && obj.points.length) {
       const pts = obj.points.flatMap((p) => [p.x, p.y]);
@@ -2564,7 +3449,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // Rotate about the centroid: position=offset=centroid leaves the polygon
       // in place at rotation 0 and pivots there for any angle.
       this.bgLayer.add(
-        new Line({ points: pts, closed: true, x: cx, y: cy, offsetX: cx, offsetY: cy, rotation: obj.rotation ?? 0, ...grad, stroke, strokeWidth, listening: false }),
+        new Line({ points: pts, closed: true, x: cx, y: cy, offsetX: cx, offsetY: cy, rotation: obj.rotation ?? 0, ...grad, stroke, strokeWidth, opacity, listening: false }),
       );
     }
     if (obj.label) {
@@ -2630,7 +3515,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       strokeWidth: 1.5,
     });
     poly.setAttr('gaId', obj.id);
-    poly.on('click tap', () => this.opts.onGAClick?.(obj.id));
+    poly.on('click tap', (e: KonvaEventObject<Event>) => {
+      if (this.isGhostClick(e)) return; // a double onGAClick would double-open the qty picker
+      this.opts.onGAClick?.(obj.id);
+    });
     poly.on('mouseenter', () => {
       this.container.style.cursor = 'pointer';
     });
@@ -2643,7 +3531,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const containingSection = this.sections.find((section) => (
       pointInPolygonWithHoles(labelPoint, section.outline, section.holes)
     ));
-    const label = this.addCentredLabel(this.bgLayer, obj.label, labelPoint.x, labelPoint.y - 8, ink, GA_LABEL_FONT_SIZE, false);
+    const label = this.addCentredLabel(this.bgLayer, obj.displayLabel ?? obj.label, labelPoint.x, labelPoint.y - 8, ink, GA_LABEL_FONT_SIZE, false);
     const capacity = this.addCentredLabel(this.bgLayer, `cap ${obj.capacity}`, labelPoint.x, labelPoint.y + 10, ink, GA_CAPACITY_LABEL_FONT_SIZE, false);
     this.freeTextById.set(`${obj.id}:label`, {
       objectId: obj.id,
@@ -2660,7 +3548,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       categoryKey: obj.categoryKey,
     });
     this.gaById.set(obj.id, {
-      label: obj.label,
+      label: obj.displayLabel ?? obj.label,
       capacity: obj.capacity,
       categoryKey: obj.categoryKey,
       points: obj.points,
@@ -2686,7 +3574,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const memberIds: string[] = [];
     const catCounts = new Map<string, number>();
     let free = 0;
-    for (const seat of this.seats) {
+    const bounds = polyBounds(obj.outline);
+    const candidates = this.seatIndex
+      ? queryRect(this.seatIndex, bounds)
+        .map((id) => this.seatById.get(id))
+        .filter((seat): seat is ExpandedSeat => !!seat)
+      : this.seats;
+    for (const seat of candidates) {
       if (this.seatSection.has(seat.id)) continue;
       if (!pointInPolygonWithHoles(seat, obj.outline, obj.holes)) continue;
       memberIds.push(seat.id);
@@ -2704,12 +3598,24 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
     // Elevation: elevated sections lift as one tier in the iso view, so their bg
     // nodes + member seats go into lift groups (positioned in applyElevation).
+    // Every section gets a seat group even at height zero: that parent is the
+    // safe unit for production viewport culling on very large live-seat scenes.
     // Side faces (a zone-coloured quad per outline edge) extrude only as isoT rises.
-    const elevation = Math.max(0, Math.round(obj.elevation ?? 0));
-    let liftGroupBg: Group | null = null;
-    let liftGroupSeat: Group | null = null;
+    const elevation = sectionElevationTier(obj.elevation);
+    // Real iso lift (Phase B1): authored height when present, else the elevation
+    // tier fallback — which reproduces the legacy `elevation × LIFT_PER_STEP`.
+    const geometry = sectionGeometry(obj, {
+      floorBaseHeightM: this.floorBaseHeightMFor(obj.id),
+    });
+    const liftWorld = geometry.height * CHART_UNITS_PER_METRE;
+    const rootGroupBg = new Group({ listening: false });
+    this.bgLayer.add(rootGroupBg);
+    const liftGroupBg = new Group({ listening: false });
+    rootGroupBg.add(liftGroupBg);
+    const liftGroupSeat = new ViewportGroup({ listening: true });
+    this.seatLayer.add(liftGroupSeat);
     const sideFaces: Line[] = [];
-    if (elevation > 0) {
+    if (liftWorld > 0) {
       const faceFill = darken(this.zoneColor.get(obj.zone ?? '') ?? baseFill, 0.42);
       for (let i = 0; i < obj.outline.length; i++) {
         const face = new Line({
@@ -2723,14 +3629,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
           perfectDrawEnabled: false,
         });
         sideFaces.push(face);
-        this.bgLayer.add(face); // behind the group added next → behind the fill
+        rootGroupBg.add(face); // behind the top-surface group
       }
-      liftGroupBg = new Group({ listening: false });
-      this.bgLayer.add(liftGroupBg);
-      liftGroupSeat = new Group({ listening: false });
-      this.seatLayer.add(liftGroupSeat);
     }
-    const bgTarget: Group | Layer = liftGroupBg ?? this.bgLayer;
+    // Top surface must paint above its side faces in both iso and perspective.
+    liftGroupBg.moveToTop();
+    const bgTarget: Group = liftGroupBg;
 
     // Zone-coloured outline under the seats — matches the crisp section blocks
     // the designer draws, so the near-zoom map reads as defined zones too.
@@ -2816,10 +3720,27 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       nameLabelFits: true,
       subLabelFits: true,
       elevation,
+      liftWorld,
+      rakeDeg: geometry.rake,
+      surfaceFocal: memberIds.length
+        ? { ...(this.seatById.get(memberIds[0])?.focalPoint ?? this.isoCentre) }
+        : { ...(this.chartDoc?.focalPoint ?? this.isoCentre) },
+      frontDistanceWorld: 0,
+      rootGroupBg,
+      bgZIndex: rootGroupBg.zIndex(),
+      seatZIndex: liftGroupSeat.zIndex(),
       liftGroupBg,
       liftGroupSeat,
       sideFaces,
     };
+    const surfaceCandidates = memberIds
+      .map((id) => this.seatById.get(id))
+      .filter((seat): seat is ExpandedSeat => !!seat);
+    const distanceCandidates: Point[] = surfaceCandidates.length ? surfaceCandidates : obj.outline;
+    sec.frontDistanceWorld = Math.min(...distanceCandidates.map((point) => Math.hypot(
+      point.x - sec.surfaceFocal.x,
+      point.y - sec.surfaceFocal.y,
+    )));
     for (const id of memberIds) this.seatSection.set(id, sec);
     this.refreshSectionFill(sec);
     this.refreshSectionHeat(sec);
@@ -2994,13 +3915,21 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (!this.zones.length) zoneT = 0;
 
     // Seats melt out as the block fill melts in (coordinated with the bitmap swap).
-    this.seatLayer.opacity(sectionOverview ? 0 : 1 - blockT);
+    const deferPerspectiveSeatReveal = this.viewMode === 'perspective'
+      && this.glideInProgress
+      && this.seats.length > 2_500;
+    this.seatLayer.opacity(sectionOverview || deferPerspectiveSeatReveal ? 0 : 1 - blockT);
 
     // Labels are drawn UPRIGHT (the iso squash is cancelled per-text), so their
     // on-screen size follows the raw stage scale, not the squashed effective one.
     const sx = this.stage.scaleX();
     // Scale-compensate label sizes only when the scale meaningfully changed.
-    const rescale = this.lodScale === 0 || Math.abs(scale - this.lodScale) / (this.lodScale || 1) > 0.02;
+    // Fitted polygon labels are expensive (point-in-polygon + text measure).
+    // Refit only after a meaningful camera change. The stage still scales text
+    // smoothly between checkpoints; exact screen-pixel fitting catches up at
+    // the next checkpoint (or once an animated glide settles).
+    const rescale = !this.glideInProgress
+      && (this.lodScale === 0 || Math.abs(scale - this.lodScale) / (this.lodScale || 1) > 0.08);
     if (rescale) this.lodScale = scale;
 
     const focus = this.focusedSectionId;
@@ -3009,8 +3938,12 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // individual bookable shapes are still the dominant visual layer.
     const sectionLabelT = clamp((blockT - 0.2) / 0.8, 0, 1);
     for (const sec of this.sections) {
-      // AXS focus: non-focused sections dim to ~16%; the focused block stays full.
-      const dim = focus && sec.id !== focus && sec.logicalId !== focus && sec.zone !== focus ? FOCUS_DIM_OPACITY : 1;
+      // The paint-only focus overlay already dims seats, blocks, and labels as
+      // one composed scene. Avoid applying the old per-node factor underneath
+      // it (which would double-dim section shells to ~2.5%).
+      const dim = this.focusDimOverlay
+        ? 1
+        : (focus && sec.id !== focus && sec.logicalId !== focus && sec.zone !== focus ? FOCUS_DIM_OPACITY : 1);
       // Category-tinted detail outlines disappear as the clean shell takes over.
       sec.outlinePoly.opacity(sectionOverview ? 0 : (1 - blockT) * dim);
       sec.blockPoly.opacity(BLOCK_FILL_ALPHA * blockT * dim);
@@ -3026,7 +3959,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       );
       sec.nameLabel.fill(sectionInk);
       sec.subLabel.fill(sectionInk);
-      if (rescale) this.fitSectionRungLabels(sec, sx);
+      if (rescale && sectionLabelT > 0.01) this.fitSectionRungLabels(sec, sx);
       const labelOpacity = sectionLabelT * (1 - zoneT) * dim;
       sec.nameLabel.opacity(sec.nameLabelFits ? labelOpacity : 0);
       // Availability stays in the focused/detail UI. It is deliberately not a
@@ -3045,12 +3978,14 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     }
     // Greedy de-collision of the visible label tiers (small canvases stack
     // "UPPER BOWL"/"LOWER BOWL"/FROM-$ on top of each other otherwise).
-    this.decollideRungLabels(sx);
-    this.dedupeLogicalSectionLabels();
-    for (const zone of this.zones) {
-      const opacity = zone.label.opacity();
-      zone.back.opacity(opacity);
-      if (zone.sub) zone.sub.opacity(opacity);
+    if (!this.glideInProgress && (sectionLabelT > 0.01 || zoneOpacity > 0.01)) {
+      this.decollideRungLabels(sx);
+      this.dedupeLogicalSectionLabels();
+      for (const zone of this.zones) {
+        const opacity = zone.label.opacity();
+        zone.back.opacity(opacity);
+        if (zone.sub) zone.sub.opacity(opacity);
+      }
     }
     this.bgLayer.batchDraw();
   }
@@ -3192,6 +4127,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private screenToWorld(clientPoint: { x: number; y: number }): { x: number; y: number } {
     const s = this.stage.scaleX();
     const iso = { x: (clientPoint.x - this.stage.x()) / s, y: (clientPoint.y - this.stage.y()) / s };
+    if (this.viewMode === 'perspective' && this.perspectiveBaseInverse) {
+      return applyAffine(this.perspectiveBaseInverse, iso);
+    }
     return this.isoT === 0 ? iso : this.isoInverse(iso);
   }
 
@@ -3199,7 +4137,22 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   sectionAt(clientPoint: { x: number; y: number }): string | null {
     if (!this.sections.length) return null;
     const world = this.screenToWorld(clientPoint);
-    const hit = this.sections.find((sec) => pointInPolygonWithHoles(world, sec.outline, sec.holes));
+    const hit = this.sections.find((sec) => {
+      if (this.viewMode === 'perspective' && sec.perspectiveAffine) {
+        return pointInPolygonWithHoles(
+          world,
+          sec.outline.map((point) => this.perspectiveLocalPoint(this.projectedSectionPoint(sec, point))),
+          sec.holes.map((hole) => hole.map((point) =>
+            this.perspectiveLocalPoint(this.projectedSectionPoint(sec, point)))),
+        );
+      }
+      const offset = sec.liftWorld > 0 ? this.isoLiftLocal(sec.liftWorld) : { x: 0, y: 0 };
+      return pointInPolygonWithHoles(
+        { x: world.x - offset.x, y: world.y - offset.y },
+        sec.outline,
+        sec.holes,
+      );
+    });
     return hit ? hit.logicalId : null;
   }
 
@@ -3316,15 +4269,20 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (!seat) return;
     const candidate = this.selectionFocusId === id;
     const dims = this.boothDims.get(seat.rowId);
+    const rendered = this.renderedSeatPoint(seat);
     const marker = new Group({
       name: 'selection-ring',
-      x: seat.x,
-      y: seat.y,
+      x: rendered.x,
+      y: rendered.y,
       rotation: dims?.rotation ?? 0,
       listening: false,
       perfectDrawEnabled: false,
       opacity: this.selectionFocusId && !candidate ? 0.2 : 1,
     });
+    if (this.viewMode === 'perspective') {
+      const projectionScale = this.perspectiveSeatScale.get(id) ?? 1;
+      marker.scale({ x: projectionScale, y: projectionScale });
+    }
     marker.setAttr('seatId', id);
     const common = {
       stroke: this.effSelection,
@@ -3409,7 +4367,21 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private sectionBounds(id: string): { x: number; y: number; width: number; height: number } | null {
     const bounds = this.sections
       .filter((section) => section.id === id || section.logicalId === id)
-      .map((section) => polyBounds(section.outline));
+      .map((section) => {
+        if (this.viewMode === 'perspective' && section.perspectiveAffine) {
+          return polyBounds(section.outline.map((point) => this.projectedSectionPoint(section, point)));
+        }
+        const offset = section.liftWorld > 0 ? this.isoLiftLocal(section.liftWorld) : { x: 0, y: 0 };
+        // Camera position is expressed in the stage's post-affine world space.
+        // Frame the outline after both the section lift and the active iso
+        // projection; feeding local lifted bounds to focusRegion applies the
+        // affine a second time and can send a balcony below the viewport.
+        const points = section.outline.map((point) => {
+          const local = { x: point.x + offset.x, y: point.y + offset.y };
+          return this.isoT === 0 ? local : this.isoForward(local);
+        });
+        return polyBounds(points);
+      });
     if (!bounds.length) return null;
     const left = Math.min(...bounds.map((box) => box.x));
     const top = Math.min(...bounds.map((box) => box.y));
@@ -3471,15 +4443,20 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    * hijacking a clean tap on empty space beyond the slop.
    */
   private nearestSeatToScreen(screen: { x: number; y: number }, slopPx: number): string | null {
-    const s = this.stage.scaleX() || 1;
-    const reachWorld = this.seatR + slopPx / s; // circle radius + finger slack
-    const world = this.screenToWorld(screen);
     let best: string | null = null;
-    let bestD = reachWorld;
+    let bestD = Infinity;
+    const stageScale = this.stage.scaleX() || 1;
     for (const seat of this.seats) {
       if (!this.selection.has(seat.id) && !this.isSelectable(seat.id)) continue;
-      const d = Math.hypot(seat.x - world.x, seat.y - world.y);
-      if (d < bestD) {
+      const centre = this.worldToScreen(seat);
+      const perspectiveScale = this.viewMode === 'perspective'
+        ? this.perspectiveSeatScale.get(seat.id) ?? 1
+        : 1;
+      // Perspective markers are native seat-layer nodes at exact projected
+      // coordinates. They do not inherit the section-shell tangent affine.
+      const reachPx = this.seatR * stageScale * perspectiveScale + slopPx;
+      const d = Math.hypot(centre.x - screen.x, centre.y - screen.y);
+      if (d <= reachPx && d < bestD) {
         bestD = d;
         best = seat.id;
       }
@@ -3490,6 +4467,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private wireInteraction(): void {
     this.seatLayer.on('click tap', (e: KonvaEventObject<Event>) => {
       if (this.moved > PAN_START_SLOP_PX) return; // it was a pan/pinch, not a tap
+      if (this.isGhostClick(e)) return; // protected only incidentally; lost when cached
       const id = seatIdOf(e.target);
       if (!id) return;
       this.handleSeatTap(id);
@@ -3501,13 +4479,17 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       if (!id) return;
       const seat = this.seatById.get(id);
       if (!seat) return;
-      this.hoverRing.position({ x: seat.x, y: seat.y });
+      this.hoveredId = id;
+      this.hoverRing.position(this.renderedSeatPoint(seat));
+      const projectionScale = this.viewMode === 'perspective' ? this.perspectiveSeatScale.get(id) ?? 1 : 1;
+      this.hoverRing.scale({ x: projectionScale, y: projectionScale });
       this.hoverRing.visible(true);
       this.overlayLayer.batchDraw();
       this.container.style.cursor = 'pointer';
       this.opts.onHover?.(seat);
     });
     this.seatLayer.on('mouseout', () => {
+      this.hoveredId = null;
       this.hoverRing.visible(false);
       this.overlayLayer.batchDraw();
       this.container.style.cursor = 'default';
@@ -3531,6 +4513,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // attempting a 4px-precision selection (same behaviour as seats.io).
     this.stage.on('click tap', (e: KonvaEventObject<Event>) => {
       if (this.moved > PAN_START_SLOP_PX) return;
+      if (this.isGhostClick(e)) return; // near-miss rescue below is the ghost-click path
       const pointer = this.stage.getPointerPosition();
       if (!pointer) return;
       // Seats are LIVE (not a cached bitmap): the seatLayer handler above owns
@@ -3555,11 +4538,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // in + show the section-summary card (Slice 5). With no handler wired we
       // keep the standalone behaviour of gliding to fit that section.
       if (this.sections.length) {
-        const world = this.screenToWorld(pointer);
-        const hit = this.sections.find((sn) => pointInPolygonWithHoles(world, sn.outline, sn.holes));
-        if (hit) {
-          if (this.opts.onSectionTap) this.opts.onSectionTap(hit.logicalId);
-          else this.focusRegion(hit.logicalId);
+        const sectionId = this.sectionAt(pointer);
+        if (sectionId) {
+          if (this.opts.onSectionTap) this.opts.onSectionTap(sectionId);
+          else this.focusRegion(sectionId);
           return;
         }
       }
@@ -3577,13 +4559,15 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    */
   private deckFloorAt(): string | null {
     if (!this.objectFloor.size) return null;
-    const p = this.seatLayer.getRelativePointerPosition();
-    if (!p) return null;
+    const pointer = this.stage.getPointerPosition();
+    if (!pointer) return null;
+    const p = this.screenToWorld(pointer);
     let best: string | null = null;
     let bestD = Infinity;
     for (const s of this.seats) {
-      const dx = s.x - p.x;
-      const dy = s.y - p.y;
+      const rendered = this.renderedSeatPoint(s);
+      const dx = rendered.x - p.x;
+      const dy = rendered.y - p.y;
       const d = dx * dx + dy * dy;
       if (d < bestD) { bestD = d; best = s.rowId; }
     }
@@ -3672,6 +4656,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         x: mid.x - this.pinch.worldMid.x * scale,
         y: mid.y - this.pinch.worldMid.y * scale,
       });
+      this.updateSeatGroupVisibility();
       this.stage.batchDraw();
       this.scheduleViewChange();
     } else if (this.panLast && this.pointers.size === 1) {
@@ -3687,6 +4672,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         y: this.stage.y() + (p.y - this.panLast.y),
       });
       this.panLast = p;
+      this.updateSeatGroupVisibility();
       this.stage.batchDraw();
       this.scheduleViewChange();
     }
@@ -3805,13 +4791,17 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     }
     const start = performance.now();
     const duration = Math.max(180, Math.min(1200, opts?.durationMs ?? CAMERA_GLIDE_MS));
+    this.glideInProgress = true;
     const step = (now: number): void => {
-      if (this.destroyed) { this.glideRaf = 0; return; }
+      if (this.destroyed) { this.glideRaf = 0; this.glideInProgress = false; return; }
       const raw = Math.min(1, (now - start) / duration);
       const e = raw < 0.5 ? 4 * raw * raw * raw : 1 - Math.pow(-2 * raw + 2, 3) / 2;
       const sc = fromScale + (toScale - fromScale) * e;
       this.stage.scale({ x: sc, y: sc });
       this.stage.position({ x: fromX + (toX - fromX) * e, y: fromY + (toY - fromY) * e });
+      // Cull before crossing out of the overview bitmap: updateLOD may uncache
+      // the live graph on this exact frame, which must already be bounded.
+      this.updateSeatGroupVisibility();
       this.updateLOD(); // the melt cross-fades as the camera rides in
       this.scheduleViewChange();
       this.stage.batchDraw();
@@ -3819,6 +4809,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         this.glideRaf = requestAnimationFrame(step);
       } else {
         this.glideRaf = 0;
+        this.glideInProgress = false;
         this.afterViewChange();
       }
     };
@@ -3831,6 +4822,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       cancelAnimationFrame(this.glideRaf);
       this.glideRaf = 0;
     }
+    this.glideInProgress = false;
   }
 
   /** Current LOD rung derived from effective zoom — drives the ZONES/SECTIONS/SEATS pill. */
@@ -3849,13 +4841,24 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const labels: RenderedBookableLabelEvidence[] = this.seats.map((seat) => {
       const shape = this.circleById.get(seat.id);
       const label = this.boothLabelById.get(seat.id) ?? this.seatLabelById.get(seat.id);
+      const localPerspectiveScale = this.viewMode === 'perspective'
+        ? this.perspectiveSeatScale.get(seat.id) ?? 1
+        : 1;
+      const seatEffectiveScale = (this.viewMode === 'perspective' ? stageScale : effectiveScale)
+        * localPerspectiveScale;
       const authoredFontSize = seat.kind === 'booth'
         ? BOOTH_LABEL_FONT_SIZE
         : SEAT_LABEL_FONT_SIZE * this.seatLabelScale(seat);
-      const renderedFontPx = rounded((label?.fontSize() ?? authoredFontSize) * effectiveScale);
+      const labelEffectiveScale = this.viewMode === 'perspective' && seat.kind !== 'booth'
+        ? effectiveScale * localPerspectiveScale
+        : seatEffectiveScale;
+      const renderedFontPx = rounded((label?.fontSize() ?? authoredFontSize) * labelEffectiveScale);
       const screen = this.worldToScreen(seat);
       const outside = screen.x < 0 || screen.x > viewport.width || screen.y < 0 || screen.y > viewport.height;
-      const opacity = shape?.opacity() ?? 0;
+      // Focus dimming and viewport culling are parent-group states, so evidence
+      // must report composed scene opacity/visibility rather than the child's
+      // local attribute in isolation.
+      const opacity = this.focusedSeatOpacity(seat.id, shape?.getAbsoluteOpacity() ?? 0);
       const section = this.seatSection.get(seat.id);
       const visible = Boolean(label?.isVisible()) && opacity >= 0.5 && !outside;
       let hiddenReason: RenderedBookableLabelEvidence['hiddenReason'];
@@ -3866,23 +4869,34 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         else if (!label) hiddenReason = 'clutter-or-fit';
         else hiddenReason = 'renderer-hidden';
       }
-      const labelWidth = label ? label.width() * stageScale : 0;
-      const labelHeight = label ? label.height() * effectiveScale : 0;
+      const labelWidth = label ? label.width() * stageScale * localPerspectiveScale : 0;
+      const labelHeight = label
+        ? label.height() * (this.viewMode === 'perspective' && seat.kind === 'booth' ? stageScale : effectiveScale)
+          * localPerspectiveScale
+        : 0;
       const directWidthPx = shape instanceof Rect
-        ? shape.width() * stageScale
-        : this.seatR * 2 * effectiveScale;
+        ? shape.width() * stageScale * localPerspectiveScale
+        : this.seatR * 2 * seatEffectiveScale;
       const directHeightPx = shape instanceof Rect
-        ? shape.height() * stageScale
-        : this.seatR * 2 * effectiveScale;
+        ? shape.height() * (this.viewMode === 'perspective' ? stageScale : effectiveScale) * localPerspectiveScale
+        : this.seatR * 2 * seatEffectiveScale;
       // The stage-level near-miss resolver extends every live seat target by
       // SEAT_TAP_SLOP_PX around the same seat radius used by interaction.
-      const assistedDiameterPx = 2 * (this.seatR * effectiveScale + SEAT_TAP_SLOP_PX);
+      const assistedDiameterPx = 2 * (this.seatR * seatEffectiveScale + SEAT_TAP_SLOP_PX);
       const fill = shape?.fill();
       const ink = label?.fill();
+      const accessGlyph = this.accessGlyphById.get(seat.id);
+      const accessGlyphScale = accessGlyph?.getAbsoluteScale();
       return {
         seatId: seat.id,
         label: seat.label,
         kind: seat.kind === 'booth' ? 'booth' : 'seat',
+        markerShape: seat.kind === 'booth'
+          ? 'booth'
+          : seat.wheelchairSpaceType === 'no-seat'
+            ? 'square'
+            : 'circle',
+        ...(seat.wheelchairSpaceType ? { wheelchairSpaceType: seat.wheelchairSpaceType } : {}),
         categoryKey: seat.categoryKey,
         ...(section ? { sectionId: section.id } : {}),
         ...(section?.zone ? { zoneId: section.zone } : {}),
@@ -3893,8 +4907,19 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         fill: typeof fill === 'string' ? fill : '',
         ink: typeof ink === 'string' ? ink : (this.theme.seatLabelColor ?? DEF_SEAT_LABEL),
         opacity: rounded(opacity),
+        ...(accessGlyph ? {
+          accessibilityMarker: {
+            glyphVisible: accessGlyph.isVisible(),
+            glyphWidthPx: rounded(ACCESS_GLYPH_VIEWBOX * Math.abs(accessGlyphScale?.x ?? 0)),
+            emphasizedByFilter: this.accessGlyphFilterEmphasized(seat.id),
+          },
+        } : {}),
         pointerTarget: {
-          active: !this.cached && this.isSelectable(seat.id),
+          active: !this.cached
+            && !this.seatViewportCulled(seat.id)
+            && Boolean(shape?.isVisible())
+            && Boolean(shape?.isListening())
+            && this.isSelectable(seat.id),
           directWidthPx: rounded(directWidthPx),
           directHeightPx: rounded(directHeightPx),
           effectiveMinimumPx: rounded(Math.max(
@@ -3929,7 +4954,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         node.height(),
         node.rotation(),
       );
-      const screenBounds = pointsBounds(worldCorners.map((corner) => this.worldToScreen(corner)));
+      const lift = section && section.liftWorld > 0
+        ? this.isoLiftLocal(section.liftWorld)
+        : { x: 0, y: 0 };
+      const screenBounds = pointsBounds(worldCorners.map((corner) => this.worldToScreen({
+        x: corner.x + lift.x,
+        y: corner.y + lift.y,
+      })));
       const opacity = rounded(node.opacity());
       const ink = node.fill();
       const outside = screenBounds.x + screenBounds.width < 0 || screenBounds.x > viewport.width
@@ -4072,6 +5103,15 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const visibleSectionShells = this.sections.filter((section) => section.blockPoly.opacity() > 0.05);
     return {
       viewport,
+      projection: this.viewMode,
+      ...(this.viewMode === 'perspective' ? {
+        perspective: {
+          model: 'pinhole-exact-seat-anchors' as const,
+          sectionSurfaceModel: 'tangent-plane' as const,
+          exactSeatAnchorCount: this.perspectiveSeatProjected.size,
+          depthSorted: true as const,
+        },
+      } : {}),
       canvasBackground: this.canvasBackground,
       effectiveScale: rounded(effectiveScale),
       rung: this.getRung(),
@@ -4217,6 +5257,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   /** Recompute LOD (cache/labels) after any pan/zoom settles. */
   private afterViewChange(): void {
+    this.updateSeatGroupVisibility();
     this.updateLOD();
     this.updateFreeTextVisibility();
     this.updateLabels();
@@ -4248,10 +5289,23 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // cache decision below, so the seat-layer bitmap bakes them in/out to match.
     this.updateAccessGlyphs(scale);
     const shouldCache = scale < CACHE_THRESHOLD;
+    // Perspective section overviews deliberately paint only the bounded shells;
+    // the entire native seat layer is opacity 0. Do not synchronously rebuild a
+    // 14k-node bitmap that cannot contribute a pixel. If a prior flat overview
+    // cache exists it may remain dormant; otherwise disable its hit canvas until
+    // the camera crosses into the live-seat rung.
+    const suppressPerspectiveSeatCache = this.viewMode === 'perspective'
+      && this.hasSections
+      && this.seats.length > 2_500
+      && shouldCache;
+    if (suppressPerspectiveSeatCache) {
+      this.seatLayer.listening(false);
+      return;
+    }
     if (shouldCache && !this.cached) {
       this.cacheSeatLayer();
-    } else if (!shouldCache && this.cached) {
-      this.seatLayer.clearCache();
+    } else if (!shouldCache && (this.cached || !this.seatLayer.listening())) {
+      if (this.cached) this.seatLayer.clearCache();
       this.seatLayer.listening(true);
       this.cached = false;
       this.seatLayer.batchDraw();
@@ -4261,6 +5315,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   /** Rebuild the seat-layer bitmap synchronously (no paint). Shared by the
    *  debounced cacheSeatLayer() and the synchronous forceDraw() catch-up. */
   private rebuildSeatCache(): void {
+    // A cached overview is one pan-able whole-venue bitmap; never bake it from
+    // a prior detail view's culled section set.
+    this.updateSeatGroupVisibility();
     // Cache at ~screen resolution: bitmap px ≈ on-screen px, so a huge chart in
     // chart-units doesn't blow up into a gigapixel canvas when zoomed out.
     const pr = clamp(this.stage.scaleX() * this.dpr, 0.15, 2);
@@ -4332,37 +5389,36 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const shape = this.circleById.get(id);
       label.visible(
         isBookableLabelLegibleAtScale(label.fontSize(), effectiveScale)
-        && (shape?.opacity() ?? 1) >= 0.5,
+        && Boolean(shape?.isVisible())
+        && this.focusedSeatOpacity(id, shape?.getAbsoluteOpacity() ?? 1) >= 0.5,
       );
     }
     this.labelGroup.destroyChildren();
+    this.labelLiftGroups.clear();
     this.seatLabelById.clear();
     if (!show) {
       this.overlayLayer.batchDraw();
       return;
     }
-    // Visible chart rect (with a small margin) in chart coordinates.
-    const s = this.stage.scaleX();
-    const x0 = (-this.stage.x()) / s;
-    const y0 = (-this.stage.y()) / s;
-    const x1 = (this.stage.width() - this.stage.x()) / s;
-    const y1 = (this.stage.height() - this.stage.y()) / s;
-
     let count = 0;
-    for (const seat of this.seats) {
+    for (const seat of this.visibleSeatCandidates()) {
       // Booth labels already live beside their rectangular shape in seatLayer
       // (renderBoothUnit). Adding them again to the zoom-only overlay produces
       // the offset/doubled numbers visible at close zoom levels.
       if (seat.kind === 'booth') continue;
-      if (seat.x < x0 || seat.x > x1 || seat.y < y0 || seat.y > y1) continue;
-      // Accessible seats show their accessibility glyph in place of the seat
-      // number (venue-map convention) — skip the overlay number so the two don't
-      // stack. The glyph is always legible before labels are (lower zoom gate),
-      // so an accessible seat is never left with no on-seat mark here.
-      if (seat.accessible && this.accessGlyphVisible) continue;
+      const screen = this.worldToScreen(seat);
+      if (screen.x < -20 || screen.x > this.stage.width() + 20
+        || screen.y < -20 || screen.y > this.stage.height() + 20) continue;
+      // Wheelchair places show the ♿ glyph in place of the seat number. Other
+      // accommodations retain their seat number plus their semantic ring.
+      if (this.accessGlyphById.has(seat.id) && this.accessGlyphShouldShow(seat.id)) continue;
       const shape = this.circleById.get(seat.id);
-      if ((shape?.opacity() ?? 1) < 0.5) continue;
+      if (!shape?.isVisible() || this.focusedSeatOpacity(seat.id, shape.getAbsoluteOpacity()) < 0.5) continue;
       const status = this.statusById.get(seat.id) ?? 'free';
+      const labelPoint = this.renderedSeatPoint(seat);
+      const perspectiveScale = this.viewMode === 'perspective'
+        ? this.perspectiveSeatScale.get(seat.id) ?? 1
+        : 1;
       // Buyers see another buyer's hold as an unavailable lock, without its
       // inventory label. Organizers in manage mode retain the held unit's
       // identity so they can inspect or release it from the control room.
@@ -4372,7 +5428,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         // Status is geometry, not a letter: a centred lock for a temporary hold
         // and one quiet diagonal mark for sold. This stays aligned at every
         // zoom level and does not ask buyers to decode "H" or a large × glyph.
-        const cue = new Group({ x: seat.x, y: seat.y, listening: false });
+        const cue = new Group({ x: labelPoint.x, y: labelPoint.y, listening: false });
+        cue.scale({ x: perspectiveScale, y: perspectiveScale });
         if (status === 'held') {
           cue.add(new Rect({
             x: -4.2, y: -0.7, width: 8.4, height: 6.5, cornerRadius: 1.3,
@@ -4388,7 +5445,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
             lineCap: 'round', listening: false,
           }));
         }
-        this.labelGroup.add(cue);
+        this.seatLabelContainer(seat.id).add(cue);
         if (++count >= MAX_LABELS) break;
         continue;
       }
@@ -4396,8 +5453,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // the fit/shrink/legibility logic below still runs on top of it.
       const authoredFontSize = SEAT_LABEL_FONT_SIZE * this.seatLabelScale(seat);
       const t = new Text({
-        x: seat.x,
-        y: seat.y,
+        x: labelPoint.x,
+        y: labelPoint.y,
         text: bookableMarkerLabel(seat.displayLabel ?? seat.label),
         fontSize: authoredFontSize,
         fontStyle: '600',
@@ -4418,12 +5475,13 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       if (!isBookableLabelLegibleAtScale(t.fontSize(), effectiveScale)) { t.destroy(); continue; }
       t.offsetX(t.width() / 2);
       t.offsetY(t.height() / 2);
-      this.labelGroup.add(t);
+      t.scale({ x: perspectiveScale, y: perspectiveScale });
+      this.seatLabelContainer(seat.id).add(t);
       this.seatLabelById.set(seat.id, t);
       if (++count >= MAX_LABELS) break;
     }
     // Keep freshly-built seat labels upright under the iso layer skew.
-    if (this.isoT > 0) this.applyUprightLabels();
+    if (this.isoT > 0 && this.viewMode !== 'perspective') this.applyUprightLabels();
     this.overlayLayer.batchDraw();
   }
 

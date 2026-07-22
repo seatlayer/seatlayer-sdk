@@ -38,6 +38,13 @@ const FILES = [
   // also a buildable dependency closure.
   ['src/core/complexGeometry.ts', 'packages/core/src/core/complexGeometry.ts'],
   ['src/core/sectionPath.ts', 'packages/core/src/core/sectionPath.ts'],
+  // Shared renderer dependencies. Keep these in the generated mirror whenever
+  // SeatmapRenderer or PickerController imports them so release:prep proves the
+  // SDK from the exact same dependency closure as the app.
+  ['src/core/chartBackgrounds.ts', 'packages/core/src/core/chartBackgrounds.ts'],
+  ['src/core/spatialIndex.ts', 'packages/core/src/core/spatialIndex.ts'],
+  ['src/core/perspectiveProjection.ts', 'packages/core/src/core/perspectiveProjection.ts'],
+  ['src/core/shapeLineStyle.ts', 'packages/core/src/core/shapeLineStyle.ts'],
   // Physical-unit helpers (metres <-> world px, real seat heights/rake). Added
   // with the 3D-foundations work; imported by layout, sections, the renderer and
   // the panorama/sightline generator, so it must mirror or those imports break.
@@ -52,6 +59,7 @@ const FILES = [
   ['src/core/bestAvailable.ts', 'packages/core/src/core/bestAvailable.ts'],
   ['src/core/ga.ts', 'packages/core/src/core/ga.ts'],
   ['src/core/sections.ts', 'packages/core/src/core/sections.ts'],
+  ['src/core/tableInventory.ts', 'packages/core/src/core/tableInventory.ts'],
   // Orphan-seat (stranded single) detection — imported by PickerController for
   // the non-blocking `onHint` selection advice.
   ['src/core/orphans.ts', 'packages/core/src/core/orphans.ts'],

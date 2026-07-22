@@ -80,11 +80,11 @@ interface PriceBand {
  * per-line tier + price) and never changes shape across minor releases.
  */
 export interface CheckoutLineItem {
-  /** Seat label (or GA synthetic-unit label). */
+  /** Seat, table-group, or GA synthetic-unit label. */
   label: string;
   /** Chart object id (row/booth/GA area) the unit belongs to. */
   objectId: string;
-  objectType: 'seat' | 'booth' | 'ga';
+  objectType: 'seat' | 'booth' | 'ga' | 'table';
   categoryKey: string;
   /** Chosen ticket tier id (Adult/Child/…), or null when the category has no tiers. */
   tierId: string | null;

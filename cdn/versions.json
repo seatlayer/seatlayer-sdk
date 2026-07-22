@@ -2,10 +2,11 @@
   "//": "Ledger of seatlayer-js versions published to cdn.seatlayer.io. scripts/finalize-cdn.mjs merges the version being released into this list and renders cdn/dist/-/versions.json from it. Committed (not derived from git tags) because several tags never shipped a CDN artifact, and not derived from R2 because the build must be deterministic and offline.",
   "//tags": "`latest` is set by finalize-cdn to the version being released; it is recorded here so the file is meaningful on its own.",
   "tags": {
-    "latest": "0.25.0"
+    "latest": "0.26.0"
   },
   "//versions": "Verified live in R2 on 2026-07-21. These predate the namespace reshape and physically live under the legacy `sdk/vX.Y.Z/` key; the Worker maps `/seatlayer-js@X.Y.Z/` onto that key, so they resolve at the canonical URL with no object backfill. Deliberately EXCLUDES the retired internal 0.1.0/0.2.x lineage, which is a different package line and stays reachable only at its original /sdk/v0.2.x/ paths.",
   "versions": [
+    "0.26.0",
     "0.25.0",
     "0.24.0",
     "0.23.0",

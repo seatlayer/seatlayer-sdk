@@ -34,6 +34,8 @@ export interface BestAvailableResult {
 export interface BestAvailableOpts {
   qty: number;
   categoryKey?: string;
+  /** Restrict the pick to one authored navigation zone. */
+  zoneId?: string;
   focal: Point;
   /**
    * Additive premium bias. When true, candidate scoring STRONGLY prefers seats
@@ -46,6 +48,7 @@ export interface BestAvailableOpts {
 
 /** Seat index within its row, parsed from the `${rowId}:${index}` id. */
 function seatIndex(seat: ExpandedSeat, fallback: number): number {
+  if (Number.isInteger(seat.logicalSeatIndex)) return seat.logicalSeatIndex!;
   const i = seat.id.lastIndexOf(':');
   if (i < 0) return fallback;
   const n = Number(seat.id.slice(i + 1));
@@ -67,6 +70,10 @@ function centroid(seats: ExpandedSeat[]): Point {
     y += s.y;
   }
   return { x: x / seats.length, y: y / seats.length };
+}
+
+function candidateFocal(seats: ExpandedSeat[], fallback: Point): Point {
+  return seats.find((seat) => seat.focalPoint)?.focalPoint ?? fallback;
 }
 
 function isPremium(seat: ExpandedSeat): boolean {
@@ -103,18 +110,21 @@ export function pickBestAvailable(
 ): BestAvailableResult {
   const qty = Math.floor(opts.qty);
   if (!Number.isFinite(qty) || qty <= 0) return { labels: [], reason: 'sold_out' };
-  const { categoryKey, focal, preferPremium } = opts;
+  const { categoryKey, zoneId, focal, preferPremium } = opts;
 
   // Group ALL seats by row (we need the non-eligible ones too, to detect gaps
   // and orphans), preserving original order for a stable fallback tie-break.
   const rows = new Map<string, Slot[]>();
   const eligibleAll: ExpandedSeat[] = [];
   seats.forEach((seat, i) => {
-    const elig = available.has(seat.label) && (!categoryKey || seat.categoryKey === categoryKey);
-    let arr = rows.get(seat.rowId);
+    const elig = available.has(seat.label)
+      && (!categoryKey || seat.categoryKey === categoryKey)
+      && (!zoneId || seat.zoneId === zoneId);
+    const rowId = seat.logicalRowId ?? seat.rowId;
+    let arr = rows.get(rowId);
     if (!arr) {
       arr = [];
-      rows.set(seat.rowId, arr);
+      rows.set(rowId, arr);
     }
     arr.push({ seat, index: seatIndex(seat, i), elig });
     if (elig) eligibleAll.push(seat);
@@ -147,7 +157,11 @@ export function pickBestAvailable(
         continue;
       }
       let j = i;
-      while (j < slots.length && slots[j].elig) j++;
+      while (
+        j < slots.length
+        && slots[j].elig
+        && (j === i || slots[j].index === slots[j - 1].index + 1)
+      ) j++;
       const segLen = j - i; // eligible run [i, j)
       // Every window of `qty` within this segment is a candidate.
       for (let p = 0; p + qty <= segLen; p++) {
@@ -162,7 +176,7 @@ export function pickBestAvailable(
           startIndex: slots[i + p].index,
           orphan,
           nonPremium: preferPremium ? runSeats.reduce((n, s) => n + (isPremium(s) ? 0 : 1), 0) : 0,
-          d2: dist2(centroid(runSeats), focal),
+          d2: dist2(centroid(runSeats), candidateFocal(runSeats, focal)),
         };
         if (better(c)) best = c;
       }
@@ -176,7 +190,7 @@ export function pickBestAvailable(
   if (eligibleAll.length < qty) return { labels: [], reason: 'not_enough_together' };
 
   const ranked = eligibleAll
-    .map((seat, i) => ({ seat, i, d2: dist2(seat, focal) }))
+    .map((seat, i) => ({ seat, i, d2: dist2(seat, seat.focalPoint ?? focal) }))
     .sort((a, b) => {
       // Premium-first when biased (inert otherwise — both sides score 0).
       if (preferPremium) {
@@ -185,7 +199,7 @@ export function pickBestAvailable(
         if (pa !== pb) return pa - pb;
       }
       if (a.d2 !== b.d2) return a.d2 - b.d2;
-      const r = a.seat.rowId.localeCompare(b.seat.rowId);
+      const r = (a.seat.logicalRowId ?? a.seat.rowId).localeCompare(b.seat.logicalRowId ?? b.seat.rowId);
       if (r !== 0) return r;
       return seatIndex(a.seat, a.i) - seatIndex(b.seat, b.i);
     });

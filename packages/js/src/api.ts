@@ -15,7 +15,7 @@ export interface HoldConflict {
 }
 
 export interface HoldLineItem {
-  label: string; objectId: string; objectType: 'seat' | 'booth' | 'ga'; categoryKey: string;
+  label: string; objectId: string; objectType: 'seat' | 'booth' | 'ga' | 'table'; categoryKey: string;
   tierId: string | null;
   /** Price in major currency units (for example 45 means $45.00). */
   unitPrice: number;

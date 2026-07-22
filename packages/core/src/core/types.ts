@@ -97,6 +97,7 @@ export type AccessibilityType =
   | 'companion'
   | 'semi-ambulatory'
   | 'hearing'
+  | 'cart'
   | 'sign-language'
   | 'plus-size'
   | 'lift-armrest';
@@ -117,6 +118,7 @@ export const ACCESSIBILITY_TYPES: AccessibilityMeta[] = [
   { key: 'companion', label: 'Companion seat', short: 'Companion', icon: '🧑‍🤝‍🧑' },
   { key: 'semi-ambulatory', label: 'Semi-ambulatory (limited mobility)', short: 'Limited mobility', icon: '🦯' },
   { key: 'hearing', label: 'Assistive listening', short: 'Hearing', icon: '🦻' },
+  { key: 'cart', label: 'CART live-caption view', short: 'CART captions', icon: 'CC' },
   { key: 'sign-language', label: 'Sign-language view', short: 'Sign language', icon: '🤟' },
   { key: 'plus-size', label: 'Plus-size seat', short: 'Plus-size', icon: '💺' },
   { key: 'lift-armrest', label: 'Lift-up armrest', short: 'Lift armrest', icon: '↕️' },
@@ -139,6 +141,7 @@ export const ACCESSIBILITY_RING_COLOR: Record<AccessibilityType, string> = {
   companion: '#8b5cf6',
   'semi-ambulatory': '#0ea5e9',
   hearing: '#14b8a6',
+  cart: '#7c3aed',
   'sign-language': '#f59e0b',
   'plus-size': '#ec4899',
   'lift-armrest': '#22c55e',
@@ -168,6 +171,13 @@ export interface SeatOverride {
   accessible?: boolean;
   /** Accessibility accommodations of this seat (empty/absent = none). */
   accessibility?: AccessibilityType[];
+  /**
+   * Physical wheelchair provision. Absent keeps legacy seat rendering;
+   * `seat-present` is an explicit removable/fixed accessible chair, while
+   * `no-seat` is an empty wheelchair bay that remains one sellable inventory
+   * unit. This is deliberately distinct from `skip`, which removes inventory.
+   */
+  wheelchairSpaceType?: 'seat-present' | 'no-seat';
   /** Commercial selling/view attributes are deliberately not accessibility. */
   commercial?: SeatCommercialAttributes;
   /** Seat-specific view photo; falls back to the row photo. */
@@ -258,6 +268,11 @@ export interface ChartTheme {
 export interface RowObject {
   type: 'row';
   id: string;
+  /** Present when this row was materialized by the in-canvas reference scan.
+   *  A re-scan of the same asset replaces rows carrying this marker and NEVER
+   *  touches hand-authored rows — the same replace-generated-only invariant as
+   *  applyReferenceInventory. */
+  referenceScan?: { assetId: string };
   /** Row label, e.g. "A". Seat labels are `${label}-${n}`. */
   label: string;
   /** Buyer-facing row name. `label` remains the legacy inventory prefix. */
@@ -315,6 +330,48 @@ export interface RowObject {
     rowIndex: number;
     segmentIndex: number;
   };
+  /**
+   * Membership in one buyer-facing segmented row. Physical component rows and
+   * their `${rowId}:${slotIndex}` inventory ids remain authoritative; this
+   * metadata only supplies logical ordering/presentation and explicit aisle
+   * continuity. The descriptor is repeated on every component so selecting any
+   * one can resolve the complete logical row without a chart-level side table.
+   */
+  segmentedRow?: {
+    kind: 'segmented-row-v1';
+    groupId: string;
+    componentIndex: number;
+    componentCount: number;
+    /** The first component must use `start`; later boundaries are explicit. */
+    boundaryBefore: 'start' | 'continuous' | 'break';
+    /** Buyer-facing row name; technical component `label` values never change. */
+    displayLabel: string;
+    displayType?: string;
+    labelPresentation?: LabelPresentation;
+    viewFromSeatUrl?: string;
+    /** Presentation intent for a continuous node-defined centreline. */
+    smoothing?: boolean;
+  };
+  /**
+   * Versioned provenance for rows created by the multiple/intertwined block
+   * generator. Manual geometry edits remove this marker rather than allowing a
+   * later regeneration to overwrite hand-authored work.
+   */
+  rowBlockGeneration?: {
+    kind: 'row-block-v1';
+    groupId: string;
+    style: 'multiple' | 'intertwined';
+    rowIndex: number;
+    rowCount: number;
+    seatsPerRow: number;
+    origin: Point;
+    rotation: number;
+    rowGap: number;
+    seatSpacing: number;
+    curve: number;
+    /** Stable canonical generator signature shared by every intact member. */
+    signature: string;
+  };
   /** First seat number (default 1). Roman/letters read it as a 1-based ordinal
    *  (start 1 → I / A). */
   seatLabelStart?: number;
@@ -333,13 +390,16 @@ export interface RowObject {
      *  - `even`         2,4,6         — even numbers from the first even ≥ start.
      *  - `updown`       1,3,5,…,6,4,2 — odd-up-even-back; REPLACES direction (uses
      *                                   physical left→right order); start shifts.
+     *  - `updown-descending` …5,3,1,2,4,6 — odd-back-even-up; the distinct
+     *                                   reverse up/down sequence. Also replaces
+     *                                   direction and uses physical order.
      *  - `roman`        I,II,III      — honours direction + step + start (uppercase).
      *  - `letters-upper` A,B,C…Z,AA   — honours direction + step + start.
      *  - `letters-lower` a,b,c…z,aa   — honours direction + step + start.
      * Like `step`/`direction` today, the scheme changes the seat's inventory
      * label (its booking identity), by design.
      */
-    scheme?: 'decimal' | 'odd' | 'even' | 'updown' | 'roman' | 'letters-upper' | 'letters-lower';
+    scheme?: 'decimal' | 'odd' | 'even' | 'updown' | 'updown-descending' | 'roman' | 'letters-upper' | 'letters-lower';
     /** Optional prefix prepended to every seat number, e.g. 'R' → 'R1', 'R2'. */
     prefix?: string;
     /**
@@ -371,7 +431,10 @@ export interface RowObject {
 export interface GAAreaObject {
   type: 'gaArea';
   id: string;
+  /** Stable technical/inventory label. */
   label: string;
+  /** Buyer-facing area name; technical `label` and GA unit ids stay stable. */
+  displayLabel?: string;
   /** Buyer-facing type word override (seats.io "Displayed type"), ≤24 chars.
    * Absent = the default type word. Pure presentation. */
   displayType?: string;
@@ -381,7 +444,29 @@ export interface GAAreaObject {
   holes?: Point[][];
   capacity: number;
   categoryKey: string;
+  /**
+   * Durable inventory provenance for a surface produced by Join Areas.
+   *
+   * A GA unit is identified by the id and zero-based range of the area that
+   * originally authored it, not by the current polygon which happens to own
+   * it.  Keeping those source ranges means a geometric join never renumbers an
+   * already published/booked unit.  Ordinary (never-joined) areas omit this
+   * field and implicitly own `[0, capacity)` under their own id.
+   *
+   * The ranges must be non-overlapping, contain positive whole counts, and sum
+   * exactly to `capacity`; validation rejects malformed metadata.  Capacity
+   * growth appends a new range under the surviving area id, while shrinking a
+   * joined area is deliberately refused because it would silently destroy
+   * stable inventory identities.
+   */
+  inventorySegments?: GAInventorySegment[];
   referenceInventorySource?: ReferenceInventorySource;
+}
+
+export interface GAInventorySegment {
+  sourceAreaId: string;
+  startIndex: number;
+  count: number;
 }
 
 /**
@@ -435,20 +520,44 @@ export interface ReferenceInventoryExclusionSource {
   sourceDescription: string;
 }
 
+/** Open-path stroke semantics. Optional ShapeObject fields retain the legacy
+ * round/round/no-ending rendering when absent. */
+export type ShapeLineCap = 'butt' | 'round' | 'square';
+export type ShapeLineJoin = 'miter' | 'round' | 'bevel';
+export type ShapeLineEnding = 'none' | 'arrow';
+
 /** Non-bookable décor: stage, walls, exits. */
 export interface ShapeObject {
   type: 'shape';
   id: string;
-  kind: 'rect' | 'ellipse' | 'polygon';
+  /**
+   * Closed area shapes (`rect`/`ellipse`/`polygon`) take a `fill`; open path
+   * primitives (`line` = two points, `polyline` = n points) are stroke-only and
+   * never filled. All kinds honour the optional `stroke`.
+   */
+  kind: 'rect' | 'ellipse' | 'polygon' | 'line' | 'polyline';
   label?: string;
   /** For rect/ellipse: bounding box. For a stage polygon: the base (pre-shape) box, so its kind can be regenerated. */
   x?: number;
   y?: number;
   width?: number;
   height?: number;
-  /** For polygon. */
+  /** For polygon/line/polyline. */
   points?: Point[];
   fill?: string;
+  /** Optional outline. `width` is in chart units; both fields are required together. */
+  stroke?: { color: string; width: number };
+  /** Open line/polyline only. Absent fields preserve round/round/no-ending legacy rendering. */
+  lineCap?: ShapeLineCap;
+  /** Controls corners between open-path segments. */
+  lineJoin?: ShapeLineJoin;
+  /** Independent open-path start/end decorations. Closed outlines never use these fields. */
+  startEnding?: ShapeLineEnding;
+  endEnding?: ShapeLineEnding;
+  /** Rect only — corner rounding radius in chart units, clamped to half the short side at edit time. */
+  cornerRadius?: number;
+  /** Whole-shape opacity 0.1–1 (default 1). */
+  opacity?: number;
   /** Degrees clockwise about the shape's center (default 0). Applied at render time. */
   rotation?: number;
   /**
@@ -462,12 +571,29 @@ export interface ShapeObject {
   stageKind?: string;
 }
 
-/** Seats arranged around a table; bookable per-seat or as a whole. */
+export type RectTableSide = 'top' | 'bottom' | 'left' | 'right';
+
+/** Exact rectangular-table chair distribution. The four keys are deliberately
+ * required: zero means that edge has no chair, while the sum is the authored
+ * `seatCount`. Numeric chair identity remains `${table.id}:${index}` in the
+ * canonical top, bottom, left, right expansion order. */
+export interface RectTableSeatCounts {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+/** Seats arranged around a table. Grouped selling is activated only by an
+ * event's explicit inventory-model-2 snapshot; model-1 events continue to
+ * treat every authored chair as an independent unit. */
 export interface TableObject {
   type: 'table';
   id: string;
   /** e.g. "T1" — seat labels are `${label}-${n}`. */
   label: string;
+  /** Buyer-facing table name; technical chair/group labels stay stable. */
+  displayLabel?: string;
   /** Buyer-facing type word override (seats.io "Displayed type"), ≤24 chars.
    * Absent = the default "Row"/"Table" word. Pure presentation. */
   displayType?: string;
@@ -476,7 +602,16 @@ export interface TableObject {
   /** Seats around the perimeter (round) or along the enabled edges (rect). */
   seatCount: number;
   /** Rect tables: which edges get seats (default ['top','bottom']). */
-  sides?: Array<'top' | 'bottom' | 'left' | 'right'>;
+  sides?: RectTableSide[];
+  /**
+   * Rect tables only: exact chairs on every edge. Absent preserves the legacy
+   * `seatCount` + `sides` round-robin distribution byte-for-byte. When present,
+   * all four values are whole numbers >= 0 and their sum equals `seatCount`.
+   */
+  seatCountsBySide?: RectTableSeatCounts;
+  /** Individual-chair semantic overrides. Grouped whole/variable tables cannot
+   * author these because their only sellable identity is the table itself. */
+  overrides?: SeatOverride[];
   rotation: number;
   /** Round tables. */
   radius?: number;
@@ -491,8 +626,13 @@ export interface TableObject {
   width?: number;
   height?: number;
   categoryKey: string;
-  /** Whole-table booking: buyers get all seats or none (per-event override later). */
+  /** One buyer owns the complete table at exactly `seatCount` guests. */
   bookAsWhole?: boolean;
+  /** One buyer owns the complete table and chooses a bounded guest quantity. */
+  variableOccupancy?: boolean;
+  /** Required inclusive guest bounds when `variableOccupancy` is true. */
+  minOccupancy?: number;
+  maxOccupancy?: number;
   referenceInventorySource?: ReferenceInventorySource;
 }
 
@@ -500,7 +640,10 @@ export interface TableObject {
 export interface BoothObject {
   type: 'booth';
   id: string;
+  /** Stable technical/inventory label. */
   label: string;
+  /** Buyer-facing booth name; technical `label` stays stable. */
+  displayLabel?: string;
   /** Buyer-facing type word override (seats.io "Displayed type"), ≤24 chars.
    * Absent = the default type word. Pure presentation. */
   displayType?: string;
@@ -530,6 +673,13 @@ export interface SectionObject {
    * ("Entrance X"). ≤40 chars; absent = no entrance line. Pure presentation.
    */
   entrance?: string;
+  /**
+   * Organizer-supplied view image inherited by buyer inventory whose owning
+   * row/table/booth sits in this logical section. Seat and row photos take
+   * precedence; multipart components are kept in sync by the shared section
+   * metadata operation.
+   */
+  viewFromSeatUrl?: string;
   labelPresentation?: LabelPresentation;
   /**
    * Stable management/inventory identity shared by disconnected visual
@@ -576,11 +726,35 @@ export interface SectionObject {
    * Tier height. 0 = floor (default). Higher values lift the section in the
    * picker's isometric ("3D") view, drawn on extruded side faces. Same field a
    * future multi-floor mode reuses — authored in 2D, never drawn by the user.
+   *
+   * This is the coarse, back-compat source for {@link height}/{@link rake}: when
+   * those are absent, {@link sectionGeometry} derives real geometry from this
+   * tier so legacy charts render pixel-identical.
    */
   elevation?: number;
+  /**
+   * 3D foundations (Phase A, additive — no migration; charts are JSON blobs).
+   * Metres the section's **front edge** sits above floor 0 (a balcony/tier floor
+   * height). Absent ⇒ derived from the coarse {@link elevation} tier via
+   * {@link sectionGeometry}. Deliberately two scalars, not a foundation polygon:
+   * front-height + {@link rake} fully determine a rectangular tier's back-height.
+   *
+   * NOTE: no consumer reads this raw field directly — all callers go through
+   * {@link sectionGeometry}. Phase B consumers (iso view lift in
+   * `SeatmapRenderer`, per-seat eye-height in the `generatePanorama` 360°
+   * generator) are intentionally NOT wired in Phase A. Range 0–120 m.
+   */
+  height?: number;
+  /**
+   * Degrees of seating incline within the section (0 = flat; typical stalls
+   * 5–15°, steep tiers 25–35°). Absent ⇒ 0. Consumed alongside {@link height}
+   * by the future Phase B iso-lift shear and 360° sightline math — never in
+   * Phase A. Range 0–45°.
+   */
+  rake?: number;
   /** Uniform scale about the outline centroid (1 = as drawn). Scales members too. */
   scale?: number;
-  /** 0–1: how strongly member-row curves are bent toward a common arc fitted to the outline. */
+  /** 0–100: reviewed strength last used to bend member rows toward a common fitted arc. */
   smoothing?: number;
   /** Degrees clockwise about the outline centroid (default 0). Rotates members too. */
   rotation?: number;
@@ -595,6 +769,12 @@ export interface ZoneDef {
   id: string;
   label: string;
   color?: string;
+  /**
+   * Authored point this zone faces. Optional only for legacy documents: runtime
+   * consumers fall back to the active floor/chart focal, while publication of
+   * a zone-mode draft requires every used zone to carry an explicit point.
+   */
+  focalPoint?: Point;
 }
 
 /**
@@ -602,6 +782,25 @@ export interface ZoneDef {
  * Fixed set of four; derived from object type via `layerOf()` (no per-object field yet).
  */
 export type SelectionLayer = 'interactive' | 'background' | 'foreground' | 'surroundings';
+
+/** Shape roles emitted by the curated venue-landmark palette. Keep this list in
+ * lockstep with `DECOR_PRESETS`; the selection-layer unit test fails if either
+ * vocabulary changes without an explicit routing decision. `reference-focal`
+ * is source-backed venue context rather than an authoring-palette preset. */
+export const SURROUNDINGS_SHAPE_ROLES = [
+  'reference-focal',
+  'bar',
+  'entrance',
+  'exit',
+  'restroom',
+  'screen',
+  'sound',
+  'concession',
+  'coat',
+  'wall',
+] as const;
+
+const SURROUNDINGS_SHAPE_ROLE_SET: ReadonlySet<string> = new Set(SURROUNDINGS_SHAPE_ROLES);
 
 /** Derive an object's selection layer from its type. */
 export function layerOf(obj: ChartObject): SelectionLayer {
@@ -612,10 +811,19 @@ export function layerOf(obj: ChartObject): SelectionLayer {
     case 'booth':
     case 'section':
       return 'interactive';
-    // stage / décor live on 'shape'; free text + decor images are background furniture.
-    case 'shape':
-    case 'text':
+    // Raster décor follows its explicit authored z-layer. Absence retains the
+    // legacy Background default; bitmap content is never guessed semantically.
     case 'decorImage':
+      return obj.layer === 'foreground' ? 'foreground' : 'background';
+    // Source-backed focal geometry and curated venue landmarks help an author
+    // orient around the sellable plan. A stage and an ordinary authored shape
+    // remain Background even when they carry an arbitrary/custom role.
+    case 'shape':
+      return obj.role && SURROUNDINGS_SHAPE_ROLE_SET.has(obj.role)
+        ? 'surroundings'
+        : 'background';
+    // Free text — including semantic icon text — is background furniture.
+    case 'text':
       return 'background';
     default:
       return 'interactive';
@@ -626,11 +834,19 @@ export function layerOf(obj: ChartObject): SelectionLayer {
 export interface TextObject {
   type: 'text';
   id: string;
+  /** Persisted provenance for objects created from the venue-icon palette. */
+  semanticKind?: 'icon';
   text: string;
   position: Point;
   fontSize: number;
+  /** Optional CSS family stack for this annotation; absent inherits ChartTheme.fontFamily. */
+  fontFamily?: string;
   rotation: number;
   color?: string;
+  /** Render weight (default false). Maps to Konva fontStyle bold. */
+  bold?: boolean;
+  /** Render slant (default false). Maps to Konva fontStyle italic. */
+  italic?: boolean;
 }
 
 /**
@@ -655,6 +871,12 @@ export interface DecorImageObject {
   rotation?: number;
   /** 0–1 (default 1). Multiplied by any chart-theme dimming at render time. */
   opacity?: number;
+  /**
+   * Z-layer relative to the interactive seat layer. `background` (default)
+   * draws beneath the seats/sections; `foreground` draws above them (a roof
+   * canopy, an overlay graphic). Absent = background — no migration needed.
+   */
+  layer?: 'background' | 'foreground';
   /** Optional caption for the designer inspector / accessibility (not drawn). */
   label?: string;
 }
@@ -678,8 +900,25 @@ export type ChartObject =
 export interface Floor {
   id: string;
   name: string;
+  /**
+   * Absolute physical deck height in metres above the venue/stage datum.
+   * Optional for backwards compatibility; an absent value resolves to ground
+   * level (0 m). Section tiers and rakes are separate, section-local metadata.
+   * Range 0–120 m.
+   */
+  baseHeightM?: number;
   objects: ChartObject[];
   focalPoint: Point;
+  /**
+   * Private organizer trace/calibration layer. This is authoring evidence and
+   * must never be served to, or rendered by, a buyer surface.
+   */
+  referenceImage?: ChartReferenceImage;
+  /**
+   * Buyer-visible aesthetic background. Canonical documents store URL-only
+   * images here. Historical `assetId` values are interpreted as a trace layer
+   * by the background compatibility helpers.
+   */
   backgroundImage?: ChartDoc['backgroundImage'];
 }
 
@@ -693,6 +932,68 @@ export interface ReferenceCalibration {
   unit: 'm' | 'ft' | 'chart-unit';
   /** Derived and stored for deterministic geometry compilers. */
   pixelsPerUnit: number;
+}
+
+/**
+ * A single human-placed seat probe: the author clicks one seat on the reference
+ * image and the server reads the surrounding seat lattice from it.
+ *
+ * COORDINATE-POLICY CARVE-OUT (owner decision 2026-07-21). The reference
+ * blueprint pipeline runs `coordinatePolicy: 'opaque-region-ids-only'` — the
+ * server is the sole source of chart coordinates and MCP clients select opaque
+ * `reg_*` ids, never points. This type is a deliberate, narrow exception on the
+ * same grounds as `ReferenceCalibration`: the point is placed by a human in the
+ * designer canvas, not proposed by a model.
+ *
+ * Therefore this is DESIGNER-ONLY and is intentionally NOT exposed over MCP.
+ * That is an accepted, documented exception to the MCP-parity rule — the
+ * server-is-sole-source guarantee for model-driven edits is worth more than
+ * parity here. Do not "fix" it by adding a seed point to an MCP tool schema.
+ */
+export interface ReferenceSeatSeed {
+  /** Seed centre in immutable source-image pixels (never chart coordinates). */
+  source: Point;
+  /** Half-width of the author's sizing ring, in source pixels — the "this is how
+   *  big one seat is" hint that replaces seats.io's zoom-until-it-matches step. */
+  radius: number;
+  /** Whether `radius` was fitted from image pixels or set by hand. Detection
+   *  weights an author-set radius more heavily than one we guessed. */
+  origin: 'auto-fit' | 'manual';
+}
+
+/** One detected row in a scan proposal — a straight seat run in CHART
+ *  coordinates (the server maps source pixels through referencePixelToChart;
+ *  clients never see source-pixel geometry back). */
+export interface ReferenceScanRowProposal {
+  start: Point;
+  end: Point;
+  seatCount: number;
+}
+
+/** Detected rows attributed to one compiled section (or unattributed when the
+ *  lattice extends outside every compiled polygon). */
+export interface ReferenceScanSectionProposal {
+  /** Id of the compiled SectionObject the rows landed in; null = unattributed. */
+  sectionId: string | null;
+  name: string;
+  rows: ReferenceScanRowProposal[];
+  seatCount: number;
+  /** 0..1 — how well this section's lattice agreed with the probe's pitch. */
+  confidence: number;
+  /** Index of the seed (multi-probe) whose pitch produced these rows. */
+  seedIndex: number;
+}
+
+/** Server response for an in-canvas reference scan. A PROPOSAL — nothing is
+ *  committed until the author applies it in the designer (chartOps + undo). */
+export interface ReferenceScanProposal {
+  assetId: string;
+  /** Measured seat diameter / centre-to-centre pitch, in chart units. */
+  seatDiameter: number;
+  seatPitch: number;
+  totalSeats: number;
+  totalRows: number;
+  sections: ReferenceScanSectionProposal[];
 }
 
 /** Coordinate-free physical scale derived by server code from a confirmed
@@ -743,7 +1044,16 @@ export interface ChartDoc {
    *  is kept mirroring floor 0 so single-floor readers never branch. */
   floors?: Floor[];
   objects: ChartObject[];
-  /** Floor-plan photo the organizer traces over (designer-only aid, also rendered dimly in picker if kept). */
+  /**
+   * Private floor-plan source used for tracing, calibration, scanning and
+   * reference-backed generation. Buyer projections always remove this field.
+   */
+  referenceImage?: ChartReferenceImage;
+  /**
+   * Buyer-visible aesthetic background. Canonical values are URL-only.
+   * Compatibility: a historical value containing `assetId` is trace-only and
+   * is never rendered or exposed to buyers.
+   */
   backgroundImage?: ChartReferenceImage;
   /** Brand/venue theming (colors); categories carry their own colors separately. */
   theme?: ChartTheme;
@@ -767,6 +1077,18 @@ export interface ExpandedSeat {
   x: number;
   y: number;
   rowId: string;
+  /** Owning logical section and navigation zone, resolved once at expand time. */
+  sectionId?: string;
+  zoneId?: string;
+  /** Zone focal when authored, otherwise the active floor/chart legacy fallback. */
+  focalPoint?: Point;
+  /** Buyer-facing segmented-row identity. `rowId` stays the physical owner id. */
+  logicalRowId?: string;
+  /**
+   * Seat order inside the logical row. A deliberate missing integer is inserted
+   * at every aisle boundary, so numerical adjacency cannot bridge a gap.
+   */
+  logicalSeatIndex?: number;
   categoryKey: string;
   /** 'booth' units render as blocks (dimensions looked up via rowId = booth id). */
   kind?: 'seat' | 'booth';
@@ -774,14 +1096,26 @@ export interface ExpandedSeat {
   accessible?: boolean;
   /** Specific accessibility accommodations (absent = none) — picker badges/filters these. */
   accessibility?: AccessibilityType[];
+  /** Physical wheelchair provision resolved from the seat override. */
+  wheelchairSpaceType?: 'seat-present' | 'no-seat';
   commercial?: SeatCommercialAttributes;
   /** Organizer-supplied view-from-seat image (inherited from the row). */
   viewUrl?: string;
   /** Per-seat label size/color override; absent = inherit the row/theme default. */
   labelStyle?: LabelStyle;
+  /**
+   * Real-world eye height in metres above the focal/stage datum, resolved at
+   * expand time from the owning section's `{height, rake}` + drawn depth (Phase B2).
+   * Feeds the auto-360° generator's stage-pitch math. Absent ⇒ flat seated eye
+   * height (legacy / seats in no section) — so old charts stay pixel-identical.
+   */
+  eyeHeightM?: number;
 }
 
 export type SeatStatus = 'free' | 'held' | 'booked' | 'not_for_sale';
+
+/** Buyer canvas projection. Perspective is a view-only projected-2.5D lane. */
+export type RendererViewMode = 'flat' | 'isometric' | 'perspective';
 
 // ---------------------------------------------------------------------------
 // Renderer engine public API — implemented in src/engine/SeatmapRenderer.ts
@@ -870,6 +1204,11 @@ export interface RenderedBookableLabelEvidence {
   seatId: string;
   label: string;
   kind: 'seat' | 'booth';
+  /** Painted inventory silhouette. Empty wheelchair bays are deliberately
+   * square, while physical seats retain the ordinary circular marker. */
+  markerShape: 'circle' | 'square' | 'booth';
+  /** Physical wheelchair provision represented by this inventory unit. */
+  wheelchairSpaceType?: 'seat-present' | 'no-seat';
   categoryKey: string;
   sectionId?: string;
   zoneId?: string;
@@ -880,6 +1219,13 @@ export interface RenderedBookableLabelEvidence {
   fill: string;
   ink: string;
   opacity: number;
+  /** Buyer-visible accessibility glyph evidence. Filter emphasis uses a
+   * screen-space minimum so wheelchair provision remains recognizable at fit. */
+  accessibilityMarker?: {
+    glyphVisible: boolean;
+    glyphWidthPx: number;
+    emphasizedByFilter: boolean;
+  };
   /** Direct Konva shape bounds and the production near-miss rescue combined. */
   pointerTarget: {
     active: boolean;
@@ -938,6 +1284,15 @@ export interface RenderedGAAreaEvidence {
 
 export interface RendererQualityEvidence {
   viewport: { width: number; height: number };
+  /** Runtime projection actually used for the pixels and hit graph below. */
+  projection: RendererViewMode;
+  /** Phase-C proof metadata. Present only in the projected-2.5D lane. */
+  perspective?: {
+    model: 'pinhole-exact-seat-anchors';
+    sectionSurfaceModel: 'tangent-plane';
+    exactSeatAnchorCount: number;
+    depthSorted: true;
+  };
   canvasBackground: string;
   effectiveScale: number;
   rung: LodRung;
@@ -1108,13 +1463,14 @@ export interface ISeatmapRenderer {
    */
   setColorblindSafe?(on: boolean): void;
   /**
-   * Switch the projection. `'flat'` = normal top-down; `'isometric'` = the "3D"
-   * view (affine skew/rotate + elevation lift), hit-testing preserved in screen
-   * space. Purely visual — the chart is authored flat. Animated unless reduced-motion.
+   * Switch the projection. `'flat'` = normal top-down; `'isometric'` = the
+   * legacy affine preview; `'perspective'` = projected 2.5D with exact pinhole
+   * seat anchors/native hit shapes and bounded per-section tangent surfaces.
+   * Purely visual — the chart is authored flat.
    */
-  setViewMode?(mode: 'flat' | 'isometric'): void;
+  setViewMode?(mode: RendererViewMode): void;
   /** Current projection (defaults to 'flat' when unimplemented). */
-  getViewMode?(): 'flat' | 'isometric';
+  getViewMode?(): RendererViewMode;
   /** Multi-floor (Batch 5): switch the shown floor; list floors; read the active id. */
   setActiveFloor?(floorId: string): void;
   getFloors?(): { id: string; name: string }[];

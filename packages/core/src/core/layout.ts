@@ -13,17 +13,26 @@ import type {
   LabelStyle,
   Point,
   RowObject,
+  RectTableSeatCounts,
+  RectTableSide,
   SeatOverride,
+  SectionObject,
   TableObject,
 } from './types';
 import { distributeAlongCubic } from './complexGeometry';
 import { translateSectionOutlinePath } from './sectionPath';
 import { toLetters, toRoman } from './labeling';
+import { METRES_PER_CHART_UNIT, SEATED_EYE_HEIGHT_M, sectionGeometry } from './units';
 
 /** Resolve a seat override's accessibility, honouring the legacy boolean flag. */
 function overrideAccessibility(o: SeatOverride | undefined): AccessibilityType[] {
   if (!o) return [];
-  if (o.accessibility && o.accessibility.length) return o.accessibility;
+  if (o.accessibility && o.accessibility.length) {
+    return o.wheelchairSpaceType && !o.accessibility.includes('wheelchair')
+      ? ['wheelchair', ...o.accessibility]
+      : o.accessibility;
+  }
+  if (o.wheelchairSpaceType) return ['wheelchair'];
   return o.accessible ? ['wheelchair'] : [];
 }
 
@@ -92,6 +101,15 @@ function overrideMap(row: RowObject): Map<number, SeatOverride> {
   return m;
 }
 
+/** Sellable row slots: skipped slots are absent; empty wheelchair bays remain. */
+export function rowInventoryCount(row: RowObject): number {
+  const skipped = new Set((row.overrides ?? [])
+    .filter((override) => override.skip && Number.isInteger(override.index)
+      && override.index >= 0 && override.index < row.seatCount)
+    .map((override) => override.index));
+  return Math.max(0, row.seatCount - skipped.size);
+}
+
 /**
  * Every seat slot of a row INCLUDING skipped ones (designer seat-edit mode uses
  * this to draw un-skip handles). Overrides (dx/dy/label/categoryKey) are applied
@@ -107,9 +125,17 @@ export interface RowSeatSlot {
   skipped: boolean;
   accessible: boolean;
   accessibility: AccessibilityType[];
+  wheelchairSpaceType?: SeatOverride['wheelchairSpaceType'];
   commercial?: RowObject['commercial'];
   viewUrl?: string;
   labelStyle?: LabelStyle;
+}
+
+/** Every authored table-chair slot, including skipped inventory. This mirrors
+ * row seat slots so Designer, MCP and buyer/event expansion share one semantic
+ * source while retaining the table's stable numeric slot identity. */
+export interface TableSeatSlot extends RowSeatSlot {
+  side?: RectTableSide;
 }
 
 /**
@@ -139,13 +165,15 @@ export function seatLabelPart(row: RowObject, i: number): string {
   const endAt = row.seatNumbering?.endAt;
   const n = row.seatCount;
 
-  // `updown` (odd-up-even-back) replaces direction — it numbers by physical
-  // left→right order: first ⌈n/2⌉ seats get ascending odds, the rest get
-  // descending evens (1,3,5,…,6,4,2). `start` shifts the whole sequence.
-  // updown owns its own sequence, so it ignores `endAt`.
-  if (scheme === 'updown') {
+  // Both up/down variants replace direction and number by physical left→right
+  // order. `updown` is odd-up-even-back (1,3,5,…,6,4,2); the distinct reverse
+  // variant is odd-back-even-up (…5,3,1,2,4,6). `start` shifts either sequence.
+  // They own their sequence, so both ignore `endAt`.
+  if (scheme === 'updown' || scheme === 'updown-descending') {
     const half = Math.ceil(n / 2);
-    const core = i < half ? rawStart + 2 * i : rawStart - 1 + 2 * (n - i);
+    const core = scheme === 'updown'
+      ? (i < half ? rawStart + 2 * i : rawStart - 1 + 2 * (n - i))
+      : (i < half ? rawStart + 2 * (half - 1 - i) : rawStart + 1 + 2 * (i - half));
     return `${prefix}${core}`;
   }
 
@@ -207,6 +235,7 @@ export function expandRowSlots(row: RowObject): RowSeatSlot[] {
       skipped: !!o?.skip,
       accessible: accessibility.length > 0,
       accessibility,
+      wheelchairSpaceType: o?.wheelchairSpaceType,
       commercial: Object.values(commercial).some((value) => value !== undefined && value !== false && value !== '') ? commercial : undefined,
       viewUrl: o?.viewFromSeatUrl ?? row.viewFromSeatUrl,
       labelStyle: o?.labelStyle,
@@ -228,6 +257,7 @@ export function expandRow(row: RowObject): ExpandedSeat[] {
       categoryKey: slot.categoryKey,
       accessible: slot.accessible || undefined,
       accessibility: slot.accessibility.length ? slot.accessibility : undefined,
+      wheelchairSpaceType: slot.wheelchairSpaceType,
       commercial: slot.commercial,
       viewUrl: slot.viewUrl,
       labelStyle: slot.labelStyle,
@@ -244,35 +274,60 @@ export function expandRow(row: RowObject): ExpandedSeat[] {
  * bottom edges (split evenly, any remainder to the top), 16u outside the edge,
  * the whole set rotated about the table centre.
  */
-export function expandTable(t: TableObject): ExpandedSeat[] {
-  const seats: ExpandedSeat[] = [];
+/** Legacy rect tables distribute aggregate capacity round-robin across enabled
+ * sides, then emit chairs in canonical top/bottom/left/right order. */
+export function tableSeatCountsBySide(t: TableObject): RectTableSeatCounts {
+  if (t.seatCountsBySide) return { ...t.seatCountsBySide };
+  const enabled = t.sides && t.sides.length ? t.sides : ['top', 'bottom'];
+  const order = (['top', 'bottom', 'left', 'right'] as const).filter((side) => enabled.includes(side));
+  const counts: RectTableSeatCounts = { top: 0, bottom: 0, left: 0, right: 0 };
+  if (!order.length) return counts;
+  const n = Math.max(0, Math.round(t.seatCount));
+  for (let index = 0; index < n; index++) counts[order[index % order.length]] += 1;
+  return counts;
+}
+
+/** Expand every authored table chair, including skipped slots needed by the
+ * Designer to restore inventory. */
+export function expandTableSlots(t: TableObject): TableSeatSlot[] {
+  const seats: TableSeatSlot[] = [];
   const n = Math.max(0, Math.round(t.seatCount));
   if (n === 0) return seats;
-
-  const mk = (i: number, x: number, y: number): ExpandedSeat => ({
-    id: `${t.id}:${i}`,
-    label: `${t.label}-${i + 1}`,
-    x,
-    y,
-    rowId: t.id,
-    categoryKey: t.categoryKey,
-  });
+  const overrides = new Map((t.overrides ?? []).map((override) => [override.index, override]));
+  const mk = (index: number, x: number, y: number, side?: RectTableSide): TableSeatSlot => {
+    const override = overrides.get(index);
+    const accessibility = overrideAccessibility(override);
+    const label = override?.label ?? `${t.label}-${index + 1}`;
+    const displayPrefix = t.displayLabel ?? t.label;
+    return {
+      index,
+      label,
+      displayLabel: override?.displayLabel ?? `${displayPrefix}-${index + 1}`,
+      x: x + (override?.dx ?? 0),
+      y: y + (override?.dy ?? 0),
+      categoryKey: override?.categoryKey ?? t.categoryKey,
+      skipped: !!override?.skip,
+      accessible: accessibility.length > 0,
+      accessibility,
+      wheelchairSpaceType: override?.wheelchairSpaceType,
+      commercial: override?.commercial,
+      viewUrl: override?.viewFromSeatUrl,
+      labelStyle: override?.labelStyle,
+      ...(side ? { side } : {}),
+    };
+  };
 
   if (t.shape === 'round') {
     const R = (t.radius ?? 40) + TABLE_SEAT_OFFSET;
     const base = t.rotation * DEG;
     const arc = Math.max(0, Math.min(360, t.seatArc ?? 360));
     if (arc >= 360 || n === 1) {
-      // Full ring (or a lone seat) — evenly spaced around the whole table.
       for (let i = 0; i < n; i++) {
         const a = base + (i / n) * 2 * Math.PI;
         seats.push(mk(i, t.center.x + R * Math.cos(a), t.center.y + R * Math.sin(a)));
       }
       return seats;
     }
-    // Open side: seats fill the arc, leaving a gap centred on `rotation` (the
-    // opening — face it toward the aisle/wall). Seats span edge-to-edge of the
-    // seated arc so people flank the gap.
     const arcRad = arc * DEG;
     const halfGap = (2 * Math.PI - arcRad) / 2;
     const start = base + halfGap;
@@ -283,23 +338,13 @@ export function expandTable(t: TableObject): ExpandedSeat[] {
     return seats;
   }
 
-  // Rect: seats line the enabled edges. Round-robin the count across sides in
-  // canonical order so they stay balanced; top/bottom run along width, left/
-  // right along height, all 16u outside and rotated with the table.
   const w = t.width ?? 80;
   const h = t.height ?? 50;
-  const enabled: NonNullable<TableObject['sides']> =
-    t.sides && t.sides.length ? t.sides : ['top', 'bottom'];
-  const order = (['top', 'bottom', 'left', 'right'] as const).filter((s) => enabled.includes(s));
-  if (!order.length) return seats;
-  const counts = new Map<(typeof order)[number], number>(order.map((s) => [s, 0]));
-  for (let i = 0; i < n; i++) {
-    const s = order[i % order.length];
-    counts.set(s, counts.get(s)! + 1);
-  }
+  const counts = tableSeatCountsBySide(t);
+  const order = ['top', 'bottom', 'left', 'right'] as const;
   let idx = 0;
   for (const side of order) {
-    const count = counts.get(side)!;
+    const count = counts[side];
     for (let j = 0; j < count; j++) {
       let localX: number;
       let localY: number;
@@ -316,11 +361,36 @@ export function expandTable(t: TableObject): ExpandedSeat[] {
         localX = w / 2 + TABLE_SEAT_OFFSET;
         localY = -h / 2 + ((j + 0.5) * h) / count;
       }
-      const p = place(localX, localY, t.rotation, t.center);
-      seats.push(mk(idx++, p.x, p.y));
+      const point = place(localX, localY, t.rotation, t.center);
+      seats.push(mk(idx++, point.x, point.y, side));
     }
   }
   return seats;
+}
+
+/** Sellable individual table chairs. Grouped tables own one atomic inventory
+ * unit elsewhere and therefore retain their full authored chair capacity. */
+export function tableInventoryCount(t: TableObject): number {
+  if (t.bookAsWhole || t.variableOccupancy) return Math.max(0, Math.round(t.seatCount));
+  return expandTableSlots(t).filter((slot) => !slot.skipped).length;
+}
+
+export function expandTable(t: TableObject): ExpandedSeat[] {
+  return expandTableSlots(t).filter((slot) => !slot.skipped).map((slot) => ({
+    id: `${t.id}:${slot.index}`,
+    label: slot.label,
+    ...(slot.displayLabel !== slot.label ? { displayLabel: slot.displayLabel } : {}),
+    x: slot.x,
+    y: slot.y,
+    rowId: t.id,
+    categoryKey: slot.categoryKey,
+    ...(slot.accessible ? { accessible: true } : {}),
+    ...(slot.accessibility.length ? { accessibility: slot.accessibility } : {}),
+    ...(slot.wheelchairSpaceType ? { wheelchairSpaceType: slot.wheelchairSpaceType } : {}),
+    ...(slot.commercial ? { commercial: slot.commercial } : {}),
+    ...(slot.viewUrl ? { viewUrl: slot.viewUrl } : {}),
+    ...(slot.labelStyle ? { labelStyle: slot.labelStyle } : {}),
+  }));
 }
 
 /** Expand a booth into its single bookable block unit. */
@@ -329,6 +399,7 @@ export function expandBooth(b: BoothObject): ExpandedSeat[] {
     {
       id: `${b.id}:0`,
       label: b.label,
+      ...(b.displayLabel && b.displayLabel !== b.label ? { displayLabel: b.displayLabel } : {}),
       x: b.center.x,
       y: b.center.y,
       rowId: b.id,
@@ -454,6 +525,46 @@ export function objectCenter(o: ChartObject): Point {
   }
 }
 
+function samePoints(left: Point[], right: Point[]): boolean {
+  return left.length === right.length
+    && left.every((point, index) => point.x === right[index].x && point.y === right[index].y);
+}
+
+function sameGASurfaceAsSection(object: ChartObject, section: SectionObject): boolean {
+  if (object.type !== 'gaArea' || !samePoints(object.points, section.outline)) return false;
+  const objectHoles = object.holes ?? [];
+  const sectionHoles = section.holes ?? [];
+  return objectHoles.length === sectionHoles.length
+    && objectHoles.every((hole, index) => samePoints(hole, sectionHoles[index]));
+}
+
+/**
+ * Resolve one bookable object's owning physical section using the canonical
+ * first-match rule. Generated reference inventory may name a logical section,
+ * but that provenance is trusted only when the stored geometry confirms it.
+ * Keeping this primitive in layout lets section inventory, category painting,
+ * and buyer view inheritance share one ownership decision.
+ */
+export function owningSectionForObject(
+  objects: ChartObject[],
+  object: ChartObject,
+): SectionObject | undefined {
+  const sections = objects.filter((candidate): candidate is SectionObject => candidate.type === 'section');
+  const referencedLogicalId = 'referenceInventorySource' in object
+    ? object.referenceInventorySource?.logicalSectionId
+    : undefined;
+  const center = objectCenter(object);
+  const referencedOwner = referencedLogicalId
+    ? sections.find((section) => (
+        (section.logicalSectionId ?? section.id) === referencedLogicalId
+        && (sameGASurfaceAsSection(object, section)
+          || pointInPolygonWithHoles(center, section.outline, section.holes))
+      ))
+    : undefined;
+  return referencedOwner
+    ?? sections.find((section) => pointInPolygonWithHoles(center, section.outline, section.holes));
+}
+
 /**
  * Normalized floor list (Batch 5): a multi-floor chart's `floors`, or a synthetic
  * single floor wrapping a single-floor chart's `objects`. Every consumer that needs
@@ -461,7 +572,14 @@ export function objectCenter(o: ChartObject): Point {
  */
 export function floorsOf(doc: ChartDoc): Floor[] {
   if (doc.floors && doc.floors.length) return doc.floors;
-  return [{ id: 'floor-0', name: 'Main', objects: doc.objects, focalPoint: doc.focalPoint, backgroundImage: doc.backgroundImage }];
+  return [{
+    id: 'floor-0',
+    name: 'Main',
+    objects: doc.objects,
+    focalPoint: doc.focalPoint,
+    referenceImage: doc.referenceImage,
+    backgroundImage: doc.backgroundImage,
+  }];
 }
 
 /** Objects of one floor by id (defaults to the first floor). */
@@ -524,15 +642,203 @@ export function stackFloors(doc: ChartDoc, spread = 900): ChartDoc {
   return { ...doc, objects, floors: undefined };
 }
 
-/** Expand every seat-bearing object across all floors (rows, tables, booths). */
-export function expandChart(doc: ChartDoc): ExpandedSeat[] {
+export interface ExpandChartOptions {
+  /** Physical height for a single-floor projection extracted from a multi-floor
+   * document. Full multi-floor documents resolve each floor directly. */
+  floorBaseHeightM?: number;
+}
+
+function expandFloorObjects(
+  objects: ChartObject[],
+  zones: ChartDoc['zones'],
+  fallbackFocal: Point | undefined,
+): ExpandedSeat[] {
   const out: ExpandedSeat[] = [];
-  for (const obj of allObjects(doc)) {
-    if (obj.type === 'row') out.push(...expandRow(obj));
-    else if (obj.type === 'table') out.push(...expandTable(obj));
-    else if (obj.type === 'booth') out.push(...expandBooth(obj));
+  const segmented = new Map<string, {
+    groupId: string;
+    adjacencyOffset: number;
+    displayOffset: number;
+    displayLabel: string;
+    totalSeats: number;
+    canonical: RowObject;
+    viewFromSeatUrl?: string;
+  }>();
+
+  // Resolve only complete, internally coherent groups. Malformed metadata is
+  // surfaced by validation and deliberately falls back to physical-row
+  // semantics here, so a corrupt document can never make buyer adjacency more
+  // permissive than the legacy model.
+  const grouped = new Map<string, RowObject[]>();
+  for (const object of objects) {
+    if (object.type !== 'row' || !object.segmentedRow) continue;
+    const list = grouped.get(object.segmentedRow.groupId) ?? [];
+    list.push(object);
+    grouped.set(object.segmentedRow.groupId, list);
+  }
+  for (const [groupId, members] of grouped) {
+    const ordered = members.slice().sort((left, right) => (
+      left.segmentedRow!.componentIndex - right.segmentedRow!.componentIndex
+    ));
+    const expectedCount = ordered[0]?.segmentedRow?.componentCount ?? 0;
+    const first = ordered[0]?.segmentedRow;
+    if (!first) continue;
+    const valid = expectedCount >= 2
+      && ordered.length === expectedCount
+      && first?.boundaryBefore === 'start'
+      && ordered.every((row, index) => (
+        row.segmentedRow?.kind === 'segmented-row-v1'
+        && row.segmentedRow.groupId === groupId
+        && row.segmentedRow.componentCount === expectedCount
+        && row.segmentedRow.componentIndex === index
+        && (index === 0
+          ? row.segmentedRow.boundaryBefore === 'start'
+          : row.segmentedRow.boundaryBefore !== 'start')
+        && row.segmentedRow.displayLabel === first.displayLabel
+      ));
+    if (!valid) continue;
+    const totalSeats = ordered.reduce((sum, row) => sum + row.seatCount, 0);
+    let adjacencyOffset = 0;
+    let displayOffset = 0;
+    for (const row of ordered) {
+      if (row.segmentedRow!.boundaryBefore === 'break') adjacencyOffset += 1;
+      segmented.set(row.id, {
+        groupId,
+        adjacencyOffset,
+        displayOffset,
+        displayLabel: first.displayLabel,
+        totalSeats,
+        canonical: ordered[0],
+        viewFromSeatUrl: first.viewFromSeatUrl,
+      });
+      adjacencyOffset += row.seatCount;
+      displayOffset += row.seatCount;
+    }
+  }
+
+  for (const obj of objects) {
+    let seats: ExpandedSeat[] = [];
+    if (obj.type === 'row') seats = expandRow(obj);
+    else if (obj.type === 'table') seats = expandTable(obj);
+    else if (obj.type === 'booth') seats = expandBooth(obj);
+    if (!seats.length) continue;
+    if (obj.type === 'row') {
+      const logical = segmented.get(obj.id);
+      if (logical) {
+        const overrides = new Map((obj.overrides ?? []).map((override) => [override.index, override]));
+        for (const seat of seats) {
+          const physicalIndex = Number(seat.id.slice(seat.id.lastIndexOf(':') + 1));
+          if (!Number.isInteger(physicalIndex)) continue;
+          const displayOrdinal = logical.displayOffset + physicalIndex;
+          seat.logicalRowId = logical.groupId;
+          seat.logicalSeatIndex = logical.adjacencyOffset + physicalIndex;
+          // A seat-level display override remains the highest-precedence copy.
+          if (!overrides.get(physicalIndex)?.displayLabel) {
+            const numberingRow: RowObject = {
+              ...logical.canonical,
+              seatCount: logical.totalSeats,
+              label: logical.displayLabel,
+              displayLabel: logical.displayLabel,
+            };
+            seat.displayLabel = `${logical.displayLabel}-${seatLabelPart(numberingRow, displayOrdinal)}`;
+          }
+          seat.viewUrl ??= logical.viewFromSeatUrl;
+        }
+      }
+    }
+    const owner = owningSectionForObject(objects, obj);
+    const inheritedView = owner?.viewFromSeatUrl;
+    const zone = owner?.zone ? zones?.find((candidate) => candidate.id === owner.zone) : undefined;
+    const resolvedFocal = zone?.focalPoint ?? fallbackFocal;
+    for (const seat of seats) {
+      if (inheritedView) seat.viewUrl ??= inheritedView;
+      if (owner) seat.sectionId = owner.logicalSectionId ?? owner.id;
+      if (owner?.zone) seat.zoneId = owner.zone;
+      if (resolvedFocal) seat.focalPoint = { ...resolvedFocal };
+    }
+    out.push(...seats);
   }
   return out;
+}
+
+/** Expand every seat-bearing object across all floors (rows, tables, booths).
+ * Multi-floor ownership is resolved one floor at a time: local coordinates may
+ * overlap between floors and must never assign a seat to another floor's section. */
+export function expandChart(doc: ChartDoc, options: ExpandChartOptions = {}): ExpandedSeat[] {
+  if (doc.floors?.length) {
+    const out: ExpandedSeat[] = [];
+    for (const floor of doc.floors) {
+      const floorFocal = floor.focalPoint ?? doc.focalPoint;
+      const seats = expandFloorObjects(floor.objects, doc.zones, floorFocal);
+      assignEyeHeights(floor.objects, floor.focalPoint ?? doc.focalPoint, floor.baseHeightM ?? 0, seats);
+      out.push(...seats);
+    }
+    return out;
+  }
+  const out = expandFloorObjects(doc.objects, doc.zones, doc.focalPoint);
+  assignEyeHeights(doc.objects, doc.focalPoint, options.floorBaseHeightM ?? 0, out);
+  return out;
+}
+
+/**
+ * Phase B2: annotate each expanded seat with a real-world eye height (metres above
+ * the focal/stage datum) for the auto-360° generator. Resolved once at expand time
+ * — never per render frame — so the 13k-seat render path pays no cost.
+ *
+ * `eyeHeightM = section front-edge height + row rise + seated eye height`, where
+ * the ROW RISE is derived from the seat's DRAWN radial depth into its section
+ * (chart units → metres × tan(rake)), NOT a hard-coded row pitch. Deriving rise
+ * from drawn geometry (the same distances the panorama already uses horizontally)
+ * is the binding fix for the 30–40% under-rise the sightline de-risk study flagged
+ * (docs/3d-sightline-derisk-2026-07-21.md §7).
+ *
+ * A chart with no elevated/raked/height-authored section skips the spatial pass
+ * entirely and every seat resolves to the flat seated-eye baseline — so legacy
+ * charts stay pixel-identical and `expandChart`'s other callers pay nothing.
+ */
+function assignEyeHeights(
+  objects: ChartObject[],
+  focal: Point | undefined,
+  floorBaseHeightM: number,
+  seats: ExpandedSeat[],
+): void {
+  const sections = objects.filter((o): o is SectionObject => o.type === 'section');
+  const hasGeometry = floorBaseHeightM > 0
+    || sections.some((s) => s.height !== undefined || s.rake !== undefined || (s.elevation ?? 0) > 0);
+  if (!sections.length || !hasGeometry || !focal) {
+    for (const seat of seats) seat.eyeHeightM = floorBaseHeightM + SEATED_EYE_HEIGHT_M;
+    return;
+  }
+  // Pass 1: owning section (first drawn section containing the seat) + the drawn
+  // distance of the section's front edge (nearest member to the focal point).
+  const owner = new Array<SectionObject | null>(seats.length);
+  const geo = new Map<string, { height: number; rake: number }>();
+  const frontDistU = new Map<string, number>();
+  for (let i = 0; i < seats.length; i++) {
+    const seat = seats[i];
+    const sec = sections.find((s) => pointInPolygonWithHoles({ x: seat.x, y: seat.y }, s.outline, s.holes)) ?? null;
+    owner[i] = sec;
+    if (!sec) continue;
+    if (!geo.has(sec.id)) geo.set(sec.id, sectionGeometry(sec, { floorBaseHeightM }));
+    const seatFocal = seat.focalPoint ?? focal;
+    const d = Math.hypot(seat.x - seatFocal.x, seat.y - seatFocal.y);
+    const cur = frontDistU.get(sec.id);
+    if (cur === undefined || d < cur) frontDistU.set(sec.id, d);
+  }
+  // Pass 2: front-edge height + drawn-depth rise + seated eye.
+  for (let i = 0; i < seats.length; i++) {
+    const seat = seats[i];
+    const sec = owner[i];
+    if (!sec) { seat.eyeHeightM = floorBaseHeightM + SEATED_EYE_HEIGHT_M; continue; }
+    const g = geo.get(sec.id)!;
+    let riseM = 0;
+    if (g.rake > 0) {
+      const seatFocal = seat.focalPoint ?? focal;
+      const d = Math.hypot(seat.x - seatFocal.x, seat.y - seatFocal.y);
+      const depthU = Math.max(0, d - (frontDistU.get(sec.id) ?? d));
+      riseM = depthU * METRES_PER_CHART_UNIT * Math.tan((g.rake * Math.PI) / 180);
+    }
+    seat.eyeHeightM = g.height + riseM + SEATED_EYE_HEIGHT_M;
+  }
 }
 
 const PAD = 40;
@@ -587,8 +893,9 @@ export function chartBounds(doc: ChartDoc): { x: number; y: number; width: numbe
     }
   }
 
-  if (doc.backgroundImage) {
-    const { center, width } = doc.backgroundImage;
+  for (const image of [doc.referenceImage, doc.backgroundImage]) {
+    if (!image) continue;
+    const { center, width } = image;
     const bh = (width * 3) / 4; // assume 4:3 when the true aspect is unknown at bounds-time
     acc(center.x - width / 2, center.y - bh / 2);
     acc(center.x + width / 2, center.y + bh / 2);
