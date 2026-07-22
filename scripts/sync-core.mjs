@@ -21,9 +21,12 @@ import { fileURLToPath } from 'node:url';
 const CHECK = process.argv.includes('--check');
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
+// This repo lives at seatlayer-sdks/web; the app is at the projects root
+// (seatlayer-sdks/../seatmap). SEATMAP_REPO remains the reliable override that
+// releases pass explicitly; this default is local-dev convenience only.
 const appRepo = process.env.SEATMAP_REPO
   ? resolve(process.env.SEATMAP_REPO)
-  : resolve(repoRoot, '..', 'seatmap');
+  : resolve(repoRoot, '..', '..', 'seatmap');
 const sourceRecord = join(repoRoot, 'packages/core/engine-source.json');
 
 function appGit(...args) {
