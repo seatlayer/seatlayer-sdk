@@ -38,6 +38,10 @@ const FILES = [
   // also a buildable dependency closure.
   ['src/core/complexGeometry.ts', 'packages/core/src/core/complexGeometry.ts'],
   ['src/core/sectionPath.ts', 'packages/core/src/core/sectionPath.ts'],
+  // Physical-unit helpers (metres <-> world px, real seat heights/rake). Added
+  // with the 3D-foundations work; imported by layout, sections, the renderer and
+  // the panorama/sightline generator, so it must mirror or those imports break.
+  ['src/core/units.ts', 'packages/core/src/core/units.ts'],
   ['src/core/chartRenderRules.ts', 'packages/core/src/core/chartRenderRules.ts'],
   // Rendered-quality inspection: turns a renderer's quality evidence into a
   // structured report. Depends only on chartRenderRules + types (both above).
@@ -56,6 +60,9 @@ const FILES = [
   // View-from-seat panorama generator — pure canvas geometry (no deps), used by
   // the SDK SeatPicker's 360° seat-view modal. Byte-mirrored from the app.
   ['src/view/generatePanorama.ts', 'packages/core/src/view/generatePanorama.ts'],
+  // Per-seat eye-height sightline geometry (3D-foundations Phase B); imported by
+  // generatePanorama. Depends only on core/units (mirrored above).
+  ['src/view/sightline.ts', 'packages/core/src/view/sightline.ts'],
   // i18n + money: imported by the engine (`t()`, formatMoney) and surfaced to the
   // SDKs (loadLocale / setStringOverrides for the widget `locale`/`messages` options).
   ['src/i18n/index.ts', 'packages/core/src/i18n/index.ts'],
