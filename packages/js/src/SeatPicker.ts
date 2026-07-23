@@ -20,6 +20,7 @@
  */
 import {
   PickerController,
+  ACCESSIBILITY_TYPES,
   expandChart,
   generateSeatPanorama,
   generateSeatThumb,
@@ -33,9 +34,11 @@ import {
   type LodRung,
   type PickerSeat,
   type PickerTransport,
+  type RendererViewMode,
   type SeatCommercialAttributes,
   type SeatHoverDetails,
   type SectionSummary,
+  type TableSelectionDetails,
 } from '@seatlayer/core';
 import { PubApi, type HoldLineItem, type HoldResult } from './api';
 
@@ -80,8 +83,19 @@ interface PriceBand {
  * per-line tier + price) and never changes shape across minor releases.
  */
 export interface CheckoutLineItem {
-  /** Seat, table-group, or GA synthetic-unit label. */
+  /** Seat label (or GA synthetic-unit label) — the stable booking identity. */
   label: string;
+  /**
+   * Buyer-facing name (the designer's `displayLabel` override), when set.
+   * Show this in YOUR order summary; `label` stays the booking identity you
+   * pass to the book call. Absent = no override, fall back to `label`.
+   */
+  displayLabel?: string;
+  /**
+   * Buyer-facing type word override (seats.io "Displayed type", e.g. "Table",
+   * "Bench", "Box"), when the designer set one. Absent = the default word.
+   */
+  displayType?: string;
   /** Chart object id (row/booth/GA area) the unit belongs to. */
   objectId: string;
   objectType: 'seat' | 'booth' | 'ga' | 'table';
@@ -167,6 +181,9 @@ export interface SeatPickerOptions {
   currency?: string;
   /** Colorblind-safe rendering (Okabe-Ito palette, hollow booked seats). */
   colorblindSafe?: boolean;
+  /** Initial map projection. `perspective` is the exact-seat projected 2.5D
+   * buyer view; all authoring and inventory identities remain unchanged. */
+  initialView?: RendererViewMode;
   /**
    * Hide the "Powered by SeatLayer" attribution badge in the side panel foot.
    * The chart theme's own `hideBadge` flag (paid orgs) also hides it — the badge
@@ -252,6 +269,12 @@ function resolveContainer(container: string | HTMLElement): HTMLElement {
     throw new Error('seatmap: container must be a CSS selector or an HTMLElement');
   }
   return container;
+}
+
+function escapeOption(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]!);
 }
 
 /** Widget stylesheet — injected once per document. Every color/font/radius is a --sl-* token. */
@@ -366,6 +389,11 @@ const CSS = `
 .sl-picker[data-layout="narrow"] .sl-filters.has{display:none}
 .sl-picker[data-layout="narrow"][data-has-selection="true"] .sl-filtersec.has,
 .sl-picker[data-layout="narrow"][data-has-selection="true"] .sl-filters.has{display:none}
+/* Accessibility and colour-safety controls must remain reachable on phones.
+   Keep them out of the 86px peek, then reveal their consolidated row whenever
+   the buyer explicitly opens the ticket panel. */
+.sl-picker[data-layout="narrow"][data-sheet="open"] .sl-filtersec.has{display:block!important}
+.sl-picker[data-layout="narrow"][data-sheet="open"] .sl-filters.has{display:flex!important}
 .sl-cbbtn{width:32px;height:32px;border-radius:999px;background:var(--sl-surface);border:1px solid var(--sl-line);
   color:var(--sl-text);display:flex;align-items:center;justify-content:center;transition:border-color .15s}
 .sl-cbbtn:hover{border-color:var(--sl-muted)}
@@ -658,6 +686,37 @@ const CSS = `
 .sl-picker[data-layout="narrow"] .sl-confirm{left:50%!important;top:auto!important;bottom:14px;width:min(342px,calc(100% - 24px));
   transform:translateX(-50%);animation:slConfirmMobileIn .24s cubic-bezier(.2,.8,.2,1) both}
 
+/* Atomic whole/variable-table chooser. Lives inside the widget so the same
+   accessible dialog works in inline, modal, desktop and 390px mobile hosts. */
+.sl-table-scrim{position:absolute;inset:0;z-index:45;display:flex;align-items:center;justify-content:center;padding:18px;
+  background:color-mix(in srgb,var(--sl-bg) 66%,transparent);backdrop-filter:blur(3px)}
+.sl-table-dialog{width:min(408px,100%);max-height:calc(100% - 24px);overflow:auto;border:1px solid var(--sl-line);
+  border-radius:calc(var(--sl-radius) * 1.15);background:var(--sl-surface);box-shadow:0 28px 70px rgba(0,0,0,.42)}
+.sl-table-head{padding:18px 18px 14px;border-bottom:1px solid var(--sl-line)}
+.sl-table-eyebrow{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--sl-muted);font-weight:800}
+.sl-table-title{margin-top:5px;font-size:22px;line-height:1.15;font-weight:850}
+.sl-table-copy{margin-top:7px;color:var(--sl-muted);font-size:13px;line-height:1.45}
+.sl-table-body{padding:16px 18px 18px}
+.sl-table-summary{display:grid;grid-template-columns:1fr auto;gap:8px 16px;padding:12px;border:1px solid var(--sl-line);
+  border-radius:var(--sl-r-sm);background:color-mix(in srgb,var(--sl-line) 22%,transparent);font-size:13px}
+.sl-table-summary b{font-size:15px}.sl-table-summary .muted{color:var(--sl-muted)}
+.sl-table-qtylabel{display:block;margin:16px 0 8px;font-size:12px;font-weight:800}
+.sl-table-stepper{display:grid;grid-template-columns:48px 1fr 48px;align-items:center;border:1px solid var(--sl-line);
+  border-radius:12px;overflow:hidden;background:var(--sl-bg)}
+.sl-table-stepper button{height:48px;font-size:24px;font-weight:700;background:color-mix(in srgb,var(--sl-line) 34%,transparent)!important}
+.sl-table-stepper button:disabled{opacity:.38;cursor:not-allowed}
+.sl-table-stepper output{text-align:center;font-size:19px;font-weight:850;font-variant-numeric:tabular-nums}
+.sl-table-range{margin-top:7px;color:var(--sl-muted);font-size:11px;text-align:center}
+.sl-table-actions{display:flex;gap:9px;margin-top:17px}.sl-table-actions button{flex:1;min-height:46px;border-radius:10px;font-weight:800}
+.sl-table-cancel{border:1px solid var(--sl-line)!important;color:var(--sl-muted)!important}
+.sl-table-confirm{background:var(--sl-accent)!important;color:var(--sl-accent-ink)!important}
+.sl-table-confirm:disabled{opacity:.62;cursor:wait}
+.sl-table-edit{margin-left:4px;padding:2px 7px!important;border:1px solid var(--sl-line)!important;border-radius:999px!important;
+  color:var(--sl-muted)!important;font-size:10px!important;font-weight:800!important}
+.sl-picker[data-layout="narrow"] .sl-table-scrim{align-items:flex-end;padding:0;background:rgba(5,7,12,.58)}
+.sl-picker[data-layout="narrow"] .sl-table-dialog{width:100%;max-height:min(78%,620px);border-radius:18px 18px 0 0;border-width:1px 0 0}
+.sl-picker[data-layout="narrow"] .sl-table-head{padding-top:22px}.sl-picker[data-layout="narrow"] .sl-table-body{padding-bottom:max(20px,env(safe-area-inset-bottom))}
+
 /* hover preview — a COMPACT echo of the confirm card (deliberately smaller: it's
    a passing preview on hover, not the click/select action surface). Reuses the
    Section·Row·Seat identity grid so hover, confirm and the cart chip all share
@@ -721,6 +780,7 @@ const CSS = `
 .sl-picker[data-layout="narrow"] .sl-ba{padding:11px}
 .sl-picker[data-layout="narrow"] .sl-ba-copy .wide{display:none}
 .sl-picker[data-layout="narrow"] .sl-ba-copy .narrow{display:inline}
+.sl-picker[data-layout="narrow"] .sl-ba select{min-height:44px}
 
 /* screen-reader live region */
 .sl-sr{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
@@ -738,6 +798,16 @@ const CSS = `
 .sl-rungs button.on{background:var(--sl-accent);color:var(--sl-accent-ink)}
 /* narrow: shrink the rung pills so the centered row can't reach the corner regions */
 .sl-picker[data-layout="narrow"] .sl-rungs button{padding:5px 9px;font-size:9px;letter-spacing:.03em}
+
+/* Projection is deliberately a separate control from zoom/LOD. Perspective
+   changes geometry; the two choices stay explicit and keyboard-native. */
+.sl-projection{display:inline-flex;align-items:center;gap:2px;padding:3px;border-radius:999px;
+  background:var(--sl-surface);border:1px solid var(--sl-line);box-shadow:0 8px 24px -16px rgba(0,0,0,.65)}
+.sl-projection button{min-width:42px;min-height:30px;padding:5px 10px;border-radius:999px;color:var(--sl-muted);
+  font-size:10px;font-weight:800;letter-spacing:.04em;white-space:nowrap}
+.sl-projection button:hover,.sl-projection button:focus-visible{color:var(--sl-text)}
+.sl-projection button.on{background:var(--sl-accent);color:var(--sl-accent-ink)}
+.sl-picker[data-layout="narrow"] .sl-projection button{min-width:38px;min-height:32px;padding:5px 8px;font-size:9.5px}
 
 /* multi-floor switcher (flows within the left-rail region) */
 .sl-floors{display:none;flex-direction:column;gap:6px;max-width:100%}
@@ -867,6 +937,7 @@ const CSS = `
   .sl-picker *,.sl-modal-scrim *{animation-duration:.001ms!important;animation-iteration-count:1!important;
     transition-duration:.001ms!important;scroll-behavior:auto!important}
 }
+.sl-ba [data-ba-zone]{grid-column:1/-1;width:100%}
 
 /* modal host */
 .sl-modal-scrim{position:fixed;inset:0;z-index:2147483000;background:rgba(5,7,12,.66);display:flex;align-items:center;justify-content:center;padding:18px}
@@ -960,9 +1031,15 @@ export class SeatPicker {
   private tipPos = { x: 0, y: 0 };
   private confirmEl: HTMLDivElement | null = null;
   private confirmSeat: ExpandedSeat | null = null;
+  private tableDialogEl: HTMLDivElement | null = null;
+  private tableDialog: TableSelectionDetails | null = null;
+  private tableDialogHeld = false;
+  private tableDialogReturnFocus: HTMLElement | null = null;
   private srEl: HTMLDivElement | null = null;
   private baQty = 2;
   private baCat = '';
+  /** Optional navigation-zone scope for buyer best-available. */
+  private baZone = '';
   /** "★ Best seats" premium quick-pick toggle — biases best-available to premium seats. */
   private baPremium = false;
   private bestAvailableConfirm = false;
@@ -977,6 +1054,7 @@ export class SeatPicker {
 
   // arena / multi-floor / seat-view chrome
   private rungsEl: HTMLDivElement | null = null;
+  private projectionEl: HTMLDivElement | null = null;
   private floorsEl: HTMLDivElement | null = null;
   private secCardEl: HTMLDivElement | null = null;
   private viewEl: HTMLDivElement | null = null;
@@ -1019,34 +1097,59 @@ export class SeatPicker {
   /** Last height (px) posted to a host frame; dedupes redundant reports. */
   private lastPostedHeight = 0;
 
+  /** True when the chart carries a real performance anchor — a stage-kind shape.
+   *  Every chart has a `focalPoint` (a bare look-at coordinate), so its presence
+   *  alone never justifies a "to stage" claim; only an actual stage does. */
+  private chartHasStage(): boolean {
+    const doc = this.controller.doc;
+    if (!doc) return false;
+    const objectSets = doc.floors?.length ? doc.floors.map((f) => f.objects ?? []) : [doc.objects ?? []];
+    for (const objects of objectSets) {
+      for (const obj of objects) {
+        if (obj.type === 'shape' && (obj.role === 'stage' || obj.stageKind)) return true;
+      }
+    }
+    return false;
+  }
+
   /**
-   * Eager sightline preview for the confirm card: a cheap generated forward
-   * view (or the organizer's real photo) plus a "Nm to stage · clear
-   * sightline" line — the premium at-a-glance moment; click opens the 360.
+   * Eager sightline preview for the confirm card: the organizer's real view
+   * photo, or — only when the chart has an actual stage to look at — a generated
+   * forward view plus an "≈ Nm to stage · clear sightline" line. On a stageless
+   * chart both the distance/sightline claim and the generic stage silhouette are
+   * invented promises, so we suppress them; a real attached photo always shows.
+   * (OV-52)
    */
   private confirmThumbHtml(seat: ExpandedSeat): string {
     const doc = this.controller.doc;
     if (!doc) return '';
-    let url = seat.viewUrl ?? '';
+    const realPhoto = seat.viewUrl ?? '';
+    const hasStage = this.chartHasStage();
+    // No organizer photo AND no stage to measure against → nothing honest to show.
+    if (!realPhoto && !hasStage) return '';
+    let url = realPhoto;
     let distance: number | null = null;
     if (!url) {
       try {
-        const thumb = generateSeatThumb(seat, doc.focalPoint);
+        const thumb = generateSeatThumb(seat, seat.focalPoint ?? doc.focalPoint);
         url = thumb.url;
         distance = thumb.distanceM ?? null;
       } catch {
         return '';
       }
     }
-    const sight = distance != null
-      ? t('picker.sightline', { m: distance })
-      : this.tf('picker.sightlineClear', 'Clear sightline');
+    // The distance/sightline line is only truthful when a stage anchors it.
+    const sightHtml = hasStage
+      ? `<div class="sl-confirm-sight"><span aria-hidden="true">✓</span>${distance != null
+          ? t('picker.sightline', { m: distance })
+          : this.tf('picker.sightlineClear', 'Clear sightline')}</div>`
+      : '';
     return (
       `<button type="button" class="sl-confirm-view sl-confirm-thumbwrap" aria-label="${t('picker.viewFromSeat', { label: seat.label })}">` +
       `<img class="sl-confirm-thumb" src="${url}" alt="" />` +
       `<span class="sl-confirm-thumb-badge">🔭 ${this.tf('picker.viewFromHere', 'View from here')}</span>` +
       `</button>` +
-      `<div class="sl-confirm-sight"><span aria-hidden="true">✓</span>${sight}</div>`
+      sightHtml
     );
   }
 
@@ -1099,6 +1202,26 @@ export class SeatPicker {
     if (!limited) return '';
     const title = this.escCx(c?.note ? c.note : limited);
     return `<span class="sl-cx-mark" role="img" aria-label="${title}" title="${title}">◐</span>`;
+  }
+
+  private wheelchairProvisionLabel(type: 'seat-present' | 'no-seat' | undefined): string {
+    if (type === 'no-seat') return 'Empty wheelchair space';
+    if (type === 'seat-present') return 'Accessible physical seat';
+    return '';
+  }
+
+  private wheelchairConfirmHtml(type: 'seat-present' | 'no-seat' | undefined): string {
+    const label = this.wheelchairProvisionLabel(type);
+    return label
+      ? `<div class="sl-cx"><div class="sl-cx-warn"><span class="sl-cx-glyph" aria-hidden="true">♿</span><span class="sl-cx-txt"><b>${label}</b></span></div></div>`
+      : '';
+  }
+
+  private wheelchairChipMarker(type: 'seat-present' | 'no-seat' | undefined): string {
+    const label = this.wheelchairProvisionLabel(type);
+    return label
+      ? `<span class="sl-cx-mark" role="img" aria-label="${label}" title="${label}">♿</span>`
+      : '';
   }
 
   /** True when the picker is rendered inside an iframe (snippet embed at /e/:key). */
@@ -1274,7 +1397,10 @@ export class SeatPicker {
     });
     picker.escHandler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (picker.confirmSeat) {
+      if (picker.tableDialog) {
+        e.preventDefault();
+        picker.cancelTableDialog();
+      } else if (picker.confirmSeat) {
         e.preventDefault();
         picker.cancelConfirm();
       } else if (picker.bestAvailableConfirm) {
@@ -1344,11 +1470,24 @@ export class SeatPicker {
           this.toast(this.tf('picker.salesClosedToast', 'Sales are closed for this event.'), 'warning');
           return;
         }
+        // Grouped tables own a dedicated whole/guest-count dialog. The raw
+        // chair callback is retained for compatibility, but must not open the
+        // ordinary one-seat confirm card in this full buyer widget.
+        if (this.controller.tableSelection(seat.id)) return;
         this.flashPickedSeat(seat.id);
         if (this.opts.confirmSelection) this.showConfirm(seat);
       },
+      onTableSelectionRequest: (table) => {
+        if (this.salesClosed) {
+          this.controller.deselect(table.physicalSeatIds);
+          this.toast(this.tf('picker.salesClosedToast', 'Sales are closed for this event.'), 'warning');
+          return;
+        }
+        this.showTableDialog(table, false);
+      },
       onDeselect: (seat) => {
         if (this.confirmSeat?.id === seat.id) this.dismissConfirm();
+        if (this.tableDialog?.physicalSeatIds.includes(seat.id)) this.dismissTableDialog();
       },
       onSelectionLimit: () => {
         this.toast(`You can select up to ${this.maxTickets} tickets for this order.`, 'warning');
@@ -1356,6 +1495,7 @@ export class SeatPicker {
       onViewChange: () => {
         this.reanchorConfirm();
         this.syncRung();
+        this.syncProjection();
         this.drawMinimapRect();
         this.sectionCardOnView();
       },
@@ -1388,7 +1528,11 @@ export class SeatPicker {
     mount.appendChild(root);
     root.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (this.confirmSeat) {
+      if (this.tableDialog) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.cancelTableDialog();
+      } else if (this.confirmSeat) {
         e.preventDefault();
         e.stopPropagation();
         this.cancelConfirm();
@@ -1585,6 +1729,7 @@ export class SeatPicker {
     this.els.boot.remove();
     // Read-only load state: the chart() payload carries salesClosed.
     this.salesClosed = !!info.salesClosed;
+    this.controller.setViewMode(this.opts.initialView ?? 'flat');
 
     // Feature 6: anchor regions for all persistent map chrome, then move the
     // pre-built zoom column + toast into their regions (both were in the skeleton).
@@ -1651,13 +1796,13 @@ export class SeatPicker {
       this.a11yChipsEl = chips;
 
       if (present.size) {
-        const GLYPH: Partial<Record<AccessibilityType, string>> = { wheelchair: '♿', companion: '🧑‍🤝‍🧑' };
         const mk = (key: AccessibilityType | 'all', label: string): string =>
           `<button type="button" class="sl-chip-f${key === 'all' ? ' on' : ''}" data-a11y="1" data-f="${key}">${label}</button>`;
         chips.insertAdjacentHTML('beforeend',
           mk('all', 'All seats') +
-          [...present]
-            .map((type) => mk(type, `${GLYPH[type] ? GLYPH[type] + ' ' : ''}${type[0].toUpperCase()}${type.slice(1).replace(/-/g, ' ')}`))
+          ACCESSIBILITY_TYPES
+            .filter(({ key }) => present.has(key))
+            .map(({ key, short, icon }) => mk(key, `${icon} ${short}`))
             .join(''));
         // Multi-select OR semantics (parity with the buyer page): each type chip
         // toggles independently; the active filter is the union; "All seats"
@@ -1717,13 +1862,9 @@ export class SeatPicker {
     cb.setAttribute('aria-pressed', String(this.cbSafe));
     cb.innerHTML = '<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
     this.els.zfit.parentElement!.appendChild(cb);
-    cb.addEventListener('click', () => {
-      this.cbSafe = !this.cbSafe;
-      cb.setAttribute('aria-pressed', String(this.cbSafe));
-      this.controller.setColorblindSafe(this.cbSafe);
-      // Persist under the SAME key the public page uses (cross-surface preference).
-      writeStoredColorblind(this.cbSafe);
-    });
+    // Route through the single source of truth so host chrome (e.g. the Designer
+    // preview chip) and this in-widget button always agree.
+    cb.addEventListener('click', () => { this.setColorblindSafe(!this.cbSafe); });
 
     // Screen-reader announcements for keyboard seat focus.
     this.srEl = document.createElement('div');
@@ -1880,6 +2021,7 @@ export class SeatPicker {
   }
 
   private applySalesClosed(): void {
+    if (this.salesClosed && this.tableDialog && !this.tableDialogHeld) this.cancelTableDialog();
     const pill = this.els.closedPill;
     if (pill) {
       pill.classList.toggle('on', this.salesClosed);
@@ -1985,13 +2127,16 @@ export class SeatPicker {
   /** Update only the action affordance; selection callbacks must not refire. */
   private committedSelection(): PickerSeat[] {
     const candidateId = this.confirmSeat?.id;
-    return this.controller.getSelection().filter((seat) => seat.id !== candidateId);
+    const pendingTableId = this.tableDialog && !this.tableDialogHeld ? this.tableDialog.id : null;
+    return this.controller.getSelection().filter((seat) => seat.id !== candidateId && seat.id !== pendingTableId);
   }
 
   private pendingSelectionCount(): number {
     const heldItems = this.hold?.items ?? [];
     const heldLabels = new Set(heldItems.map((item) => item.label));
-    const pendingSeats = this.committedSelection().filter((seat) => !heldLabels.has(seat.label)).length;
+    const pendingSeats = this.committedSelection()
+      .filter((seat) => !heldLabels.has(seat.label))
+      .reduce((sum, seat) => sum + (seat.quantity ?? 1), 0);
     return pendingSeats + this.pendingGACount();
   }
 
@@ -2017,14 +2162,18 @@ export class SeatPicker {
 
   private totalTicketCount(): number {
     const heldLabels = new Set((this.hold?.items ?? []).map((item) => item.label));
-    const freshSeats = this.committedSelection().filter((seat) => !heldLabels.has(seat.label)).length;
+    const freshSeats = this.committedSelection()
+      .filter((seat) => !heldLabels.has(seat.label))
+      .reduce((sum, seat) => sum + (seat.quantity ?? 1), 0);
     return this.heldTicketCount() + freshSeats + this.pendingGACount();
   }
 
   /** Held tickets and standing quantities consume the same order-wide cap. */
   private updateSelectionCapacity(): void {
     const heldLabels = new Set((this.hold?.items ?? []).map((item) => item.label));
-    const selectedHeld = this.committedSelection().filter((seat) => heldLabels.has(seat.label)).length;
+    const selectedHeld = this.committedSelection()
+      .filter((seat) => heldLabels.has(seat.label))
+      .reduce((sum, seat) => sum + (seat.quantity ?? 1), 0);
     const remaining = Math.max(0, this.maxTickets - this.heldTicketCount() - this.pendingGACount());
     this.controller.setMaxSelection(selectedHeld + remaining);
   }
@@ -2054,9 +2203,9 @@ export class SeatPicker {
       cta.textContent = this.tf('picker.salesClosedCta', 'Sales closed');
       return;
     }
-    if (this.confirmSeat) {
+    if (this.confirmSeat || (this.tableDialog && !this.tableDialogHeld)) {
       cta.disabled = true;
-      cta.textContent = 'Confirm or cancel this seat';
+      cta.textContent = this.tableDialog ? 'Confirm your table' : 'Confirm or cancel this seat';
       return;
     }
     if (this.ctaPhase === 'holding') {
@@ -2418,12 +2567,30 @@ export class SeatPicker {
 
   // ---- arena / multi-floor chrome -------------------------------------------
 
-  /** Build the rung pills (charts with sections) and floor switcher (>1 floor). */
+  /** Build projection, rung and floor controls for arena-scale charts. */
   private buildArenaChrome(): void {
     const doc = this.controller.doc;
     if (!doc || !this.els.map) return;
     const hasSections = doc.objects.some((o) => o.type === 'section')
       || (doc.floors ?? []).some((f) => f.objects.some((o) => o.type === 'section'));
+
+    if (hasSections) {
+      const projection = document.createElement('div');
+      projection.className = 'sl-projection';
+      projection.setAttribute('role', 'group');
+      projection.setAttribute('aria-label', 'Map projection');
+      projection.innerHTML =
+        '<button type="button" data-projection="flat" aria-pressed="false" title="Flat 2D map">2D</button>' +
+        '<button type="button" data-projection="perspective" aria-pressed="false" title="Perspective 2.5D map">2.5D</button>';
+      projection.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
+        button.addEventListener('click', () => {
+          this.setViewMode(button.dataset.projection as RendererViewMode);
+        });
+      });
+      this.regions['top-right'].appendChild(projection);
+      this.projectionEl = projection;
+      this.syncProjection();
+    }
 
     // LOD rung pills — jump straight between zones / sections / seats.
     if (hasSections) {
@@ -2490,6 +2657,16 @@ export class SeatPicker {
       const on = btn.dataset.rung === active;
       btn.classList.toggle('on', on);
       btn.setAttribute('aria-pressed', String(on));
+    });
+  }
+
+  private syncProjection(): void {
+    if (!this.projectionEl) return;
+    const active = this.controller.getViewMode();
+    this.projectionEl.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
+      const on = button.dataset.projection === active;
+      button.classList.toggle('on', on);
+      button.setAttribute('aria-pressed', String(on));
     });
   }
 
@@ -2666,9 +2843,191 @@ export class SeatPicker {
     const status = this.controller.getStatus(seat.id) ?? 'free';
     const statusText = status === 'free' ? 'available' : status === 'held' ? 'on hold' : 'taken';
     const price = cat ? this.catPrice(cat) : undefined;
-    this.srEl.textContent = `Seat ${seat.label}, ${cat?.label ?? seat.categoryKey}${
+    const table = this.controller.tableSelection(seat.id);
+    const details = table ?? this.controller.seatDetails(seat.id);
+    const typeWord = this.rowTypeWord(details);
+    const buyerName = details?.rowLabel ?? details?.displayLabel ?? seat.displayLabel ?? seat.label;
+    const identity = table
+      ? `${typeWord} ${buyerName}, ${table.bookingMode === 'variable' ? `${table.minOccupancy} to ${table.maxOccupancy} guests` : `${table.capacity} guests`}`
+      : details?.objectType === 'booth'
+        ? `${typeWord} ${buyerName}`
+        : details?.objectType === 'table'
+          ? `${typeWord} ${buyerName}, seat ${details.seatNumber ?? seat.label}`
+          : `Seat ${details?.displayLabel ?? seat.displayLabel ?? seat.label}`;
+    this.srEl.textContent = `${identity}, ${cat?.label ?? seat.categoryKey}${
       price != null ? `, ${this.money(price)}` : ''
     }, ${statusText}`;
+  }
+
+  // ---- atomic table confirmation / guest quantity ---------------------------
+
+  private showTableDialog(
+    table: TableSelectionDetails,
+    held: boolean,
+    returnFocus?: HTMLElement | null,
+  ): void {
+    this.dismissTableDialog(false);
+    this.tableDialog = { ...table };
+    this.tableDialogHeld = held;
+    this.tableDialogReturnFocus = returnFocus ?? (document.activeElement as HTMLElement | null);
+    const esc = (value: unknown): string => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[ch]!);
+    const cat = this.controller.doc?.categories.find((candidate) => candidate.key === table.categoryKey);
+    const variable = table.bookingMode === 'variable';
+    const typeWord = this.rowTypeWord(table);
+    const el = document.createElement('div');
+    el.className = 'sl-table-scrim';
+    el.innerHTML =
+      `<section class="sl-table-dialog" role="dialog" aria-modal="true" aria-labelledby="sl-table-title" aria-describedby="sl-table-copy">` +
+      `<div class="sl-table-head"><div class="sl-table-eyebrow">${esc(variable ? `Flexible party · ${typeWord}` : `Whole ${typeWord}`)}</div>` +
+      `<h2 class="sl-table-title" id="sl-table-title">${esc(table.displayLabel ?? table.label)}</h2>` +
+      `<p class="sl-table-copy" id="sl-table-copy">${variable
+        ? `Choose how many guests will sit together. This table is held exclusively for your party.`
+        : `All ${table.capacity} places are booked together as one exclusive table.`}</p></div>` +
+      `<div class="sl-table-body">` +
+      `<div class="sl-table-summary"><span>${esc(cat?.label ?? table.categoryKey)}</span><b data-table-unit>${this.money(this.paidPrice(table.categoryKey, table.tierId ?? null, table.price))} per guest</b>` +
+      `<span class="muted">Table capacity</span><span>${table.capacity} guests</span>` +
+      `<span class="muted">Total</span><b data-table-total></b></div>` +
+      (variable
+        ? `<label class="sl-table-qtylabel" id="sl-table-qty-label">Number of guests</label>` +
+          `<div class="sl-table-stepper" role="group" aria-labelledby="sl-table-qty-label">` +
+          `<button type="button" data-table-step="-1" aria-label="Fewer guests">−</button>` +
+          `<output aria-live="polite" data-table-qty>${table.quantity}</output>` +
+          `<button type="button" data-table-step="1" aria-label="More guests">+</button></div>` +
+          `<div class="sl-table-range">Choose ${table.minOccupancy}–${table.maxOccupancy} guests</div>`
+        : `<input type="hidden" data-table-qty value="${table.capacity}">`) +
+      `<div class="sl-table-actions"><button type="button" class="sl-table-cancel">Cancel</button>` +
+      `<button type="button" class="sl-table-confirm">${held ? 'Update table' : variable ? 'Select table' : 'Select whole table'}</button></div>` +
+      `</div></section>`;
+    this.root!.appendChild(el);
+    this.tableDialogEl = el;
+    this.renderTableDialogState();
+
+    el.querySelectorAll<HTMLButtonElement>('[data-table-step]').forEach((button) => {
+      button.addEventListener('click', () => {
+        if (!this.tableDialog) return;
+        const next = Math.max(
+          this.tableDialog.minOccupancy,
+          Math.min(this.tableDialog.maxOccupancy, this.tableDialog.quantity + Number(button.dataset.tableStep)),
+        );
+        this.tableDialog = { ...this.tableDialog, quantity: next };
+        this.renderTableDialogState();
+      });
+    });
+    el.querySelector<HTMLButtonElement>('.sl-table-cancel')!.addEventListener('click', () => this.cancelTableDialog());
+    el.querySelector<HTMLButtonElement>('.sl-table-confirm')!.addEventListener('click', () => void this.confirmTableDialog());
+    el.addEventListener('mousedown', (event) => {
+      if (event.target === el) this.cancelTableDialog();
+    });
+    el.addEventListener('keydown', (event) => {
+      if (event.key !== 'Tab') return;
+      const focusable = [...el.querySelectorAll<HTMLElement>('button:not(:disabled),[tabindex]:not([tabindex="-1"])')];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    requestAnimationFrame(() => (
+      el.querySelector<HTMLButtonElement>(variable ? '[data-table-step="-1"]' : '.sl-table-confirm')?.focus()
+    ));
+  }
+
+  private renderTableDialogState(): void {
+    const table = this.tableDialog;
+    const el = this.tableDialogEl;
+    if (!table || !el) return;
+    const output = el.querySelector<HTMLOutputElement>('output[data-table-qty]');
+    if (output) output.value = String(table.quantity);
+    const hidden = el.querySelector<HTMLInputElement>('input[data-table-qty]');
+    if (hidden) hidden.value = String(table.quantity);
+    el.querySelectorAll<HTMLButtonElement>('[data-table-step]').forEach((button) => {
+      const delta = Number(button.dataset.tableStep);
+      button.disabled = delta < 0
+        ? table.quantity <= table.minOccupancy
+        : table.quantity >= table.maxOccupancy;
+    });
+    const unit = this.paidPrice(table.categoryKey, table.tierId ?? null, table.price);
+    const total = el.querySelector<HTMLElement>('[data-table-total]');
+    if (total) total.textContent = this.money(unit * table.quantity);
+  }
+
+  private async confirmTableDialog(): Promise<void> {
+    const table = this.tableDialog;
+    const held = this.tableDialogHeld;
+    if (!table) return;
+    const button = this.tableDialogEl?.querySelector<HTMLButtonElement>('.sl-table-confirm');
+    if (button) {
+      button.disabled = true;
+      button.textContent = held ? 'Updating…' : 'Selecting…';
+    }
+    if (held) {
+      try {
+        const updated = await this.controller.replaceTableQuantity(table.label, table.quantity);
+        if (!updated) {
+          this.toast('That guest count could not be secured. Your current table hold is unchanged.', 'warning');
+          this.renderTableDialogState();
+          if (button) {
+            button.disabled = false;
+            button.textContent = 'Update table';
+          }
+          return;
+        }
+        this.hold = {
+          holdId: updated.holdId,
+          expiresAt: updated.expiresAt,
+          seats: updated.seats,
+          items: updated.items,
+        };
+        this.startHoldTimer(updated.expiresAt);
+        this.dismissTableDialog();
+        this.syncTray();
+        this.emitHoldChange();
+        this.toast(`${table.label} updated for ${table.quantity} guests.`, 'success');
+      } catch (error) {
+        this.opts.onError?.(error);
+        this.toast('That guest count is no longer available. Your current hold is unchanged.', 'error');
+        if (button) {
+          button.disabled = false;
+          button.textContent = 'Update table';
+        }
+      }
+      return;
+    }
+
+    if (!this.controller.setTableQuantity(table.label, table.quantity)) {
+      if (button) {
+        button.disabled = false;
+        button.textContent = table.bookingMode === 'variable' ? 'Select table' : 'Select whole table';
+      }
+      return;
+    }
+    this.dismissTableDialog();
+    this.collapseSectionCard();
+    this.syncTray();
+  }
+
+  private cancelTableDialog(): void {
+    const table = this.tableDialog;
+    const held = this.tableDialogHeld;
+    this.dismissTableDialog();
+    if (table && !held) this.controller.deselect(table.physicalSeatIds);
+  }
+
+  private dismissTableDialog(restoreFocus = true): void {
+    const focus = this.tableDialogReturnFocus;
+    this.tableDialogEl?.remove();
+    this.tableDialogEl = null;
+    this.tableDialog = null;
+    this.tableDialogHeld = false;
+    this.tableDialogReturnFocus = null;
+    if (restoreFocus) requestAnimationFrame(() => (focus?.isConnected ? focus : this.root)?.focus());
   }
 
   // ---- seat candidate confirmation ------------------------------------------
@@ -2691,6 +3050,17 @@ export class SeatPicker {
     const safe = (value: unknown): string => String(value ?? '—').replace(/[&<>"]/g, (char) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
     })[char]!);
+    const identityFields = [
+      details?.sectionLabel
+        ? `<div class="sl-confirm-field"><span class="sl-confirm-key">Section</span><span class="sl-confirm-value">${safe(details.sectionLabel)}</span></div>`
+        : '',
+      details?.rowLabel || details?.objectType === 'booth'
+        ? `<div class="sl-confirm-field"><span class="sl-confirm-key">${safe(this.rowTypeWord(details))}</span><span class="sl-confirm-value">${safe(this.rowShort(details) ?? details?.displayLabel ?? seat.displayLabel ?? seat.label)}</span></div>`
+        : '',
+      details?.objectType !== 'booth'
+        ? `<div class="sl-confirm-field"><span class="sl-confirm-key">Seat</span><span class="sl-confirm-value">${safe(details?.seatNumber ?? details?.displayLabel ?? seat.displayLabel ?? seat.label)}</span></div>`
+        : '',
+    ].filter(Boolean).join('');
     const el = document.createElement('div');
     el.className = 'sl-confirm';
     el.setAttribute('role', 'dialog');
@@ -2699,14 +3069,13 @@ export class SeatPicker {
     el.style.setProperty('--sl-cat', cat?.color ?? '#6e7bff');
     el.innerHTML =
       `<div class="sl-confirm-grid">` +
-      `<div class="sl-confirm-field"><span class="sl-confirm-key">Section</span><span class="sl-confirm-value">${safe(details?.sectionLabel)}</span></div>` +
-      `<div class="sl-confirm-field"><span class="sl-confirm-key">${safe(this.rowTypeWord(details))}</span><span class="sl-confirm-value">${safe(this.rowShort(details))}</span></div>` +
-      `<div class="sl-confirm-field"><span class="sl-confirm-key">Seat</span><span class="sl-confirm-value">${safe(details?.seatNumber ?? seat.displayLabel ?? seat.label)}</span></div>` +
+      identityFields +
       `</div>` +
       `<div class="sl-confirm-cat"><span class="sl-dot" style="background:${cat?.color ?? '#6e7bff'}"></span>` +
       `<span class="sl-confirm-cat-name">${safe(details?.categoryLabel ?? cat?.label ?? seat.categoryKey)}</span>` +
       (price != null ? `<span class="sl-confirm-price">${this.money(price)}</span>` : '') + `</div>` +
       `<div class="sl-confirm-body">` +
+      this.wheelchairConfirmHtml(details?.wheelchairSpaceType) +
       this.commercialConfirmHtml(seat.commercial) +
       (this.seatViewEnabled() ? this.confirmThumbHtml(seat) : '') +
       `<div class="sl-confirm-row">` +
@@ -2792,7 +3161,10 @@ export class SeatPicker {
 
     const doc = this.controller.doc;
     const activeId = this.controller.getActiveFloorId();
-    const focal = doc?.floors?.find((f) => f.id === activeId)?.focalPoint ?? doc?.focalPoint ?? { x: 0, y: 0 };
+    const focal = seat.focalPoint
+      ?? doc?.floors?.find((f) => f.id === activeId)?.focalPoint
+      ?? doc?.focalPoint
+      ?? { x: 0, y: 0 };
     let panoUrl: string;
     let caption: string;
     let real = false;
@@ -3096,6 +3468,8 @@ export class SeatPicker {
     const noPicks = !seats.length && !heldItems.length && !this.pendingGACount();
     if (!this.hold && (noPicks || this.bestAvailableBusy || this.bestAvailableConfirm)) {
       const cats = this.controller.doc?.categories ?? [];
+      const zones = this.controller.getBestAvailableZones();
+      if (this.baZone && !zones.some((zone) => zone.id === this.baZone)) this.baZone = '';
       parts.push(this.bestAvailableConfirm
         ? `<div class="sl-ba" role="alert">` +
           `<div class="sl-ba-title"><span class="spark" aria-hidden="true">✦</span>Replace your current choices?</div>` +
@@ -3119,6 +3493,12 @@ export class SeatPicker {
               cats.map((c) => `<option value="${c.key}"${this.baCat === c.key ? ' selected' : ''}>${c.label}</option>`).join('') +
               `</select>`
             : `<span aria-hidden="true"></span>`) +
+          (zones.length
+            ? `<select aria-label="Preferred venue zone" data-ba-zone>` +
+              `<option value="">Any venue zone</option>` +
+              zones.map((zone) => `<option value="${escapeOption(zone.id)}"${this.baZone === zone.id ? ' selected' : ''}>${escapeOption(zone.label)}</option>`).join('') +
+              `</select>`
+            : '') +
           `<div class="sl-ba-qty">` +
           `<button type="button" data-ba="-1" aria-label="Fewer seats">−</button><span>${this.baQty}</span>` +
           `<button type="button" data-ba="1" aria-label="More seats">+</button></div>` +
@@ -3136,16 +3516,52 @@ export class SeatPicker {
     // popover so the buyer meets the same identity pattern at confirm and in
     // the cart. Falls back to the raw label when spatial context is missing
     // (GA lines, legacy labels).
-    const idGrid = (seatId: string | null, label: string): string => {
+    const idGrid = (
+      seatId: string | null,
+      label: string,
+      objectType?: HoldLineItem['objectType'] | PickerSeat['objectType'],
+      quantity = 1,
+      objectId?: string,
+      identity?: Partial<PickerSeat>,
+    ): string => {
+      const esc = (value: unknown): string => String(value ?? '—').replace(/[&<>"]/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
+      })[char]!);
       const d = seatId ? this.controller.seatDetails(seatId) : null;
+      const area = objectType === 'ga' ? gaAreas.find((candidate) => candidate.id === objectId) : undefined;
+      const effectiveType = objectType === 'ga' ? 'ga' : d?.objectType ?? objectType;
+      const typeWord = identity?.displayType?.trim()
+        || d?.displayType?.trim()
+        || area?.displayType?.trim()
+        || (effectiveType === 'table' ? 'Table' : effectiveType === 'booth' ? 'Booth' : effectiveType === 'ga' ? 'General admission' : 'Row');
+      const buyerName = identity?.rowLabel
+        ?? identity?.displayLabel
+        ?? d?.rowLabel
+        ?? d?.displayLabel
+        ?? area?.displayLabel
+        ?? area?.label
+        ?? label;
+      if (effectiveType === 'table' && identity?.bookingMode) {
+        return `<div class="sl-chip-id"><span class="fld sec"><span class="sl-chip-eb">${esc(typeWord)}</span><span class="val">${esc(buyerName)}</span></span>` +
+          `<span class="fld mid"><span class="sl-chip-eb">Guests</span><span class="val">${quantity}</span></span></div>`;
+      }
+      if (effectiveType === 'ga') {
+        return `<div class="sl-chip-id"><span class="fld sec"><span class="sl-chip-eb">${esc(typeWord)}</span><span class="val">${esc(buyerName)}</span></span>` +
+          (quantity > 1 ? `<span class="fld mid"><span class="sl-chip-eb">Tickets</span><span class="val">${quantity}</span></span>` : '') + `</div>`;
+      }
+      if (effectiveType === 'booth') {
+        return `<div class="sl-chip-id">` +
+          (d?.sectionLabel ? `<span class="fld sec"><span class="sl-chip-eb">Section</span><span class="val">${esc(d.sectionLabel)}</span></span>` : '') +
+          `<span class="fld mid"><span class="sl-chip-eb">${esc(typeWord)}</span><span class="val">${esc(buyerName)}</span></span></div>`;
+      }
       if (!d?.sectionLabel && !d?.rowLabel && !d?.seatNumber) {
-        return `<div class="sl-chip-id"><span class="fld sec"><span class="sl-chip-eb">Seat</span><span class="val">${label}</span></span></div>`;
+        return `<div class="sl-chip-id"><span class="fld sec"><span class="sl-chip-eb">Seat</span><span class="val">${esc(buyerName)}</span></span></div>`;
       }
       return (
         `<div class="sl-chip-id">` +
-        `<span class="fld sec"><span class="sl-chip-eb">Section</span><span class="val">${d.sectionLabel ?? '—'}</span></span>` +
-        (d.rowLabel ? `<span class="fld mid"><span class="sl-chip-eb">${this.rowTypeWord(d)}</span><span class="val">${this.rowShort(d)}</span></span>` : '') +
-        (d.seatNumber ? `<span class="fld mid"><span class="sl-chip-eb">Seat</span><span class="val">${d.seatNumber}</span></span>` : '') +
+        (d.sectionLabel ? `<span class="fld sec"><span class="sl-chip-eb">Section</span><span class="val">${esc(d.sectionLabel)}</span></span>` : '') +
+        (d.rowLabel ? `<span class="fld mid"><span class="sl-chip-eb">${esc(typeWord)}</span><span class="val">${esc(this.rowShort(d))}</span></span>` : '') +
+        (d.seatNumber ? `<span class="fld mid"><span class="sl-chip-eb">Seat</span><span class="val">${esc(d.seatNumber)}</span></span>` : '') +
         `</div>`
       );
     };
@@ -3166,15 +3582,20 @@ export class SeatPicker {
       const cat = this.controller.doc?.categories.find((c) => c.key === item.categoryKey);
       const tierName = item.tierId ? cat?.tiers?.find((ti) => ti.id === item.tierId)?.name : undefined;
       const heldSeat = item.objectType !== 'ga' ? this.controller.seatByLabel(item.label) : null;
-      const canView = this.seatViewEnabled() && !!heldSeat;
+      const table = item.objectType === 'table' ? this.controller.tableSelection(item.label) : null;
+      const canView = this.seatViewEnabled() && !!heldSeat && item.objectType !== 'table';
       parts.push(
         `<div class="sl-chip sl-held${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-held="${encodeURIComponent(item.label)}"${heldSeat ? ` data-locate="${heldSeat.id}"` : ''}>` +
           `<div class="sl-chip-main">` +
-          idGrid(heldSeat?.id ?? null, item.label) +
+          idGrid(heldSeat?.id ?? null, item.label, item.objectType, item.quantity ?? 1, item.objectId, table ?? undefined) +
           `<div class="sl-chip-sub">` +
           `<span class="sl-ticket-state held" aria-label="Held for you" title="Held for you">` +
           `<svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>` +
           `<span class="cat">${cat?.label ?? item.categoryKey}${tierName ? ` · ${tierName}` : ''}</span>` +
+          (table?.bookingMode === 'variable'
+            ? `<button type="button" class="sl-table-edit" data-table-edit="${encodeURIComponent(item.label)}">${item.quantity ?? 1} guests · Edit</button>`
+            : '') +
+          this.wheelchairChipMarker(heldSeat?.wheelchairSpaceType) +
           this.commercialChipMarker(heldSeat?.commercial) +
           `<span class="amt">${this.money(this.paidPrice(item.categoryKey, item.tierId, item.unitPrice) * (item.quantity ?? 1))}</span>` +
           `</div></div>` +
@@ -3200,14 +3621,18 @@ export class SeatPicker {
       parts.push(
         `<div class="sl-chip${this.lastTrayKeys.has(itemKey) ? '' : ' sl-enter'}" data-key="${itemKey}" data-seat="${s.id}" data-locate="${s.id}">` +
           `<div class="sl-chip-main">` +
-          idGrid(s.id, s.displayLabel ?? s.label) +
+          idGrid(s.id, s.label, s.objectType, s.quantity ?? 1, s.objectId, s) +
           `<div class="sl-chip-sub">` +
           `<span class="sl-ticket-state" aria-label="Selected" title="Selected">` +
           `<svg viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></svg></span>` +
-          `<span class="cat">${cat?.label ?? s.categoryKey}</span>${this.commercialChipMarker(s.commercial)}${tierSelect}` +
-          `<span class="amt">${this.money(this.paidPrice(s.categoryKey, s.tierId ?? null, s.price))}</span>` +
+          `<span class="cat">${cat?.label ?? s.categoryKey}</span>` +
+          (s.objectType === 'table' && s.bookingMode === 'variable'
+            ? `<button type="button" class="sl-table-edit" data-table-edit="${encodeURIComponent(s.label)}">${s.quantity ?? 1} guests · Edit</button>`
+            : '') +
+          `${this.wheelchairChipMarker(s.wheelchairSpaceType)}${this.commercialChipMarker(s.commercial)}${tierSelect}` +
+          `<span class="amt">${this.money(this.paidPrice(s.categoryKey, s.tierId ?? null, s.price) * (s.quantity ?? 1))}</span>` +
           `</div></div>` +
-          iconRail(`Remove ${s.label}`, canView ? s.label : null) +
+          iconRail(`Remove ${s.label}`, canView && s.objectType !== 'table' ? s.label : null) +
           `</div>`,
       );
     }
@@ -3216,8 +3641,8 @@ export class SeatPicker {
       const qty = this.gaQty.get(area.id) ?? 0;
       parts.push(
         `<div class="sl-ga" data-ga="${area.id}"><div class="sl-ga-info">` +
-          `<div class="sl-ga-name">${area.label}</div>` +
-          `<div class="sl-ga-sub">${this.money(this.paidPrice(area.categoryKey, null, area.price))} · ${area.available} left</div></div>` +
+          `<div class="sl-ga-name">${area.displayLabel ?? area.label}</div>` +
+          `<div class="sl-ga-sub">${area.displayType ?? 'General admission'} · ${this.money(this.paidPrice(area.categoryKey, null, area.price))} · ${area.available} left</div></div>` +
           `<div class="sl-ga-qty">` +
           `<button type="button" data-d="-1" aria-label="Fewer">−</button><span>${qty}</span>` +
           `<button type="button" data-d="1" aria-label="More">+</button></div></div>`,
@@ -3235,6 +3660,9 @@ export class SeatPicker {
     this.els.tray.querySelector<HTMLSelectElement>('[data-ba-cat]')?.addEventListener('change', (e) => {
       this.baCat = (e.target as HTMLSelectElement).value;
     });
+    this.els.tray.querySelector<HTMLSelectElement>('[data-ba-zone]')?.addEventListener('change', (e) => {
+      this.baZone = (e.target as HTMLSelectElement).value;
+    });
     this.els.tray.querySelector<HTMLButtonElement>('[data-ba-premium]')?.addEventListener('click', () => {
       this.baPremium = !this.baPremium;
       this.syncTray();
@@ -3246,7 +3674,7 @@ export class SeatPicker {
         this.els.tray.querySelector<HTMLButtonElement>('[data-ba-replace]')?.focus();
         return;
       }
-      void this.bestAvailable(this.baQty, this.baCat || undefined, { preferPremium: this.baPremium });
+      void this.bestAvailable(this.baQty, this.baCat || undefined, { preferPremium: this.baPremium, zoneId: this.baZone || undefined });
     });
     this.els.tray.querySelector<HTMLButtonElement>('[data-ba-cancel]')?.addEventListener('click', () => {
       this.bestAvailableConfirm = false;
@@ -3255,7 +3683,7 @@ export class SeatPicker {
     });
     this.els.tray.querySelector<HTMLButtonElement>('[data-ba-replace]')?.addEventListener('click', () => {
       this.bestAvailableConfirm = false;
-      void this.bestAvailable(this.baQty, this.baCat || undefined, { preferPremium: this.baPremium });
+      void this.bestAvailable(this.baQty, this.baCat || undefined, { preferPremium: this.baPremium, zoneId: this.baZone || undefined });
     });
     this.els.tray.querySelectorAll<HTMLElement>('.sl-chip .rm').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -3285,6 +3713,20 @@ export class SeatPicker {
         }
         chip.classList.add('sl-leave');
         this.scheduleMotion(remove, 150);
+      });
+    });
+    this.els.tray.querySelectorAll<HTMLButtonElement>('[data-table-edit]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const label = decodeURIComponent(button.dataset.tableEdit ?? '');
+        const details = this.controller.tableSelection(label);
+        if (!details) return;
+        const heldItem = heldItems.find((item) => item.label === label && item.objectType === 'table');
+        this.showTableDialog(
+          { ...details, quantity: heldItem?.quantity ?? details.quantity },
+          !!heldItem,
+          button,
+        );
       });
     });
     // Per-seat ticket-tier pick (Adult/Child/…) — updates price via onSelectionChange.
@@ -3321,7 +3763,7 @@ export class SeatPicker {
     // Sales closed: freeze the best-available + GA controls (read-only state).
     if (this.salesClosed) {
       this.els.tray
-        .querySelectorAll<HTMLButtonElement | HTMLSelectElement>('.sl-ba-go,[data-ba],[data-ba-cat],[data-ba-replace],.sl-ga button')
+        .querySelectorAll<HTMLButtonElement | HTMLSelectElement>('.sl-ba-go,[data-ba],[data-ba-cat],[data-ba-zone],[data-ba-replace],.sl-ga button')
         .forEach((el) => {
           el.disabled = true;
         });
@@ -3333,8 +3775,11 @@ export class SeatPicker {
     const heldTotal = heldItems.reduce((sum, item) => sum + this.paidPrice(item.categoryKey, item.tierId, item.unitPrice) * (item.quantity ?? 1), 0);
     const heldCount = heldItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
     const freshSeats = seats.filter((seat) => !heldLabels.has(seat.label));
-    const total = freshSeats.reduce((sum, s) => sum + this.paidPrice(s.categoryKey, s.tierId ?? null, s.price), 0) + gaTotal + heldTotal;
-    const count = freshSeats.length + gaCount + heldCount;
+    const total = freshSeats.reduce(
+      (sum, s) => sum + this.paidPrice(s.categoryKey, s.tierId ?? null, s.price) * (s.quantity ?? 1),
+      0,
+    ) + gaTotal + heldTotal;
+    const count = freshSeats.reduce((sum, seat) => sum + (seat.quantity ?? 1), 0) + gaCount + heldCount;
     const pendingCount = this.pendingSelectionCount();
     const previousCount = this.lastTrayCount;
     const previousTotal = this.lastTrayTotal;
@@ -3636,16 +4081,21 @@ export class SeatPicker {
     const items = hold.items ?? [];
     // Host `pricing` overrides win in the handoff too — the host gets back the
     // prices it will actually charge, so map display and order total agree.
-    const lineItems: CheckoutLineItem[] = items.map((it: HoldLineItem) => ({
-      label: it.label,
-      objectId: it.objectId,
-      objectType: it.objectType,
-      categoryKey: it.categoryKey,
-      tierId: it.tierId,
-      unitPrice: this.paidPrice(it.categoryKey, it.tierId, it.unitPrice),
-      currency: it.currency ?? this.currency,
-      quantity: it.quantity ?? 1,
-    }));
+    const lineItems: CheckoutLineItem[] = items.map((it: HoldLineItem) => {
+      const display = this.controller.lineItemDisplay(it);
+      return {
+        label: it.label,
+        ...(display.displayLabel ? { displayLabel: display.displayLabel } : {}),
+        ...(display.displayType ? { displayType: display.displayType } : {}),
+        objectId: it.objectId,
+        objectType: it.objectType,
+        categoryKey: it.categoryKey,
+        tierId: it.tierId,
+        unitPrice: this.paidPrice(it.categoryKey, it.tierId, it.unitPrice),
+        currency: it.currency ?? this.currency,
+        quantity: it.quantity ?? 1,
+      };
+    });
     const currency = lineItems[0]?.currency ?? this.currency;
     const total = lineItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
     return { holdId: hold.holdId, expiresAt: hold.expiresAt, currency, lineItems, total };
@@ -3713,9 +4163,12 @@ export class SeatPicker {
    */
   /** Buyer-facing type word for the row/table key label — the designer's
    *  per-object "Displayed type" override, or the default "Row". */
-  private rowTypeWord(details: { rowType?: string } | null | undefined): string {
-    const t = details?.rowType?.trim();
-    return t || 'Row';
+  private rowTypeWord(details: { displayType?: string; rowType?: string; objectType?: PickerSeat['objectType'] } | null | undefined): string {
+    const authored = details?.displayType?.trim() || details?.rowType?.trim();
+    if (authored) return authored;
+    if (details?.objectType === 'table') return 'Table';
+    if (details?.objectType === 'booth') return 'Booth';
+    return 'Row';
   }
 
   private rowShort(details: { sectionLabel?: string; rowLabel?: string } | null | undefined): string | undefined {
@@ -3741,12 +4194,24 @@ export class SeatPicker {
     // Identity grid — the same Section·Row·Seat card the buyer meets on confirm
     // and in the cart, just smaller. Falls back to a single field for a bare
     // label (GA / legacy seats with no spatial context).
+    const isGroupedTable = details.objectType === 'table' && !!details.bookingMode;
+    const isBooth = details.objectType === 'booth';
     const hasLoc = details.sectionLabel || details.rowLabel || details.seatNumber;
-    const grid = hasLoc
+    const grid = isGroupedTable
       ? `<div class="sl-tip-grid">` +
-        `<div class="sl-tip-field"><span class="sl-tip-key">Section</span><span class="sl-tip-val">${esc(details.sectionLabel)}</span></div>` +
-        `<div class="sl-tip-field"><span class="sl-tip-key">${esc(this.rowTypeWord(details))}</span><span class="sl-tip-val">${esc(this.rowShort(details))}</span></div>` +
-        `<div class="sl-tip-field"><span class="sl-tip-key">Seat</span><span class="sl-tip-val">${esc(details.seatNumber ?? details.displayLabel ?? details.label)}</span></div>` +
+        `<div class="sl-tip-field"><span class="sl-tip-key">${esc(this.rowTypeWord(details))}</span><span class="sl-tip-val">${esc(details.rowLabel ?? details.displayLabel ?? details.label)}</span></div>` +
+        `<div class="sl-tip-field"><span class="sl-tip-key">Guests</span><span class="sl-tip-val">${details.bookingMode === 'variable' ? `${details.minOccupancy}–${details.maxOccupancy}` : details.capacity}</span></div>` +
+        `</div>`
+      : isBooth
+      ? `<div class="sl-tip-grid">` +
+        (details.sectionLabel ? `<div class="sl-tip-field"><span class="sl-tip-key">Section</span><span class="sl-tip-val">${esc(details.sectionLabel)}</span></div>` : '') +
+        `<div class="sl-tip-field"><span class="sl-tip-key">${esc(this.rowTypeWord(details))}</span><span class="sl-tip-val">${esc(details.rowLabel ?? details.displayLabel ?? details.label)}</span></div>` +
+        `</div>`
+      : hasLoc
+      ? `<div class="sl-tip-grid">` +
+        (details.sectionLabel ? `<div class="sl-tip-field"><span class="sl-tip-key">Section</span><span class="sl-tip-val">${esc(details.sectionLabel)}</span></div>` : '') +
+        (details.rowLabel ? `<div class="sl-tip-field"><span class="sl-tip-key">${esc(this.rowTypeWord(details))}</span><span class="sl-tip-val">${esc(this.rowShort(details))}</span></div>` : '') +
+        (details.seatNumber ? `<div class="sl-tip-field"><span class="sl-tip-key">Seat</span><span class="sl-tip-val">${esc(details.seatNumber)}</span></div>` : '') +
         `</div>`
       : `<div class="sl-tip-grid one"><div class="sl-tip-field"><span class="sl-tip-key">Seat</span><span class="sl-tip-val">${esc(details.displayLabel ?? details.label)}</span></div></div>`;
     const statusLine =
@@ -3757,12 +4222,17 @@ export class SeatPicker {
     const cxLine = limited
       ? `<div class="sl-tip-cx"><span class="g" aria-hidden="true">◐</span>${esc(limited)}</div>`
       : '';
+    const wheelchair = this.wheelchairProvisionLabel(details.wheelchairSpaceType);
+    const wheelchairLine = wheelchair
+      ? `<div class="sl-tip-cx"><span class="g" aria-hidden="true">♿</span>${esc(wheelchair)}</div>`
+      : '';
     this.tipEl.style.setProperty('--sl-cat', details.categoryColor);
     this.tipEl.innerHTML =
       grid +
       `<div class="sl-tip-cat"><span class="sl-tip-dot" style="background:${details.categoryColor}"></span>` +
       `<span class="sl-tip-name">${esc(details.categoryLabel)}</span>` +
       `<span class="sl-tip-amt">${price}</span></div>` +
+      wheelchairLine +
       cxLine +
       statusLine;
     this.tipEl.style.display = 'block';
@@ -3773,6 +4243,38 @@ export class SeatPicker {
 
   getSelection(): PickerSeat[] {
     return this.committedSelection();
+  }
+
+  /** Current colorblind-safe render state, resolved from the stored buyer
+   *  preference at mount. Host chrome (e.g. the Designer preview) reads this to
+   *  surface the state rather than rendering colorblind colors silently. */
+  isColorblindSafe(): boolean {
+    return this.cbSafe;
+  }
+
+  /** Single source of truth for the colorblind-safe toggle — used by both the
+   *  in-widget button and host chrome. Updates the renderer, the persisted
+   *  cross-surface preference, and the in-widget button's pressed state together
+   *  so the two controls never diverge. */
+  setColorblindSafe(on: boolean): void {
+    if (on === this.cbSafe) return;
+    this.cbSafe = on;
+    this.cbEl?.setAttribute('aria-pressed', String(on));
+    this.controller.setColorblindSafe(on);
+    // Persist under the SAME key the public page uses (cross-surface preference).
+    writeStoredColorblind(on);
+  }
+
+  /** Switch the buyer canvas between flat, isometric and Perspective 2.5D. */
+  setViewMode(mode: RendererViewMode): void {
+    this.controller.setViewMode(mode);
+    this.syncProjection();
+    this.dismissConfirm();
+  }
+
+  /** Current buyer canvas projection. */
+  getViewMode(): RendererViewMode {
+    return this.controller.getViewMode();
   }
 
   /** Current active/restored hold reflected in the tray. */
@@ -3793,7 +4295,7 @@ export class SeatPicker {
   async bestAvailable(
     qty: number,
     categoryKey?: string,
-    opts: { preferPremium?: boolean } = {},
+    opts: { preferPremium?: boolean; zoneId?: string } = {},
   ): Promise<HoldResult | null> {
     if (this.salesClosed || this.bestAvailableBusy) return null;
     qty = Math.max(1, Math.min(this.maxTickets, Math.floor(qty)));
@@ -3887,6 +4389,7 @@ export class SeatPicker {
     // its hold alive across the host's route transition.
     if (this.hold && !this.handedOff) void this.controller.release();
     this.closeConfirm();
+    this.dismissTableDialog(false);
     this.closeSeatView();
     this.stopHoldTimer();
     if (this.toastTimer) clearTimeout(this.toastTimer);
@@ -3901,6 +4404,7 @@ export class SeatPicker {
     if (this.fsChangeHandler) document.removeEventListener('fullscreenchange', this.fsChangeHandler);
     if (this.fsEscHandler) window.removeEventListener('keydown', this.fsEscHandler);
     this.controller.destroy();
+    this.projectionEl = null;
     this.root?.remove();
     this.root = null;
     if (this.modalScrim) {
