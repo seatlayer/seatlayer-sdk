@@ -217,6 +217,24 @@ export function stateAwareBookableLabelInk(fill: string, preferred: string): str
   return darkContrast >= lightContrast ? DARK_BOOKABLE_LABEL_INK : LIGHT_BOOKABLE_LABEL_INK;
 }
 
+/**
+ * Ink for the accessibility seat glyphs. Unlike seat-number text, these are
+ * bold solid silhouettes — graphical objects, so the WCAG non-text bar (3:1)
+ * applies, not the 4.5:1 small-text bar. Preferring white at ≥3:1 keeps the
+ * glyph crisp on every mid/dark category colour (where a 4.5:1 text rule was
+ * falling back to near-invisible dark-on-mid ink); genuinely light seat fills
+ * still get the dark ink.
+ */
+const GLYPH_CONTRAST = 3;
+export function accessGlyphInk(fill: string): string {
+  const white = renderedTextContrast('#ffffff', fill);
+  if (white != null && white >= GLYPH_CONTRAST) return '#ffffff';
+  const darkContrast = renderedTextContrast(DARK_BOOKABLE_LABEL_INK, fill) ?? 0;
+  const lightContrast = renderedTextContrast(LIGHT_BOOKABLE_LABEL_INK, fill) ?? 0;
+  if (darkContrast === 0 && lightContrast === 0) return '#ffffff';
+  return darkContrast >= lightContrast ? DARK_BOOKABLE_LABEL_INK : LIGHT_BOOKABLE_LABEL_INK;
+}
+
 const OPAQUE_HEX = /^#[0-9a-f]{6}$/i;
 
 /** Is a solid hex fill light enough to read as a light surface? Feedback helpers
