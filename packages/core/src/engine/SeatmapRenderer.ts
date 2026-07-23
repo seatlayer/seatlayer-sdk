@@ -74,6 +74,7 @@ import {
   bookableMarkerLabel,
   compositeHexOver,
   isBookableLabelLegibleAtScale,
+  AUTHORED_LABEL_MIN_CONTRAST,
   stateAwareBookableLabelInk,
 } from '../core/chartRenderRules';
 import { t } from '../i18n';
@@ -2895,7 +2896,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    * authored per-seat colour through the same auto-contrast rule as sections. */
   private seatLabelInk(seat: ExpandedSeat, shape: Shape): string {
     const fill = shape.fill();
-    return stateAwareBookableLabelInk(typeof fill === 'string' ? fill : '', this.seatPreferredLabelInk(seat));
+    return stateAwareBookableLabelInk(typeof fill === 'string' ? fill : '', this.seatPreferredLabelInk(seat), AUTHORED_LABEL_MIN_CONTRAST);
   }
 
   /** Apply fill/stroke/opacity for a seat's current status + selection. */
@@ -5620,6 +5621,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const ink = stateAwareBookableLabelInk(
         background,
         labelStyle?.color ?? this.theme.rowLabelColor ?? this.theme.textColor ?? '#e6e9f0',
+        AUTHORED_LABEL_MIN_CONTRAST,
       );
       const fontSize = labelStyle?.size ?? 12;
       const rotation = presentation?.rotation ?? 0;

@@ -208,9 +208,19 @@ export function compositeHexOver(
  * exposes only one preferred label token. Preserve that preference whenever it
  * passes, then deterministically choose the strongest normal-text candidate.
  */
-export function stateAwareBookableLabelInk(fill: string, preferred: string): string {
+/**
+ * Acceptance bar for AUTHORED seat-number / row-label colors (the theme
+ * swatches). These are short bold marks whose information is duplicated in
+ * tooltips/chips, so the WCAG non-text 3:1 bar applies — under the 4.5:1
+ * small-text bar a normal mid-tone category palette rejects EVERY authored
+ * color (each seat silently falls back to black/white and the control feels
+ * broken; owner-found 07-23). Auto-swap still guards anything below 3:1.
+ */
+export const AUTHORED_LABEL_MIN_CONTRAST = 3;
+
+export function stateAwareBookableLabelInk(fill: string, preferred: string, minContrast: number = SMALL_TEXT_CONTRAST): string {
   const preferredContrast = renderedTextContrast(preferred, fill);
-  if (preferredContrast != null && preferredContrast >= SMALL_TEXT_CONTRAST) return preferred;
+  if (preferredContrast != null && preferredContrast >= minContrast) return preferred;
   const darkContrast = renderedTextContrast(DARK_BOOKABLE_LABEL_INK, fill) ?? 0;
   const lightContrast = renderedTextContrast(LIGHT_BOOKABLE_LABEL_INK, fill) ?? 0;
   if (darkContrast === 0 && lightContrast === 0) return preferred;
@@ -276,6 +286,7 @@ export interface LabelInkContrastSummary {
 export function summarizeLabelInkContrast(
   preferred: string,
   backgrounds: Iterable<string>,
+  minContrast: number = SMALL_TEXT_CONTRAST,
 ): LabelInkContrastSummary {
   const preferredValid = OPAQUE_HEX.test(preferred.trim());
   const preferredHex = preferred.trim().toLowerCase();
@@ -285,7 +296,7 @@ export function summarizeLabelInkContrast(
   for (const fill of backgrounds) {
     if (!preferredValid || !OPAQUE_HEX.test(fill.trim())) continue;
     total += 1;
-    const ink = stateAwareBookableLabelInk(fill, preferred);
+    const ink = stateAwareBookableLabelInk(fill, preferred, minContrast);
     if (ink.toLowerCase() !== preferredHex) {
       overridden += 1;
       overrideInk = ink;
