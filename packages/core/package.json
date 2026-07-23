@@ -1,6 +1,6 @@
 {
   "name": "@seatlayer/core",
-  "version": "0.28.1",
+  "version": "0.28.2",
   "description": "Framework-agnostic seat-rendering engine (Konva) shared by the SeatLayer SDKs.",
   "license": "MIT",
   "homepage": "https://docs.seatlayer.io",

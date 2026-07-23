@@ -3033,7 +3033,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const accessGlyph = this.accessGlyphById.get(id);
     if (accessGlyph) {
       const fill = c.fill();
-      accessGlyph.fill(stateAwareBookableLabelInk(typeof fill === 'string' ? fill : '', '#ffffff'));
+      accessGlyph.fill(accessGlyphInk(typeof fill === 'string' ? fill : ''));
       accessGlyph.opacity(c.opacity());
       accessGlyph.visible(this.accessGlyphShouldShow(id));
     }
