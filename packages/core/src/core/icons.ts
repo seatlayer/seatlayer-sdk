@@ -101,6 +101,12 @@ export const VENUE_ICONS: VenueIcon[] = [
     path: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14 M16 16l5 5 M9 8.5a2 2 0 1 1 3 1.7c-.8.5-1 .8-1 1.8 M11 15h.01',
   },
   {
+    key: 'restrooms',
+    label: 'Restrooms',
+    group: 'facilities',
+    path: 'M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z M12 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4 M9 18v-3.5a3 3 0 0 1 6 0V18',
+  },
+  {
     key: 'charging',
     label: 'Charging point',
     group: 'facilities',
@@ -148,6 +154,18 @@ export const VENUE_ICONS: VenueIcon[] = [
     label: 'Merch / shop',
     group: 'food-drink',
     path: 'M6 8h12l-1 12H7L6 8Z M9 8V6a3 3 0 0 1 6 0v2',
+  },
+  {
+    key: 'screen',
+    label: 'Screen',
+    group: 'facilities',
+    path: 'M3 4h18v12H3V4Z M9 20h6 M12 16v4 M10 8l4 2-4 2V8Z',
+  },
+  {
+    key: 'sound-booth',
+    label: 'Sound booth',
+    group: 'facilities',
+    path: 'M6 4v16 M6 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4 M12 4v16 M12 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4 M18 4v16 M18 12a2 2 0 1 0 0 4 2 2 0 0 0 0-4',
   },
   // ---- Getting around ----------------------------------------------------
   {
@@ -200,6 +218,18 @@ export const VENUE_ICONS: VenueIcon[] = [
     path: 'M8 20a4 4 0 0 1-2-3c0-1 .5-2 .5-3a4.5 4.5 0 1 1 9 0c0 1.4-1 2-2 2.4-1.2.5-1.5 1-1.5 2.2 M17 6a5 5 0 0 1 1 6 M19.5 4a8 8 0 0 1 1.2 9',
   },
 ];
+
+/**
+ * Décor-stamp-only glyphs. Some Designer décor presets (e.g. a structural wall)
+ * are not buyer-placeable wayfinding markers, so they must NOT appear in the
+ * IconPalette / VENUE_ICONS registry — but their flyout stamp button still needs
+ * a vector preview in the same stroke language so the Décor row reads as one
+ * system (OV-82). Authored against the same 0 0 24 24 viewBox / 2-unit stroke.
+ */
+export const DECOR_STAMP_ICON_PATHS: Record<string, string> = {
+  // Running-bond brick courses — a plain structural divider.
+  wall: 'M3 5h18v14H3V5Z M3 9.7h18 M3 14.3h18 M9 5v4.7 M15 5v4.7 M6 9.7v4.6 M12 9.7v4.6 M18 9.7v4.6 M9 14.3v4.7 M15 14.3v4.7',
+};
 
 const BY_KEY = new Map<string, VenueIcon>(VENUE_ICONS.map((icon) => [icon.key, icon]));
 

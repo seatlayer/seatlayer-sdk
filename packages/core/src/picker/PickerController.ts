@@ -420,6 +420,39 @@ export class PickerController {
     return group ? this.toTableSeat(group) : null;
   }
 
+  /**
+   * Buyer-facing name + type word for a checkout line item, resolved from the
+   * SAME author overrides the tray/tooltip already render. `label` stays the
+   * booking identity; a host builds its own order summary from `displayLabel`/
+   * `displayType` so the buyer sees the designer's copy, not the internal label.
+   * Absent fields = no override (host falls back to `label`).
+   */
+  lineItemDisplay(
+    item: { label: string; objectId: string; objectType: 'seat' | 'booth' | 'ga' | 'table' },
+  ): { displayLabel?: string; displayType?: string } {
+    if (item.objectType === 'ga') {
+      const doc = this.visibleDoc();
+      const area = gaAreasOf(doc).find((candidate) => candidate.id === item.objectId);
+      return {
+        ...(area?.displayLabel ? { displayLabel: area.displayLabel } : {}),
+        ...(area?.displayType ? { displayType: area.displayType } : {}),
+      };
+    }
+    if (item.objectType === 'table') {
+      const group = this.groupedTablesByLabel.get(item.label);
+      return {
+        ...(group?.displayLabel && group.displayLabel !== group.label ? { displayLabel: group.displayLabel } : {}),
+        ...(group?.displayType ? { displayType: group.displayType } : {}),
+      };
+    }
+    const seat = this.labelToSeat.get(item.label);
+    const context = seat ? this.seatContext.get(seat.id) : undefined;
+    return {
+      ...(seat?.displayLabel ? { displayLabel: seat.displayLabel } : {}),
+      ...(context?.displayType ? { displayType: context.displayType } : {}),
+    };
+  }
+
   /** Fetch chart, build label maps, mount the renderer, seed statuses, go live. */
   async render(host: HTMLDivElement): Promise<{
     doc: ChartDoc;

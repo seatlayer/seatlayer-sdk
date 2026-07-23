@@ -62,7 +62,6 @@ import {
   type PerspectiveCamera,
 } from '../core/perspectiveProjection';
 import {
-  ACCESS_GLYPH_PATH,
   ACCESS_GLYPH_VIEWBOX,
   BOOTH_LABEL_FONT_SIZE,
   GA_CAPACITY_LABEL_FONT_SIZE,
@@ -70,6 +69,7 @@ import {
   GA_LABEL_FONT_SIZE,
   MIN_VISIBLE_BOOKABLE_LABEL_PX,
   SEAT_LABEL_FONT_SIZE,
+  accessGlyphPath,
   bookableMarkerLabel,
   compositeHexOver,
   isBookableLabelLegibleAtScale,
@@ -2723,7 +2723,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
           this.accessRingById.set(seat.id, ring);
           target.add(ring);
         }
-        if (seat.accessibility?.includes('wheelchair')) {
+        if (accessGlyphPath(seat.accessibility ?? [])) {
           const glyph = this.buildAccessGlyph(seat, typeof c.fill() === 'string' ? (c.fill() as string) : '');
           this.accessGlyphById.set(seat.id, glyph);
           target.add(glyph);
@@ -2802,7 +2802,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     return new Path({
       x: seat.x,
       y: seat.y,
-      data: ACCESS_GLYPH_PATH,
+      // Non-null: buildAccessGlyph is only called for seats the gate confirmed
+      // resolve to a primary-accommodation glyph.
+      data: accessGlyphPath(seat.accessibility ?? []) ?? '',
       offsetX: ACCESS_GLYPH_VIEWBOX / 2,
       offsetY: ACCESS_GLYPH_VIEWBOX / 2,
       scaleX: k,
@@ -5468,7 +5470,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     if (shouldCache && !this.cached) {
       this.cacheSeatLayer();
     } else if (!shouldCache && (this.cached || !this.seatLayer.listening())) {
-      if (this.cached) this.seatLayer.clearCache();
+      // Reveal live seats without Konva's deep cache wipe: releasing only the
+      // overview bitmap keeps every seat's local transform/clientRect warm, so
+      // the first melt into a section paints at ordinary pan cost (OV-80).
+      if (this.cached) this.releaseSeatLayerBitmap();
       this.seatLayer.listening(true);
       this.cached = false;
       this.seatLayer.batchDraw();
@@ -5496,6 +5501,38 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   }
 
   /**
+   * Drop the seat-layer overview bitmap while PRESERVING every descendant's
+   * cached local transform + clientRect.
+   *
+   * Konva's public `Layer.clearCache()` releases the bitmap and then runs a deep
+   * `_clearSelfAndDescendantCache()` that clears those caches on all 14k seat
+   * nodes. Recomputing them on the single frame the melt first reveals a section's
+   * live seats is the ~480ms first-drill stall (OV-80). A camera glide only marks
+   * each seat's ABSOLUTE_TRANSFORM dirty (recomputed lazily at ordinary pan cost)
+   * and never moves a seat's LOCAL transform, so the local caches stay valid —
+   * keeping them lets the first melt paint at pan cost, matching the ~17ms of
+   * every subsequent glide on the same section. Any edit that actually moves a
+   * seat invalidates its own transform cache through the attr setter, so only
+   * still-valid caches survive here.
+   */
+  private releaseSeatLayerBitmap(): void {
+    const layer = this.seatLayer as unknown as {
+      _cache: Map<
+        'canvas',
+        {
+          scene: { _canvas: HTMLCanvasElement };
+          filter: { _canvas: HTMLCanvasElement };
+          hit: { _canvas: HTMLCanvasElement };
+        }
+      >;
+    };
+    const entry = layer._cache.get('canvas');
+    if (!entry) return;
+    Konva.Util.releaseCanvas(entry.scene._canvas, entry.filter._canvas, entry.hit._canvas);
+    layer._cache.delete('canvas');
+  }
+
+  /**
    * SYNCHRONOUS repaint that bypasses requestAnimationFrame — see the
    * ISeatmapRenderer.forceDraw() contract. Chrome pauses rAF (and therefore
    * Konva's batchDraw) on hidden/backgrounded/occluded tabs, so seat-status
@@ -5519,7 +5556,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       if (this.effScale() < CACHE_THRESHOLD) {
         this.rebuildSeatCache();
       } else if (this.cached) {
-        this.seatLayer.clearCache();
+        // Same warm-cache-preserving reveal as updateLOD() (OV-80): a returning
+        // tab already on the live-seat rung keeps its seat transforms cached.
+        this.releaseSeatLayerBitmap();
         this.seatLayer.listening(true);
         this.cached = false;
       }
@@ -5637,8 +5676,8 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const screen = this.worldToScreen(seat);
       if (screen.x < -20 || screen.x > this.stage.width() + 20
         || screen.y < -20 || screen.y > this.stage.height() + 20) continue;
-      // Wheelchair places show the ♿ glyph in place of the seat number. Other
-      // accommodations retain their seat number plus their semantic ring.
+      // An accessible seat shows its accommodation glyph in place of the seat
+      // number (the glyph replaces the number), and keeps its semantic ring.
       if (this.accessGlyphById.has(seat.id) && this.accessGlyphShouldShow(seat.id)) continue;
       const shape = this.circleById.get(seat.id);
       if (!shape?.isVisible() || this.focusedSeatOpacity(seat.id, shape.getAbsoluteOpacity()) < 0.5) continue;

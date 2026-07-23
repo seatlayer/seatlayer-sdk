@@ -5,6 +5,8 @@
  * API, and MCP checks can evaluate the text that the buyer/designer will see.
  */
 
+import type { AccessibilityType } from './types';
+
 /** Seat and table-seat labels are authored at this many chart units. */
 export const SEAT_LABEL_FONT_SIZE = 7;
 
@@ -52,18 +54,101 @@ export function isBookableLabelLegibleAtScale(fontSize: number, effectiveScale: 
   return fontSize * effectiveScale >= MIN_VISIBLE_BOOKABLE_LABEL_PX;
 }
 
-/** Square viewBox the {@link ACCESS_GLYPH_PATH} coordinates live in. */
+/** Square viewBox every accessibility glyph path's coordinates live in. */
 export const ACCESS_GLYPH_VIEWBOX = 24;
+
 /**
- * Accessibility pictogram drawn centred on accessible seats — the widely
- * recognised "person" access symbol, as a single filled vector path. A vector
- * path renders crisply at small sizes on every platform, unlike the ♿ colour
- * emoji whose canvas metrics/alignment are inconsistent cross-browser. The
- * coloured ring around the seat still encodes the specific accommodation type,
- * so buyer and designer show the same marker (shared via this constant).
+ * Per-accommodation pictograms drawn centred on accessible seats. Each is a
+ * SOLID filled silhouette in the 0 0 24 24 viewBox, designed to stay legible at
+ * the ~13px it renders on a seat dot (bold shapes, no thin strokes). A vector
+ * path renders crisply at small sizes on every platform, unlike a colour emoji
+ * whose canvas metrics/alignment are inconsistent cross-browser.
+ *
+ * The owner directive (OV-89): every accessibility type must render ITS OWN
+ * meaningful glyph so a buyer *sees* what the seat provides — the coloured ring
+ * still encodes the type by colour, but the on-seat icon now matches the
+ * filter's meaning instead of every non-wheelchair type showing a bare ring.
+ *
+ * Every path below is numerically validated (bbox centred within 12±1.5, longer
+ * axis spans 14–22 units) — see scratchpad/validate-glyphs.mjs in the authoring
+ * session. Keep any edit passing that check.
  */
-export const ACCESS_GLYPH_PATH =
-  'M12 2c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm9 7h-6v13h-2v-6h-2v6H9V9H3V7h18v2z';
+export const ACCESS_TYPE_GLYPH_PATHS: Record<AccessibilityType, string> = {
+  // ISO-style wheelchair: seated figure (head + L-shaped body) over a ring wheel.
+  wheelchair:
+    'M7.8 4.5a2.2 2.2 0 1 0 4.4 0a2.2 2.2 0 1 0 -4.4 0z'
+    + 'M8 7L10.5 7L10.5 15L8 15Z'
+    + 'M8 12.5L18 12.5L18 15L8 15Z'
+    + 'M16 15L18 15L18 18L16 18Z'
+    + 'M5.5 16a5.5 5.5 0 1 0 11 0a5.5 5.5 0 1 0 -11 0z'
+    + 'M8 16a3 3 0 1 1 6 0a3 3 0 1 1 -6 0z',
+  // Companion: two overlapping head-and-shoulders figures (seat + a guest).
+  companion:
+    'M5.5 6.5a3 3 0 1 0 6 0a3 3 0 1 0 -6 0z'
+    + 'M4.5 18.5L6 11.5L11 11.5L12.5 18.5Z'
+    + 'M12.5 7.5a3 3 0 1 0 6 0a3 3 0 1 0 -6 0z'
+    + 'M11.5 19L13 12.5L18 12.5L19.5 19Z',
+  // Semi-ambulatory: walking figure leaning on a cane at its right side.
+  'semi-ambulatory':
+    'M8.3 3.8a2.2 2.2 0 1 0 4.4 0a2.2 2.2 0 1 0 -4.4 0z'
+    + 'M9 6.2L12 6.6L11 13.5L8.6 13L9 6.2Z'
+    + 'M8.6 13L11 13L9.5 21L7 21Z'
+    + 'M10.4 13L12.6 13L13.6 21L11.2 21Z'
+    + 'M11.2 7.2L14 8L14.6 9.6L11.9 8.9Z'
+    + 'M14.4 6.8L15.9 6.8L16.4 21L14.8 21Z',
+  // Hearing: a bold ear silhouette (assistive listening).
+  hearing:
+    'M15.5 3.5'
+    + 'C9 2.2 5.5 6 5.5 11.5'
+    + 'C5.5 16 8 19.5 10.5 21'
+    + 'C13.2 22.6 16.4 20.8 15.4 18'
+    + 'C14.8 16.4 12.9 16.1 13 14'
+    + 'C13.1 11.9 15.8 11.4 15.8 8.5'
+    + 'C15.8 5.4 13 4 15.5 3.5Z',
+  // CART captions: a rounded caption bubble with two bold caption bars cut out.
+  cart:
+    'M5.5 6L18.5 6a2.5 2.5 0 0 1 2.5 2.5L21 15.5a2.5 2.5 0 0 1 -2.5 2.5L11 18L7 20.5L7.5 18L5.5 18a2.5 2.5 0 0 1 -2.5 -2.5L3 8.5a2.5 2.5 0 0 1 2.5 -2.5z'
+    + 'M6.5 11L17.5 11L17.5 12.6L6.5 12.6z'
+    + 'M6.5 14L17.5 14L17.5 15.6L6.5 15.6z',
+  // Sign language: a raised open hand (palm with four fingers and a thumb).
+  'sign-language':
+    'M7 11L17 11L17 18a2 2 0 0 1 -2 2L9 20a2 2 0 0 1 -2 -2z'
+    + 'M7.6 5L9.4 5L9.4 12L7.6 12z'
+    + 'M9.9 3.5L11.7 3.5L11.7 12L9.9 12z'
+    + 'M12.3 3.5L14.1 3.5L14.1 12L12.3 12z'
+    + 'M14.6 5L16.4 5L16.4 12L14.6 12z'
+    + 'M7.2 12.5L5 10.2L6.4 8.9L8.6 11.2Z',
+  // Plus-size: a broad-shouldered wide figure.
+  'plus-size':
+    'M9.4 4.3a2.6 2.6 0 1 0 5.2 0a2.6 2.6 0 1 0 -5.2 0z'
+    + 'M5 20L4 13C4 10.5 7 9.5 12 9.5C17 9.5 20 10.5 20 13L19 20Z',
+  // Lift-up armrest: a chair side-profile with an up arrow over the armrest.
+  'lift-armrest':
+    'M5 6L8 6L8 19L5 19z'
+    + 'M5 16L18 16L18 19L5 19z'
+    + 'M8 12L17 12L17 14.5L8 14.5z'
+    + 'M14 7L16 7L16 12L14 12z'
+    + 'M12 7L18 7L15 3Z',
+};
+
+/**
+ * Legacy default access pictogram — now the ISO-style wheelchair symbol. Kept as
+ * an alias of {@link ACCESS_TYPE_GLYPH_PATHS.wheelchair} for back-compat with
+ * callers that drew a single wheelchair glyph.
+ */
+export const ACCESS_GLYPH_PATH = ACCESS_TYPE_GLYPH_PATHS.wheelchair;
+
+/**
+ * The glyph to draw for a seat's PRIMARY accommodation. Wheelchair wins whenever
+ * present (its physical provision is the headline fact); otherwise the first
+ * listed accommodation is shown. Returns null for a seat with no accommodations,
+ * so callers can skip drawing a glyph.
+ */
+export function accessGlyphPath(accessibility: AccessibilityType[]): string | null {
+  if (!accessibility?.length) return null;
+  const primary = accessibility.includes('wheelchair') ? 'wheelchair' : accessibility[0];
+  return ACCESS_TYPE_GLYPH_PATHS[primary] ?? null;
+}
 
 /**
  * Keep the public seat label as the inventory identity while rendering only
