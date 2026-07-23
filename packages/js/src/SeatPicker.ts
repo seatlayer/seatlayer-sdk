@@ -2969,7 +2969,7 @@ export class SeatPicker {
     }
     if (held) {
       try {
-        const updated = await this.controller.replaceTableQuantity(table.label, table.quantity);
+        const updated = await this.controller.replaceTableQuantity(table.label, table.quantity, this.opts.holdTtlMs);
         if (!updated) {
           this.toast('That guest count could not be secured. Your current table hold is unchanged.', 'warning');
           this.renderTableDialogState();
@@ -4308,7 +4308,8 @@ export class SeatPicker {
       button.innerHTML = '<span class="sl-ba-spin" aria-hidden="true"></span>Finding…';
     }
     try {
-      const h = await this.controller.bestAvailable(qty, categoryKey, opts);
+      // Same checkout window as a clicked selection — see the CTA's hold() call.
+      const h = await this.controller.bestAvailable(qty, categoryKey, { ...opts, ttlMs: this.opts.holdTtlMs });
       if (h) {
         this.hold = { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items };
         this.handedOff = false;

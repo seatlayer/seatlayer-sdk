@@ -139,10 +139,13 @@ export class PubApi {
     });
   }
 
-  bestAvailable(key: string, qty: number, categoryKey?: string): Promise<BestAvailableResult> {
+  // `zoneId` scopes the pick to one zone and `ttlMs` carries the host's checkout
+  // window — both are part of the route contract, and dropping either here made
+  // the SDK quietly pick venue-wide and hold for the server default instead.
+  bestAvailable(key: string, qty: number, categoryKey?: string, zoneId?: string, ttlMs?: number): Promise<BestAvailableResult> {
     return request(this.base, `/pub/events/${encodeURIComponent(key)}/best-available`, {
       method: 'POST',
-      body: { qty, ...(categoryKey ? { categoryKey } : {}) },
+      body: { qty, ...(categoryKey ? { categoryKey } : {}), ...(zoneId ? { zoneId } : {}), ...(ttlMs ? { ttlMs } : {}) },
     });
   }
 

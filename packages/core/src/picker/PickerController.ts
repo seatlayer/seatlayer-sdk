@@ -202,7 +202,7 @@ export interface PickerTransport {
   }>;
   objects(key: string): Promise<{ seats: Record<string, string>; hidden?: string[]; closed?: string[] }>;
   hold(key: string, selections: HoldSelectionRequest[], ttlMs?: number, replaceHoldId?: string): Promise<HoldResponse>;
-  bestAvailable(key: string, qty: number, categoryKey?: string, zoneId?: string): Promise<BestAvailableResponse>;
+  bestAvailable(key: string, qty: number, categoryKey?: string, zoneId?: string, ttlMs?: number): Promise<BestAvailableResponse>;
   release(key: string, labels: string[], holdId: string): Promise<unknown>;
   /** Optional capability-style lookup used to restore an active browser hold. */
   resume?(key: string, holdId: string): Promise<ResumeHoldResponse>;
@@ -730,8 +730,12 @@ export class PickerController {
     return true;
   }
 
-  /** Atomically replace an active variable-table hold with a new guest count. */
-  async replaceTableQuantity(label: string, quantity: number): Promise<HoldInfo | null> {
+  /**
+   * Atomically replace an active variable-table hold with a new guest count.
+   * `ttlMs` keeps the host's checkout window across the replacement — without it
+   * a guest-count change silently re-based the countdown on the server default.
+   */
+  async replaceTableQuantity(label: string, quantity: number, ttlMs?: number): Promise<HoldInfo | null> {
     const table = this.groupedTablesByLabel.get(label);
     const hold = this.hold_;
     if (!table || table.mode !== 'variable' || !hold?.labels.includes(label)) return null;
@@ -750,7 +754,7 @@ export class PickerController {
       quantity: item.label === label ? q : item.quantity,
     }));
     if (!selections.some((item) => item.label === label)) return null;
-    const result = await this.api.hold(this.key, selections, undefined, hold.holdId);
+    const result = await this.api.hold(this.key, selections, ttlMs, hold.holdId);
     this.tableQuantities.set(label, q);
     this.setHold({
       holdId: result.holdId,
@@ -1071,11 +1075,15 @@ export class PickerController {
    * failure. With `preferPremium`, first tries to hold the best PREMIUM block
    * locally; when none matches the requested quantity it falls back to the
    * normal server pick (the widget surfaces a subtle note on that fallback).
+   *
+   * `ttlMs` is the host's checkout window and MUST reach both branches: a hold
+   * born here is the same buyer commitment as one made by clicking seats, so
+   * omitting it silently handed the buyer the server default instead.
    */
   async bestAvailable(
     qty: number,
     categoryKey?: string,
-    opts: { preferPremium?: boolean; zoneId?: string } = {},
+    opts: { preferPremium?: boolean; zoneId?: string; ttlMs?: number } = {},
   ): Promise<HoldInfo | null> {
     const r = this.renderer;
     if (!r) return null;
@@ -1090,7 +1098,7 @@ export class PickerController {
             const resolved = seat ? this.toSeat(seat) : null;
             return { label, ...(resolved?.tierId ? { tierId: resolved.tierId } : {}) };
           });
-          const result = await this.api.hold(this.key, selection);
+          const result = await this.api.hold(this.key, selection, opts.ttlMs);
           r.clearSelection();
           const ids = this.idsForLabels(block);
           if (ids.length) r.setStatus(ids, 'held');
@@ -1116,7 +1124,7 @@ export class PickerController {
     // Drop any prior auto-hold first.
     if (this.hold_ && !(await this.release())) return null;
     try {
-      const result = await this.api.bestAvailable(this.key, qty, categoryKey, opts.zoneId);
+      const result = await this.api.bestAvailable(this.key, qty, categoryKey, opts.zoneId, opts.ttlMs);
       r.clearSelection();
       const ids = this.idsForLabels(result.labels);
       if (ids.length) r.setStatus(ids, 'held');
@@ -1141,8 +1149,10 @@ export class PickerController {
    * cart can hold best-available seats that aren't in the renderer selection);
    * defaults to the renderer selection. Reuses an existing exact-match hold, else
    * holds first. Returns the labels booked, or null on failure (conflicts painted).
+   * `ttlMs` only matters on the hold-first path: if the book call then fails, the
+   * seats sit held for the host's window rather than the longer server default.
    */
-  async book(bookingRef: string, labelsArg?: string[]): Promise<string[] | null> {
+  async book(bookingRef: string, labelsArg?: string[], ttlMs?: number): Promise<string[] | null> {
     const r = this.renderer;
     if (!r) return null;
     if (!this.api.book) throw new Error('picker: transport has no book() — hold-only mode');
@@ -1166,7 +1176,7 @@ export class PickerController {
               ...this.tableQuantityRequest(resolved),
             };
           }),
-          undefined,
+          ttlMs,
           replaceHoldId,
         );
         holdId = h.holdId;

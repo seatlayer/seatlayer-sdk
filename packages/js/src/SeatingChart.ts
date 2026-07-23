@@ -400,10 +400,18 @@ export class SeatingChart {
     return h ? { holdId: h.holdId, expiresAt: h.expiresAt, seats: h.seats, items: h.items } : null;
   }
 
-  /** Ask the server for the `qty` best free seats and hold them atomically. */
-  async bestAvailable(qty: number, categoryKey?: string): Promise<BestAvailableResult | null> {
+  /**
+   * Ask the server for the `qty` best free seats and hold them atomically.
+   * `options.ttlMs` sets the checkout window exactly like {@link hold}; omit it
+   * and the server falls back to the event setting, then its own default.
+   */
+  async bestAvailable(
+    qty: number,
+    categoryKey?: string,
+    options: { zoneId?: string; preferPremium?: boolean; ttlMs?: number } = {},
+  ): Promise<BestAvailableResult | null> {
     try {
-      return await this.bestAvailableOrThrow(qty, categoryKey);
+      return await this.bestAvailableOrThrow(qty, categoryKey, options);
     } catch (err) {
       this.opts.onError?.(err);
       return null;
@@ -411,8 +419,12 @@ export class SeatingChart {
   }
 
   /** @internal Throwing variant of {@link bestAvailable} for the native host adapter. See {@link holdOrThrow}. */
-  async bestAvailableOrThrow(qty: number, categoryKey?: string): Promise<BestAvailableResult | null> {
-    const h = await this.controller.bestAvailable(qty, categoryKey);
+  async bestAvailableOrThrow(
+    qty: number,
+    categoryKey?: string,
+    options: { zoneId?: string; preferPremium?: boolean; ttlMs?: number } = {},
+  ): Promise<BestAvailableResult | null> {
+    const h = await this.controller.bestAvailable(qty, categoryKey, options);
     return h ? { holdId: h.holdId, expiresAt: h.expiresAt, labels: h.labels, seats: h.seats, items: h.items } : null;
   }
 
