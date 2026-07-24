@@ -229,6 +229,37 @@ export function mountVenue3D(
     orbit.camera.updateProjectionMatrix();
   };
 
+  // --- arrival chip: the flight HOLDS in the live scene; the painted 360 is
+  // an explicit tap away. (Owner call 2026-07-24: the real scene at the seat
+  // IS the payoff; the generated panorama undersold it as an auto-landing.)
+  let arriveChip: HTMLButtonElement | null = null;
+  const removeArriveChip = (): void => {
+    arriveChip?.remove();
+    arriveChip = null;
+  };
+  const showArriveChip = (seatId: string, gen: number): void => {
+    removeArriveChip();
+    if (disposed || !opts.getSeatView) return; // no 360 source → nothing to offer
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.textContent = '◉ View in 360°';
+    chip.setAttribute('aria-label', `Open the 360° view from seat ${seatId}`);
+    Object.assign(chip.style, {
+      position: 'absolute', left: '50%', bottom: '18px', transform: 'translateX(-50%)',
+      minHeight: '44px', padding: '10px 18px', borderRadius: '999px',
+      background: 'rgba(12,18,32,0.78)', color: '#eef1f8',
+      border: '1px solid rgba(150,165,205,0.4)', backdropFilter: 'blur(6px)',
+      font: '600 13px/1 inherit', cursor: 'pointer', zIndex: '4',
+    } as Partial<CSSStyleDeclaration>);
+    chip.addEventListener('click', () => {
+      if (disposed || gen !== flightGen) { removeArriveChip(); return; }
+      removeArriveChip();
+      void openPanorama(seatId, 400, gen);
+    });
+    container.appendChild(chip);
+    arriveChip = chip;
+  };
+
   const openPanorama = async (seatId: string, fadeMs: number, gen: number): Promise<void> => {
     const viewPromise = ensureSeatView(seatId);
     if (!viewPromise) { orbit.syncFromCamera(); return; } // no panorama source
@@ -247,6 +278,7 @@ export function mountVenue3D(
     // touching frozen/loop — the newer flight owns the freeze state now, and
     // mounting this stale seat's panorama would be wrong.
     if (disposed || gen !== flightGen) return;
+    removeArriveChip();
     panorama = mountPanorama(container, view, {
       fadeMs,
       seatLabel: seatId,
@@ -256,6 +288,8 @@ export function mountVenue3D(
         analytics.panoramaClosed();
         orbit.resumeAfterFlight(model.focalWorld);
         loop.requestRender();
+        // Back in the live scene at the seat — offer the 360 again.
+        showArriveChip(seatId, flightGen);
       },
     });
     analytics.panoramaOpened();
@@ -279,17 +313,20 @@ export function mountVenue3D(
     frozen = false;
 
     const gen = ++flightGen;
+    removeArriveChip();
     const seatEye = seatEyeWorld(idx);
     const focal = model.focalWorld;
     const start: Vec3Arr = [orbit.camera.position.x, orbit.camera.position.y, orbit.camera.position.z];
     const { waypoints, finalPos } = buildWaypoints(start, seatEye, focal, model.bounds.center, model.bounds.radius);
 
     if (reducedMotion()) {
-      // a11y: no flight — snap to the seat pose, short dissolve to the panorama.
+      // a11y: no flight — snap straight to the seat pose in the live scene.
       placeCameraFinal(finalPos, focal);
       loop.requestRender();
       analytics.cinematicSkipped();
-      return openPanorama(seatId, 300, gen).then(() => { if (!disposed) orbit.syncFromCamera(); });
+      if (!disposed) orbit.syncFromCamera();
+      showArriveChip(seatId, gen);
+      return Promise.resolve();
     }
 
     const startQuat = new Quat().copy(orbit.camera.quaternion);
@@ -298,7 +335,12 @@ export function mountVenue3D(
     return cinematic.start(waypoints, startQuat, endQuat).then(() => {
       if (disposed || gen !== flightGen) return; // disposed or superseded (retarget/cancel)
       analytics.cinematicPlayed(FLIGHT_DURATION_MS);
-      return openPanorama(seatId, 400, gen);
+      // Arrive and HOLD in the live 3D scene — sitting in the crowd, looking at
+      // the show, still free to orbit. The painted 360 is the chip, not the
+      // landing: the real scene is the payoff moment.
+      orbit.resumeAfterFlight(model.focalWorld);
+      loop.requestRender();
+      showArriveChip(seatId, gen);
     });
   };
 
@@ -374,6 +416,7 @@ export function mountVenue3D(
     },
     dispose() {
       disposed = true;
+      removeArriveChip();
       cancelFlight();
       loop.stop();
       ro?.disconnect();
