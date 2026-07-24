@@ -908,6 +908,7 @@ const CSS = `
 .sl-view3d{position:absolute;inset:0;z-index:4;opacity:0;touch-action:none;
   transition:opacity .3s ease;background:radial-gradient(120% 120% at 50% 0%,#191f28 0%,#0d1014 70%)}
 .sl-view3d canvas{display:block;width:100%;height:100%}
+[data-view3d=on] .sl-chips,[data-view3d=on] .sl-rungs{display:none}
 .sl-view3d-back{position:absolute;top:12px;left:12px;z-index:2;display:inline-flex;align-items:center;gap:6px;
   padding:7px 13px 7px 9px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.03em;
   color:#e6edf3;background:rgba(10,14,20,.62);border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(6px)}
