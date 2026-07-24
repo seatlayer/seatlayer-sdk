@@ -4596,7 +4596,22 @@ export class SeatPicker {
       if (gen !== this.view3dGen || this.buyerView !== 'venue3d' || this.view3dEl !== overlay) return;
       const handle = mod.mountVenue3D(overlay, { doc, seats }, {
         onSeatPick: (id) => this.onView3dSeatPick(id),
-        getSeatView: (id) => this.seatViewFor3d(id) ?? { url: '' },
+        // Deferred off the tap gesture: generateSeatPanorama walks every seat
+        // (O(n) on a 13k chart), and the module prefetches at pick — by the
+        // time the flight lands (~2.5s) the idle render has long finished. A
+        // null view REJECTS so the module's no-panorama path keeps the buyer
+        // in orbit instead of dissolving into an empty overlay.
+        getSeatView: (id) =>
+          new Promise((resolve, reject) => {
+            const run = () => {
+              const view = this.seatViewFor3d(id);
+              if (view) resolve(view);
+              else reject(new Error('seat_view_unavailable'));
+            };
+            const ric = (globalThis as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
+            if (typeof ric === 'function') ric(run, { timeout: 1500 });
+            else setTimeout(run, 50);
+          }),
         onAnalytics: (event, props) => this.emit3dAnalytics(event, props),
       });
       this.view3dHandle = handle;

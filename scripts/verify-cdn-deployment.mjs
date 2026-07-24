@@ -45,7 +45,7 @@ async function verifyPinned() {
   if (JSON.stringify(remoteManifest) !== JSON.stringify(localManifest)) {
     throw new Error(`${pinnedRoot}/release.json differs from the local release manifest`);
   }
-  for (const name of ['seatlayer.js', 'seatlayer.mjs']) {
+  for (const name of ['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs']) {
     const bytes = Buffer.from(await (await get(`${pinnedRoot}/${name}`)).arrayBuffer());
     if (sha256(bytes) !== localManifest.files[name].sha256) {
       throw new Error(`${pinnedRoot}/${name} sha256 mismatch`);
@@ -66,7 +66,7 @@ async function verifyAlias() {
   if (!index.versions?.includes(version)) {
     throw new Error(`/-/versions.json does not list ${version}`);
   }
-  for (const name of ['seatlayer.js', 'seatlayer.mjs']) {
+  for (const name of ['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs']) {
     const url = `${origin}/seatlayer-js@${major}/${name}?__seatlayer_verify=${Date.now()}`;
     const response = await fetch(url, { redirect: 'manual', headers: { 'Cache-Control': 'no-cache' } });
     if (response.status !== 302) {
