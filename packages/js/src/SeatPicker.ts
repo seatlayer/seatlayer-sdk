@@ -3394,7 +3394,14 @@ export class SeatPicker {
     const VFOV_DEG = 70;
     const MAX_PITCH_DEG = 35;
     let zoom = 1;
-    let posX = 0;
+    // The generator draws the STAGE at the image's horizontal centre (yaw 0 =
+    // stage). Open with that centre in the middle of the viewport — a view
+    // that opens facing away from the stage is disorienting (seat 11G-21
+    // owner report). Same default is right for uploaded 360s until Case-1
+    // calibration exists. bgW = 2·bgH (2:1 equirect), zoom 1 at open.
+    const vh0 = pano.clientHeight || 1;
+    const vw0 = pano.clientWidth || 1;
+    let posX = -(vh0 * (180 / VFOV_DEG) * 2 / 2 - vw0 / 2);
     let posY = 0;
     const apply = (): void => {
       const h = pano.clientHeight || 1;
