@@ -4508,12 +4508,43 @@ export class SeatPicker {
     return this.buyerView;
   }
 
-  /** Toggle between the flat Map and the 3D venue view. No-op when unchanged or
-   *  when 3D is unavailable. */
-  setBuyerView(view: 'map' | 'venue3d'): void {
-    if (view === this.buyerView) return;
-    if (view === 'venue3d') void this.enter3d();
-    else this.exit3d();
+  /**
+   * Switch between the flat seat **Map** and the interactive **3D venue** view —
+   * the same control the buyer's on-widget `Map | 3D` toggle drives.
+   *
+   * Entering `'venue3d'` with `opts.flyToSeatId` runs the full cinematic tour:
+   * the widget enters 3D and auto-flies the camera to that seat, dissolving into
+   * its view-from-seat panorama (the same chain as tapping "See the view from
+   * here" on a seat's confirm card). When the widget is **already** in the 3D
+   * view, the camera simply flies to the requested seat — the GL scene is not
+   * torn down or rebuilt, so there is no flash or re-entry.
+   *
+   * No-op when the view is unchanged and no `flyToSeatId` is given, or when 3D is
+   * unavailable for this chart.
+   *
+   * @param view              `'map'` for the flat picker, `'venue3d'` for the 3D venue.
+   * @param opts.flyToSeatId  When entering (or already in) `'venue3d'`, the seat
+   *                          id to fly the camera to — cinematic → panorama.
+   *                          Ignored when `view` is `'map'`.
+   *
+   * @example
+   * // Public 3D tour entry — enter 3D and fly straight to the buyer's seat:
+   * picker.setBuyerView('venue3d', { flyToSeatId: 'A-12' });
+   */
+  setBuyerView(view: 'map' | 'venue3d', opts?: { flyToSeatId?: string }): void {
+    if (view === 'map') {
+      this.exit3d();
+      return;
+    }
+    const flyToSeatId = opts?.flyToSeatId;
+    if (this.buyerView === 'venue3d') {
+      // Already immersed — just fly the cinematic to the requested seat (if any),
+      // without a jarring teardown/rebuild of the GL scene.
+      if (flyToSeatId) void this.view3dHandle?.flyToSeat(flyToSeatId);
+      return;
+    }
+    // Enter 3D; when a seat is given, the cinematic flies straight to it.
+    void this.enter3d(flyToSeatId);
   }
 
   /** SeatStatus → the view3d palette state. Selection is layered separately. */
