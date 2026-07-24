@@ -142,7 +142,7 @@ export class OrbitCamera {
    * then the damped `update()` eases it up into the 3/4 architectural angle and
    * dollies in — the venue "stands up" instead of teleporting (~600ms).
    */
-  frame(bounds: OrbitBounds, intro = false): void {
+  frame(bounds: OrbitBounds, intro = false, stageAzimuth?: number): void {
     this.target.set(bounds.center[0], bounds.center[1], bounds.center[2]);
     const r = Math.max(1, bounds.radius);
     // Aspect-aware fit: the bounds sphere must clear BOTH the vertical and the
@@ -153,7 +153,11 @@ export class OrbitCamera {
     const aspect = this.camera.aspect || 1;
     const halfH = Math.atan(Math.tan(halfV) * aspect);
     const fit = Math.max(r / Math.tan(halfV), r / Math.tan(halfH));
-    this.azT = -30 * DEG;
+    // Enter from the STAGE side when the caller knows where the stage is: the
+    // camera stands behind the stage looking into the bowl, so every tier faces
+    // you on arrival. A fixed azimuth made the entry view a coin flip — charts
+    // oriented the other way opened staring at the back of the shell.
+    this.azT = stageAzimuth ?? -30 * DEG;
     this.polT = 55 * DEG;
     this.distT = fit * FRAME_MARGIN;
     // Low min so you can swoop down close enough that seat dots are big, tappable
@@ -174,6 +178,25 @@ export class OrbitCamera {
 
   setAspect(aspect: number): void {
     this.camera.perspective({ aspect });
+  }
+
+  /**
+   * Damped return to the framed overview from wherever the camera is now (a
+   * seat, behind the shell, anywhere): re-pivot on the venue centre without
+   * moving the camera, then glide targets back to the 3/4 architectural pose.
+   */
+  frameSoft(bounds: OrbitBounds, stageAzimuth?: number): void {
+    this.target.set(bounds.center[0], bounds.center[1], bounds.center[2]);
+    this.syncFromCamera(); // re-derive pose around the new pivot — no snap
+    this.camera.perspective({ fov: this.fovY, aspect: this.camera.aspect });
+    const r = Math.max(1, bounds.radius);
+    const halfV = (this.fovY * DEG) / 2;
+    const aspect = this.camera.aspect || 1;
+    const halfH = Math.atan(Math.tan(halfV) * aspect);
+    const fit = Math.max(r / Math.tan(halfV), r / Math.tan(halfH));
+    this.azT = stageAzimuth ?? this.azimuth;
+    this.polT = 55 * DEG;
+    this.distT = fit * FRAME_MARGIN;
   }
 
   /** Damp toward targets; returns true while still moving. */

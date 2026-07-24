@@ -151,7 +151,15 @@ export function mountVenue3D(
   // setAspect BEFORE frame so the fit clears the horizontal FOV too (centred with
   // margin on a wide designer canvas rather than parked low-left).
   orbit.setAspect(glctx.aspect);
-  orbit.frame(model.bounds, true);
+  // Enter from the stage side (camera behind the stage, every tier facing you).
+  // When the focal sits at the centre (in-the-round) there is no stage side —
+  // fall back to the fixed architectural angle.
+  const stageAzimuth = ((): number | undefined => {
+    const dx = model.focalWorld[0] - model.bounds.center[0];
+    const dz = model.focalWorld[2] - model.bounds.center[2];
+    return Math.hypot(dx, dz) > model.bounds.radius * 0.12 ? Math.atan2(dx, dz) : undefined;
+  })();
+  orbit.frame(model.bounds, true, stageAzimuth);
 
   const cinematic = new Cinematic(orbit.camera);
 
@@ -259,6 +267,29 @@ export function mountVenue3D(
     container.appendChild(chip);
     arriveChip = chip;
   };
+
+  // --- overview chip: always-available "take me home" control. Free orbit can
+  // strand you behind the shell staring at walls; one tap glides back to the
+  // stage-side 3/4 framing. (Owner: "we don't have much control in 3D".)
+  const overviewChip = document.createElement('button');
+  overviewChip.type = 'button';
+  overviewChip.textContent = '⌂ Overview';
+  overviewChip.setAttribute('aria-label', 'Return to the venue overview');
+  Object.assign(overviewChip.style, {
+    position: 'absolute', right: '14px', bottom: '18px',
+    minHeight: '40px', padding: '8px 14px', borderRadius: '999px',
+    background: 'rgba(12,18,32,0.72)', color: '#c9d4ea',
+    border: '1px solid rgba(150,165,205,0.35)', backdropFilter: 'blur(6px)',
+    font: '600 12.5px/1 inherit', cursor: 'pointer', zIndex: '4',
+  } as Partial<CSSStyleDeclaration>);
+  overviewChip.addEventListener('click', () => {
+    if (disposed || frozen) return; // panorama owns the screen while frozen
+    cancelFlight();
+    removeArriveChip();
+    orbit.frameSoft(model.bounds, stageAzimuth);
+    loop.requestRender();
+  });
+  container.appendChild(overviewChip);
 
   const openPanorama = async (seatId: string, fadeMs: number, gen: number): Promise<void> => {
     const viewPromise = ensureSeatView(seatId);
@@ -417,6 +448,7 @@ export function mountVenue3D(
     dispose() {
       disposed = true;
       removeArriveChip();
+      overviewChip.remove();
       cancelFlight();
       loop.stop();
       ro?.disconnect();
