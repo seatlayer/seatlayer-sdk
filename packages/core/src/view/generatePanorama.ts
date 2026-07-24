@@ -391,6 +391,8 @@ interface SeatedOpts {
   shoulderK: number; // shoulder half-width in head-radii
   hair: number;
   rim: number; // 0..1 warm rim strength on head/shoulder crown
+  turn: number; // head yaw offset in head-radii (−0.12..0.12) — neighbours chat
+  lean: number; // shoulder asymmetry in head-radii (one side rides higher)
 }
 
 /**
@@ -411,15 +413,17 @@ function drawSeated(ctx: CanvasRenderingContext2D, hx: number, hy: number, r: nu
   ctx.translate(hx, hy);
 
   // shoulders + torso (clothing tone) — trapezius slope from neck to shoulder,
-  // then upper-arm drop.
+  // then upper-arm drop. Lean lifts one shoulder and drops the other so close
+  // figures don't sit in a perfectly level row.
+  const leanPx = o.lean * r;
   ctx.fillStyle = clo;
   ctx.beginPath();
   ctx.moveTo(-neckHalf, neckTopY);
-  ctx.quadraticCurveTo(-neckHalf * 1.18, shoulderY - r * 0.6, -shHalf, shoulderY);
+  ctx.quadraticCurveTo(-neckHalf * 1.18, shoulderY - leanPx - r * 0.6, -shHalf, shoulderY - leanPx);
   ctx.quadraticCurveTo(-shHalf * 1.05, shoulderY + r * 1.2, -shHalf * 0.94, botY);
   ctx.lineTo(shHalf * 0.94, botY);
-  ctx.quadraticCurveTo(shHalf * 1.05, shoulderY + r * 1.2, shHalf, shoulderY);
-  ctx.quadraticCurveTo(neckHalf * 1.18, shoulderY - r * 0.6, neckHalf, neckTopY);
+  ctx.quadraticCurveTo(shHalf * 1.05, shoulderY + r * 1.2, shHalf, shoulderY + leanPx);
+  ctx.quadraticCurveTo(neckHalf * 1.18, shoulderY + leanPx - r * 0.6, neckHalf, neckTopY);
   ctx.closePath();
   ctx.fill();
 
@@ -427,13 +431,36 @@ function drawSeated(ctx: CanvasRenderingContext2D, hx: number, hy: number, r: nu
   ctx.fillStyle = skin;
   ctx.fillRect(-neckHalf * 0.82, r * 0.5, neckHalf * 1.64, r * 0.9);
 
-  // head + hair, with a small tilt.
+  // head + hair, with a small tilt and a seeded turn (heads angled toward a
+  // neighbour, not all facing dead ahead).
   ctx.save();
   ctx.rotate(o.tilt);
+  ctx.translate(o.turn * r, 0);
   ctx.fillStyle = skin;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, r * 0.9, r * 1.06, 0, 0, TAU);
-  ctx.fill();
+  if (r >= 18) {
+    // Close-up head: a cranium-to-jaw egg, not a balloon — full crown up top,
+    // cheeks tapering through the jaw to a narrower chin.
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.9, -r * 0.15);
+    ctx.quadraticCurveTo(-r * 0.96, -r * 1.12, 0, -r * 1.06);
+    ctx.quadraticCurveTo(r * 0.96, -r * 1.12, r * 0.9, -r * 0.15);
+    ctx.quadraticCurveTo(r * 0.86, r * 0.55, r * 0.36, r * 0.98);
+    ctx.quadraticCurveTo(0, r * 1.14, -r * 0.36, r * 0.98);
+    ctx.quadraticCurveTo(-r * 0.86, r * 0.55, -r * 0.9, -r * 0.15);
+    ctx.closePath();
+    ctx.fill();
+    // ear hints — small lobes just below the head's widest line.
+    if (r >= 22) {
+      ctx.beginPath();
+      ctx.ellipse(-r * 0.9, r * 0.18, r * 0.13, r * 0.22, 0, 0, TAU);
+      ctx.ellipse(r * 0.9, r * 0.18, r * 0.13, r * 0.22, 0, 0, TAU);
+      ctx.fill();
+    }
+  } else {
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 0.9, r * 1.06, 0, 0, TAU);
+    ctx.fill();
+  }
   drawHair(ctx, r, o.hair);
   // warm rim catching the stage light on the crown + a shoulder edge.
   if (o.rim > 0.01) {
@@ -457,19 +484,22 @@ function drawSeated(ctx: CanvasRenderingContext2D, hx: number, hy: number, r: nu
   ctx.restore();
 }
 
-/** Cheap head+shoulders for the mid LOD band — an oval head over a soft shoulder cap. */
+/** Cheap head+shoulders for the mid LOD band — a defined trapezius slope with a
+ *  visible neck notch (the near-LOD silhouette language, two curves cheaper). */
 function drawSeatedMid(ctx: CanvasRenderingContext2D, hx: number, hy: number, r: number, clothing: RGB, tone: RGB, alpha: number): void {
   ctx.fillStyle = `rgba(${clothing[0]},${clothing[1]},${clothing[2]},${alpha})`;
   ctx.beginPath();
-  ctx.moveTo(hx - r * 1.9, hy + r * 4);
-  ctx.quadraticCurveTo(hx - r * 1.95, hy + r * 1.2, hx - r * 0.5, hy + r * 0.9);
-  ctx.quadraticCurveTo(hx, hy + r * 0.4, hx + r * 0.5, hy + r * 0.9);
-  ctx.quadraticCurveTo(hx + r * 1.95, hy + r * 1.2, hx + r * 1.9, hy + r * 4);
+  ctx.moveTo(hx - r * 1.72, hy + r * 4);
+  ctx.quadraticCurveTo(hx - r * 1.78, hy + r * 1.55, hx - r * 0.46, hy + r * 1.02);
+  ctx.lineTo(hx - r * 0.4, hy + r * 0.62); // neck notch, left
+  ctx.lineTo(hx + r * 0.4, hy + r * 0.62); // neck notch, right
+  ctx.lineTo(hx + r * 0.46, hy + r * 1.02);
+  ctx.quadraticCurveTo(hx + r * 1.78, hy + r * 1.55, hx + r * 1.72, hy + r * 4);
   ctx.closePath();
   ctx.fill();
   ctx.fillStyle = `rgba(${tone[0]},${tone[1]},${tone[2]},${alpha})`;
   ctx.beginPath();
-  ctx.ellipse(hx, hy, r * 0.92, r * 1.05, 0, 0, TAU);
+  ctx.ellipse(hx, hy, r * 0.9, r * 1.05, 0, 0, TAU);
   ctx.fill();
 }
 
@@ -950,6 +980,27 @@ function drawArenaScene(
   ctx.fillStyle = riser;
   ctx.fillRect(cx - halfW, topCy, halfW * 2, yBase - topCy);
 
+  // Compose the ensemble BEFORE painting the deck so the lighting can key onto
+  // the lead performer instead of blooming dead-centre. Deck-local coords:
+  // u across (−1..1, screen x), v depth (−1 far edge .. +1 near edge). The old
+  // even line-up at exact centre read static — a real in-the-round act stands
+  // in an asymmetric cluster with the frontman worked toward one side.
+  interface PerfSpot { u: number; v: number; lead?: boolean; pose: number }
+  const FORMATIONS: PerfSpot[][] = [
+    // frontman + guitarist + one at the back
+    [{ u: -0.24, v: 0.4, lead: true, pose: 3 }, { u: 0.34, v: -0.04, pose: 2 }, { u: -0.52, v: -0.38, pose: 0 }],
+    // duo — singer forward, instrument behind the shoulder
+    [{ u: 0.2, v: 0.34, lead: true, pose: 3 }, { u: -0.3, v: -0.08, pose: 2 }],
+    // 4-piece — lead just off-centre, band staggered around the far half
+    [{ u: -0.1, v: 0.28, lead: true, pose: 1 }, { u: 0.44, v: -0.2, pose: 2 }, { u: -0.46, v: -0.14, pose: 2 }, { u: 0.08, v: -0.46, pose: 0 }],
+  ];
+  const form = FORMATIONS[Math.floor(rand() * FORMATIONS.length)];
+  const mirror = rand() < 0.5 ? -1 : 1; // seeded side, so venues differ
+  const spotX = (p: PerfSpot) => cx + p.u * mirror * halfW * 0.84;
+  const spotY = (p: PerfSpot) => topCy + p.v * topRy * 0.8;
+  const lead = form.find((p) => p.lead) ?? form[0];
+  const leadX = spotX(lead);
+
   // Deck top face — a lit elliptical platform.
   const deckTop = ctx.createLinearGradient(0, topCy - topRy, 0, topCy + topRy);
   deckTop.addColorStop(0, '#2b3350');
@@ -958,9 +1009,9 @@ function drawArenaScene(
   ctx.beginPath();
   ctx.ellipse(cx, topCy, halfW, topRy, 0, 0, TAU);
   ctx.fill();
-  // warm centre bloom on the deck.
-  const deckGlow = ctx.createRadialGradient(cx, topCy, 2, cx, topCy, halfW);
-  deckGlow.addColorStop(0, `rgba(255,214,160,${(0.28 * nearGlow).toFixed(3)})`);
+  // warm bloom on the deck, centred under the LEAD, not the geometric middle.
+  const deckGlow = ctx.createRadialGradient(leadX, topCy, 2, leadX, topCy, halfW);
+  deckGlow.addColorStop(0, `rgba(255,214,160,${(0.3 * nearGlow).toFixed(3)})`);
   deckGlow.addColorStop(1, 'rgba(255,214,160,0)');
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -976,19 +1027,43 @@ function drawArenaScene(
   ctx.ellipse(cx, topCy, halfW, topRy, 0, 0, TAU);
   ctx.stroke();
 
-  // Performers standing on the deck.
-  const perfCount = 2 + Math.floor(rand() * 3);
+  // Backline gear on the far half of the deck (amps/risers + a drum hint for
+  // bigger acts) — silhouette furniture so the disc doesn't float empty.
   const perfH = Math.max(24, (yBase - yFarTop) * 1.3);
-  for (let i = 0; i < perfCount; i++) {
-    const t = perfCount === 1 ? 0.5 : i / (perfCount - 1);
-    const px = cx + (t - 0.5) * 2 * halfW * 0.66;
-    const footY = topCy + topRy * 0.5 * Math.cos((t - 0.5) * Math.PI) - topRy * 0.1;
-    drawPerformer(ctx, px, footY, perfH * (0.85 + rand() * 0.3), {
+  const gearN = form.length >= 3 ? 3 : 2;
+  for (let i = 0; i < gearN; i++) {
+    const gu = (-0.62 + i * 0.52 + (rand() - 0.5) * 0.12) * -mirror;
+    const gx = cx + gu * halfW * 0.7;
+    const gy = topCy - topRy * (0.45 + rand() * 0.18);
+    const gw = halfW * (0.07 + rand() * 0.04);
+    const gh = perfH * (0.26 + rand() * 0.12);
+    ctx.fillStyle = '#0a0e18';
+    ctx.fillRect(gx - gw / 2, gy - gh, gw, gh);
+    ctx.fillStyle = `rgba(${rigTintStr},0.3)`;
+    ctx.fillRect(gx - gw / 2, gy - gh, gw, 1.5);
+  }
+  if (form.length >= 3) {
+    // drum-kit hint: a low wide disc behind the ensemble's empty quarter.
+    const drumX = cx - lead.u * mirror * halfW * 0.4;
+    ctx.fillStyle = '#0b0f1a';
+    ctx.beginPath();
+    ctx.ellipse(drumX, topCy - topRy * 0.34, halfW * 0.08, topRy * 0.1, 0, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(${rigTintStr},0.35)`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Performers, far → near so the near ones occlude; height foreshortens with
+  // deck depth (far-side figures smaller, higher on the ellipse).
+  for (const p of [...form].sort((a, b) => a.v - b.v)) {
+    const depthScale = 0.82 + (p.v + 1) * 0.14; // −1..1 → 0.82..1.1
+    drawPerformer(ctx, spotX(p), spotY(p), perfH * depthScale * (p.lead ? 1.06 : 0.92), {
       tone: [10, 12, 20],
       alpha: 0.92,
-      pose: Math.floor(rand() * 4),
+      pose: p.pose,
       rim: hslToRgb(40, 0.6, 0.72),
-      rimStrength: 0.8,
+      rimStrength: p.lead ? 1 : 0.65,
     });
   }
 
@@ -1012,6 +1087,10 @@ function drawArenaScene(
     }
     drawFixture(ctx, fxX, fxY, 2.2, rigTintStr);
   }
+  // Key light: one stronger, tighter beam pinned on the lead — the eye lands
+  // where the show is, which is what was missing from the dead-centre wash.
+  const keyX = cx + Math.sign(leadX - cx || 1) * halfW * 0.5;
+  drawBeam(ctx, keyX, trussY - trussRy * 0.4, leadX, spotY(lead), 2.5, halfW * 0.16, '255,224,178', 0.3 * (0.7 + nearGlow * 0.4));
 }
 
 /**
@@ -1169,7 +1248,7 @@ function drawAudience(
     const oy = other.y - seat.y;
     const d = Math.hypot(ox, oy) * UNIT;
     if (own && other.sectionId === own && d < 3 && ox * dx + oy * dy > 0) seatAhead = true;
-    if (d < 0.3 || d > 17) continue;
+    if (d < 0.3 || d > 32) continue;
     const bearing = Math.atan2(ox, -oy) - stageBearing;
     const yaw = ((((bearing * 180) / Math.PI + 540) % 360) - 180);
     const rise = hasRelief ? (other.eyeHeightM ?? SEATED_EYE_HEIGHT_M) - eyeM : 0;
@@ -1185,41 +1264,100 @@ function drawAudience(
     // Physically-based head size: a ~0.16 m head half-width at distance d.
     const jitter = 0.9 + (hh & 15) / 40; // ~0.9..1.28
     const r = Math.min(78, (Math.atan2(0.16, d) * 180 / Math.PI) * PX_PER_DEG * jitter);
-    if (r < 2) continue;
+    if (r < 1.2) continue;
     figs.push({ hx: yawToX(yaw), hy: pitchToY(headPitch), r, d, hash: hh });
   }
   // Painter's order: far first so nearer figures overlap on top.
   figs.sort((a, b) => b.d - a.d);
 
+  // Group figures into screen-space rows (similar head pitch → same physical
+  // row) so each row can carry a seat-back strip behind its heads: the strip
+  // fills the gaps BETWEEN figures, which is what makes a crowd read dense —
+  // background showing between every head reads as a half-empty house.
+  interface FigRow { figs: Fig[]; d: number; hy: number; r: number }
+  const figRows: FigRow[] = [];
+  {
+    const byY = [...figs].sort((a, b) => a.hy - b.hy);
+    let cur: Fig[] = [];
+    const flush = () => {
+      if (!cur.length) return;
+      const d = cur.reduce((s, f) => s + f.d, 0) / cur.length;
+      const hy = cur.reduce((s, f) => s + f.hy, 0) / cur.length;
+      const r = cur.reduce((s, f) => s + f.r, 0) / cur.length;
+      figRows.push({ figs: cur.sort((a, b) => b.d - a.d), d, hy, r });
+      cur = [];
+    };
+    for (const f of byY) {
+      const last = cur[cur.length - 1];
+      if (last && Math.abs(f.hy - last.hy) > Math.max(5, ((last.r + f.r) / 2) * 1.7)) flush();
+      cur.push(f);
+    }
+    flush();
+  }
+  figRows.sort((a, b) => b.d - a.d); // rows far → near: strip, then its figures
+
   const CLOTHES: RGB[] = [[22, 26, 40], [28, 27, 42], [24, 31, 46], [31, 30, 47], [20, 24, 36]];
-  for (const f of figs) {
-    // Near figures are near-solid so they occlude cleanly; only the far dots fade.
-    const alpha = f.d < 12 ? 0.95 : Math.max(0.66, 0.95 - (f.d - 12) / 18);
-    const lift = Math.round((1 - Math.min(1, f.d / 16)) * 10);
-    const headTone: RGB = [14 + ((f.hash >> 4) & 6) + lift, 17 + ((f.hash >> 4) & 6) + lift, 25 + ((f.hash >> 4) & 6) + lift];
-    const clo0 = CLOTHES[f.hash % CLOTHES.length];
-    const clothing: RGB = [clo0[0] + lift, clo0[1] + lift, clo0[2] + lift];
-    if (f.r >= 13) {
-      const rim = f.d < 9 ? 0.16 * (1 - f.d / 9) + (scene.mode === 'proscenium' ? 0.06 : 0) : 0;
-      drawSeated(ctx, f.hx, f.hy, f.r, {
-        tone: headTone,
-        clothing,
-        alpha,
-        tilt: (((f.hash >> 2) & 7) - 3.5) * 0.018, // ±~7°
-        shoulderK: 1.72 + ((f.hash >> 5) & 7) / 22, // ~1.72..2.04
-        hair: f.hash % HAIR_KINDS,
-        rim,
-      });
-    } else if (f.r >= 5.5) {
-      drawSeatedMid(ctx, f.hx, f.hy, f.r, clothing, headTone, alpha);
-    } else {
-      ctx.fillStyle = `rgba(${headTone[0]},${headTone[1]},${headTone[2]},${alpha.toFixed(3)})`;
-      ctx.beginPath();
-      ctx.arc(f.hx, f.hy, f.r, 0, TAU);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.ellipse(f.hx, f.hy + f.r * 1.4, f.r * 1.85, f.r * 0.95, 0, Math.PI, 0, true);
-      ctx.fill();
+  for (const row of figRows) {
+    // Seat-back strip: contiguous runs of figures (split at real aisles) get a
+    // soft dark band at shoulder height. Subtle — texture, not architecture.
+    if (row.figs.length >= 3 && row.r >= 1.6 && row.r < 26) {
+      const runs: Fig[][] = [];
+      const byX = [...row.figs].sort((a, b) => a.hx - b.hx);
+      let run: Fig[] = [];
+      for (const f of byX) {
+        const last = run[run.length - 1];
+        if (last && f.hx - last.hx > Math.max(14, f.r * 7)) {
+          if (run.length >= 3) runs.push(run);
+          run = [];
+        }
+        run.push(f);
+      }
+      if (run.length >= 3) runs.push(run);
+      const stripAlpha = Math.min(0.42, 0.5 * (1 - row.d / 42));
+      if (stripAlpha > 0.05) {
+        ctx.fillStyle = `rgba(15, 19, 31, ${stripAlpha.toFixed(3)})`;
+        for (const seg of runs) {
+          const x0 = seg[0].hx - row.r * 1.6;
+          const x1 = seg[seg.length - 1].hx + row.r * 1.6;
+          ctx.beginPath();
+          ctx.roundRect(x0, row.hy + row.r * 0.8, x1 - x0, row.r * 2.4, row.r * 0.8);
+          ctx.fill();
+        }
+      }
+    }
+    for (const f of row.figs) {
+      // Near figures are near-solid so they occlude cleanly; the extended
+      // mid-band tail fades out gently so the crowd dissolves into the stands
+      // instead of stopping at a hard radius.
+      const alpha = f.d < 12 ? 0.95 : f.d < 17 ? Math.max(0.66, 0.95 - (f.d - 12) / 18) : Math.max(0.3, 0.68 - (f.d - 17) / 34);
+      const lift = Math.round((1 - Math.min(1, f.d / 16)) * 10);
+      const headTone: RGB = [14 + ((f.hash >> 4) & 6) + lift, 17 + ((f.hash >> 4) & 6) + lift, 25 + ((f.hash >> 4) & 6) + lift];
+      const clo0 = CLOTHES[f.hash % CLOTHES.length];
+      const clothing: RGB = [clo0[0] + lift, clo0[1] + lift, clo0[2] + lift];
+      if (f.r >= 13) {
+        const rim = f.d < 9 ? 0.16 * (1 - f.d / 9) + (scene.mode === 'proscenium' ? 0.06 : 0) : 0;
+        drawSeated(ctx, f.hx, f.hy, f.r, {
+          tone: headTone,
+          clothing,
+          alpha,
+          tilt: (((f.hash >> 2) & 7) - 3.5) * 0.018, // ±~7°
+          shoulderK: 1.72 + ((f.hash >> 5) & 7) / 22, // ~1.72..2.04
+          hair: f.hash % HAIR_KINDS,
+          rim,
+          turn: (((f.hash >> 8) & 7) - 3.5) * 0.034, // ±~0.12 head-radii sideways
+          lean: (((f.hash >> 10) & 3) - 1.5) * 0.09, // one shoulder rides higher
+        });
+      } else if (f.r >= 5.5) {
+        drawSeatedMid(ctx, f.hx, f.hy, f.r, clothing, headTone, alpha);
+      } else {
+        ctx.fillStyle = `rgba(${headTone[0]},${headTone[1]},${headTone[2]},${alpha.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.arc(f.hx, f.hy, f.r, 0, TAU);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(f.hx, f.hy + f.r * 1.4, f.r * 1.85, f.r * 0.95, 0, Math.PI, 0, true);
+        ctx.fill();
+      }
     }
   }
 
