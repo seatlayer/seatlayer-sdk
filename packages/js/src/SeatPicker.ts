@@ -3375,18 +3375,29 @@ export class SeatPicker {
     const pano = el.querySelector<HTMLDivElement>('.sl-view-pano')!;
     pano.style.backgroundImage = `url("${panoUrl}")`;
 
-    // Equirectangular pan: repeat-x gives seamless 360° horizontal wrap; the
-    // image is sized taller than the viewport so there's headroom to tilt.
-    let zoom = 1.2;
+    // Equirectangular pan: repeat-x gives seamless 360° horizontal wrap. The
+    // source is a full 180° sphere; showing it raw wastes ~⅔ of the frame on
+    // dead sky + black floor. So we WINDOW a ~70° vertical slice (horizon-centred)
+    // to fill the viewport height, and clamp the vertical drag to ±35° so the
+    // buyer looks around a real seat's field of view, never past the image edge.
+    // `zoom` narrows the FOV further (scroll to zoom in); it never widens past 70°.
+    const VFOV_DEG = 70;
+    const MAX_PITCH_DEG = 35;
+    let zoom = 1;
     let posX = 0;
     let posY = 0;
     const apply = (): void => {
       const h = pano.clientHeight || 1;
-      const bgH = h * zoom;
+      const bgH = h * (180 / VFOV_DEG) * zoom;
       const overV = Math.max(0, bgH - h);
-      posY = Math.min(overV / 2, Math.max(-overV / 2, posY));
+      // Clamp pitch to ±35° of image travel (bgH px map the full 180°), and never
+      // past the image edge (overV/2).
+      const pitchLimit = Math.min(overV / 2, (MAX_PITCH_DEG / 180) * bgH);
+      posY = Math.min(pitchLimit, Math.max(-pitchLimit, posY));
       pano.style.backgroundSize = `auto ${bgH}px`;
-      pano.style.backgroundPosition = `${posX}px ${posY + overV / 2}px`;
+      // Horizon-centred: -overV/2 places the image's vertical centre at the
+      // viewport centre; `posY` (drag, clamped ±35°) tilts up/down from there.
+      pano.style.backgroundPosition = `${posX}px ${posY - overV / 2}px`;
     };
     apply();
 
