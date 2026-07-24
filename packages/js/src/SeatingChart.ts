@@ -7,7 +7,15 @@
  * + booking to the controller, so the SDK inherits every fix made for the live
  * buyer page and the demo picker.
  */
-import { PickerController, loadLocale, setStringOverrides, t, type PickerSeat, type SeatHoverDetails } from '@seatlayer/core';
+import {
+  PickerController,
+  loadLocale,
+  setStringOverrides,
+  t,
+  type PickerSeat,
+  type RendererViewMode,
+  type SeatHoverDetails,
+} from '@seatlayer/core';
 import { PubApi, type BestAvailableResult, type HoldResult } from './api';
 
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
@@ -17,6 +25,9 @@ const DEFAULT_MAX_SELECTION = 10;
 export type SelectedSeat = PickerSeat;
 export interface GAAreaAvailability {
   id: string; label: string; capacity: number; available: number; categoryKey: string; price: number; currency: string;
+  /** Buyer-facing copy authored separately from stable inventory identity. */
+  displayLabel?: string;
+  displayType?: string;
   tiers?: Array<{ id: string; name: string; price: number }>;
 }
 
@@ -50,6 +61,9 @@ export interface SeatingChartOptions {
    * Toggleable later with setColorblindSafe().
    */
   colorblindSafe?: boolean;
+  /** Initial canvas projection. `perspective` enables exact-seat projected
+   * 2.5D picking without changing booking identities or chart geometry. */
+  initialView?: RendererViewMode;
   /**
    * Built-in seat tooltip on mouse hover (seat · category · price · status).
    * Rendered inside the widget so every host gets it; default true. Turn off
@@ -170,6 +184,7 @@ export class SeatingChart {
       this.rendered = false;
       return this;
     }
+    this.controller.setViewMode(this.opts.initialView ?? 'flat');
     // The served event's mode. Anything the API does not explicitly mark as a
     // test event is a live one — the same rule the test-mode ribbon below uses.
     this.mode_ = info.mode === 'test' ? 'test' : 'live';
@@ -425,7 +440,14 @@ export class SeatingChart {
     options: { zoneId?: string; preferPremium?: boolean; ttlMs?: number } = {},
   ): Promise<BestAvailableResult | null> {
     const h = await this.controller.bestAvailable(qty, categoryKey, options);
-    return h ? { holdId: h.holdId, expiresAt: h.expiresAt, labels: h.labels, seats: h.seats, items: h.items } : null;
+    return h ? {
+      holdId: h.holdId,
+      expiresAt: h.expiresAt,
+      labels: h.labels,
+      seats: h.seats,
+      items: h.items,
+      ...(options.zoneId ? { zoneId: options.zoneId } : {}),
+    } : null;
   }
 
   /**
@@ -460,6 +482,16 @@ export class SeatingChart {
   /** Toggle colorblind-safe rendering at runtime (see options.colorblindSafe). */
   setColorblindSafe(on: boolean): void {
     this.controller.setColorblindSafe(on);
+  }
+
+  /** Switch between flat, isometric and exact-seat Perspective 2.5D views. */
+  setViewMode(mode: RendererViewMode): void {
+    this.controller.setViewMode(mode);
+  }
+
+  /** Current canvas projection. */
+  getViewMode(): RendererViewMode {
+    return this.controller.getViewMode();
   }
 
   /** Zoom in one step (same increment as the wheel/pinch gesture). */

@@ -28,7 +28,7 @@
  *   • High-rate events coalesce to at most one pending envelope per event type,
  *     flushed on the next animation frame.
  */
-import type { SeatHoverDetails } from '@seatlayer/core';
+import type { RendererViewMode, SeatHoverDetails } from '@seatlayer/core';
 import type { BestAvailableResult, HoldResult } from '../api';
 import type { GAAreaAvailability, SeatingChartOptions, SelectedSeat } from '../SeatingChart';
 import { SeatingChart } from '../SeatingChart';
@@ -69,7 +69,11 @@ export interface BridgeChart {
   extendHold(ttlMs?: number): Promise<HoldResult | null>;
   release(): Promise<void>;
   releaseLabels(labels: string[]): Promise<boolean>;
-  bestAvailableOrThrow(qty: number, categoryKey?: string): Promise<BestAvailableResult | null>;
+  bestAvailableOrThrow(
+    qty: number,
+    categoryKey?: string,
+    options?: { zoneId?: string; preferPremium?: boolean; ttlMs?: number },
+  ): Promise<BestAvailableResult | null>;
   holdGAOrThrow(areaId: string, qty: number, options?: { tierId?: string | null; ttlMs?: number }): Promise<HoldResult | null>;
   setSeatTier(seatId: string, tierId: string | null): void;
   getSelection(): SelectedSeat[];
@@ -78,6 +82,8 @@ export interface BridgeChart {
   getFloors(): { id: string; name: string }[];
   setFloor(floorId: string): void;
   setColorblindSafe(on: boolean): void;
+  setViewMode(mode: RendererViewMode): void;
+  getViewMode(): RendererViewMode;
   zoomIn(): void;
   zoomOut(): void;
   zoomToFit(): void;
@@ -151,6 +157,7 @@ export const BRIDGE_CAPABILITIES = [
   'floors',
   'zoom',
   'colorblind-safe',
+  'view-modes',
   'seat-hover',
 ] as const;
 
@@ -198,6 +205,19 @@ function reqBoolean(p: Record<string, unknown>, key: string): boolean {
   return value as boolean;
 }
 
+function optBoolean(p: Record<string, unknown>, key: string): boolean | undefined {
+  if (p[key] === undefined || p[key] === null) return undefined;
+  return reqBoolean(p, key);
+}
+
+function reqViewMode(p: Record<string, unknown>, key: string): RendererViewMode {
+  const value = reqString(p, key);
+  if (value !== 'flat' && value !== 'iso' && value !== 'perspective') {
+    bad(`\`${key}\` must be flat, iso or perspective`);
+  }
+  return value as RendererViewMode;
+}
+
 function reqStringArray(p: Record<string, unknown>, key: string): string[] {
   const value = p[key];
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
@@ -236,7 +256,17 @@ const COMMANDS: Record<string, CommandHandler> = {
   releaseLabels: async (chart, p) => ({ released: await chart.releaseLabels(reqStringArray(obj(p), 'labels')) }),
   bestAvailable: async (chart, p) => {
     const args = obj(p);
-    return { hold: await chart.bestAvailableOrThrow(reqNumber(args, 'qty'), optString(args, 'categoryKey')) };
+    return {
+      hold: await chart.bestAvailableOrThrow(
+        reqNumber(args, 'qty'),
+        optString(args, 'categoryKey'),
+        {
+          zoneId: optString(args, 'zoneId'),
+          preferPremium: optBoolean(args, 'preferPremium'),
+          ttlMs: optNumber(args, 'ttlMs'),
+        },
+      ),
+    };
   },
   holdGA: async (chart, p) => {
     const args = obj(p);
@@ -263,6 +293,11 @@ const COMMANDS: Record<string, CommandHandler> = {
     chart.setColorblindSafe(reqBoolean(obj(p), 'on'));
     return {};
   },
+  setViewMode: (chart, p) => {
+    chart.setViewMode(reqViewMode(obj(p), 'mode'));
+    return {};
+  },
+  getViewMode: (chart) => ({ mode: chart.getViewMode() }),
   zoomIn: (chart) => {
     chart.zoomIn();
     return {};
@@ -448,6 +483,9 @@ export function startBridge(options: StartBridgeOptions = {}): BridgeHandle {
       messages: config.messages as Record<string, string> | undefined,
       currency: config.currency as string | undefined,
       colorblindSafe: config.colorblindSafe as boolean | undefined,
+      initialView: config.initialView === undefined
+        ? undefined
+        : reqViewMode(config, 'initialView'),
       // The native side draws its own seat sheet, so the host decides whether
       // the in-canvas tooltip should render at all.
       seatTooltip: payload.chrome?.seatTooltip,

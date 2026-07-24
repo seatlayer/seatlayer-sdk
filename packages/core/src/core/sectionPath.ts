@@ -130,6 +130,152 @@ export function transformSectionOutlinePath(
   };
 }
 
+/** Default corner-smoothing strength applied automatically when a hand-clicked
+ * polygon section is closed. Wide, gently-angled corners round; sharp structural
+ * corners stay crisp, so a rectangle drawn as a polygon is left untouched. */
+export const DEFAULT_SECTION_CORNER_SMOOTHING = 45;
+
+/** Only corners at least this wide (interior angle, degrees) are rounded — the
+ * arc-approximating points of a hand-traced wedge, not its true corners. */
+const WIDE_ANGLE_THRESHOLD_DEG = 150;
+
+/** Circle-approximation constant: control-point pull from a cut point toward the
+ * original vertex for a smooth cubic corner. */
+const CORNER_KAPPA = 0.5523;
+
+function polygonPointsEqual(a: Point, b: Point): boolean {
+  return Math.abs(a.x - b.x) <= 1e-6 && Math.abs(a.y - b.y) <= 1e-6;
+}
+
+/** Drop consecutive duplicate vertices and any wrap-around duplicate close point. */
+function dedupeClosedPolygon(points: Point[]): Point[] {
+  const out: Point[] = [];
+  for (const point of points) {
+    if (!finitePoint(point)) continue;
+    if (out.length && polygonPointsEqual(out[out.length - 1], point)) continue;
+    out.push({ x: point.x, y: point.y });
+  }
+  while (out.length > 1 && polygonPointsEqual(out[0], out[out.length - 1])) out.pop();
+  return out;
+}
+
+function lerp(a: Point, b: Point, t: number): Point {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+function smoothstep(t: number): number {
+  const c = Math.min(1, Math.max(0, t));
+  return c * c * (3 - 2 * c);
+}
+
+/**
+ * Build a smooth closed {@link SectionOutlinePath} by rounding the wide corners
+ * of a hand-clicked polygon. The polygon stays authoritative — this is a purely
+ * additive rendered curve. Returns `null` when nothing qualifies (strength 0, a
+ * degenerate polygon, or no corner wide enough), letting the caller keep the raw
+ * straight polygon. Deterministic: same input always yields the same path.
+ */
+export function sectionCornerSmoothingPath(
+  polygon: Point[],
+  strength: number,
+  options?: { wideAngleThresholdDeg?: number },
+): SectionOutlinePath | null {
+  const pts = dedupeClosedPolygon(polygon);
+  const n = pts.length;
+  if (n < 3) return null;
+  const s = Math.min(100, Math.max(0, strength)) / 100;
+  if (s <= 0) return null;
+  const threshold = options?.wideAngleThresholdDeg ?? WIDE_ANGLE_THRESHOLD_DEG;
+
+  const edgeLen: number[] = [];
+  for (let i = 0; i < n; i += 1) edgeLen[i] = distance(pts[i], pts[(i + 1) % n]);
+
+  // Per-vertex corner cut distance. Wide (near-straight) corners round most;
+  // corners sharper than the threshold are left untouched.
+  const cut: number[] = new Array(n).fill(0);
+  for (let i = 0; i < n; i += 1) {
+    const prev = pts[(i - 1 + n) % n];
+    const curr = pts[i];
+    const next = pts[(i + 1) % n];
+    const toPrev = { x: prev.x - curr.x, y: prev.y - curr.y };
+    const toNext = { x: next.x - curr.x, y: next.y - curr.y };
+    const lenPrev = Math.hypot(toPrev.x, toPrev.y);
+    const lenNext = Math.hypot(toNext.x, toNext.y);
+    if (lenPrev <= 1e-9 || lenNext <= 1e-9) continue;
+    const cos = Math.min(1, Math.max(-1, (toPrev.x * toNext.x + toPrev.y * toNext.y) / (lenPrev * lenNext)));
+    const interiorDeg = (Math.acos(cos) * 180) / Math.PI;
+    if (interiorDeg < threshold) continue; // sharp structural corner — keep crisp
+    const weight = smoothstep((interiorDeg - threshold) / (180 - threshold));
+    cut[i] = s * weight * 0.5 * Math.min(lenPrev, lenNext);
+  }
+
+  // Never let two neighbouring cuts overrun a shared edge.
+  for (let i = 0; i < n; i += 1) {
+    const j = (i + 1) % n;
+    const total = cut[i] + cut[j];
+    if (total > edgeLen[i] && total > 1e-9) {
+      const scale = edgeLen[i] / total;
+      cut[i] *= scale;
+      cut[j] *= scale;
+    }
+  }
+
+  const entry: Point[] = new Array(n); // point on the incoming edge, before the vertex
+  const exit: Point[] = new Array(n); // point on the outgoing edge, after the vertex
+  for (let i = 0; i < n; i += 1) {
+    const prev = pts[(i - 1 + n) % n];
+    const curr = pts[i];
+    const next = pts[(i + 1) % n];
+    if (cut[i] <= 1e-6) {
+      entry[i] = { ...curr };
+      exit[i] = { ...curr };
+      continue;
+    }
+    const lenPrev = distance(curr, prev) || 1;
+    const lenNext = distance(curr, next) || 1;
+    entry[i] = { x: curr.x + ((prev.x - curr.x) / lenPrev) * cut[i], y: curr.y + ((prev.y - curr.y) / lenPrev) * cut[i] };
+    exit[i] = { x: curr.x + ((next.x - curr.x) / lenNext) * cut[i], y: curr.y + ((next.y - curr.y) / lenNext) * cut[i] };
+  }
+
+  // Nothing rounded → let the caller keep the straight polygon.
+  if (cut.every((c) => c <= 1e-6)) return null;
+
+  const segments: SectionPathSegment[] = [];
+  const start = { ...exit[0] };
+  let current = start;
+  const pushLine = (end: Point) => {
+    if (distance(current, end) > 1e-9) {
+      segments.push({ kind: 'line', end: { ...end } });
+      current = end;
+    }
+  };
+  for (let step = 1; step <= n; step += 1) {
+    const i = step % n;
+    const vertex = pts[i];
+    // Straight run along the edge from the previous exit to this vertex's entry.
+    pushLine(entry[i]);
+    if (cut[i] > 1e-6 && distance(entry[i], exit[i]) > 1e-9) {
+      // Rounded corner: a cubic pulling toward the original vertex.
+      segments.push({
+        kind: 'bezier',
+        control1: lerp(entry[i], vertex, CORNER_KAPPA),
+        control2: lerp(exit[i], vertex, CORNER_KAPPA),
+        end: { ...exit[i] },
+      });
+      current = exit[i];
+    }
+  }
+  if (segments.length < 2) return null;
+  // Guarantee exact closure onto the start point.
+  const last = segments[segments.length - 1];
+  if (distance(last.end, start) > 1e-9) {
+    if (last.kind === 'line') last.end = { ...start };
+    else segments.push({ kind: 'line', end: { ...start } });
+  }
+  const path: SectionOutlinePath = { version: 1, closed: true, start, segments };
+  return validSectionOutlinePath(path) ? path : null;
+}
+
 /** Reverse a closed path without changing its painted boundary. */
 export function reverseSectionOutlinePath(path: SectionOutlinePath): SectionOutlinePath {
   const starts: Point[] = [];

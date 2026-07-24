@@ -2725,7 +2725,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
           this.accessRingById.set(seat.id, ring);
           target.add(ring);
         }
-        if (accessGlyphPath(seat.accessibility ?? [])) {
+        if (seat.accessibility?.includes('wheelchair') && accessGlyphPath(seat.accessibility)) {
           const glyph = this.buildAccessGlyph(seat, typeof c.fill() === 'string' ? (c.fill() as string) : '');
           this.accessGlyphById.set(seat.id, glyph);
           target.add(glyph);

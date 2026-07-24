@@ -29,6 +29,8 @@ function fakeChart() {
     getFloors: vi.fn(() => [{ id: 'f1', name: 'Floor 1' }]),
     setFloor: vi.fn(),
     setColorblindSafe: vi.fn(),
+    setViewMode: vi.fn(),
+    getViewMode: vi.fn(() => 'flat' as const),
     zoomIn: vi.fn(),
     zoomOut: vi.fn(),
     zoomToFit: vi.fn(),
@@ -207,7 +209,13 @@ describe('bridge host — handshake', () => {
       p: {
         protocol: 1,
         chrome: { seatTooltip: false },
-        config: { event: 'ev_9', apiBase: 'https://api.test', locale: 'de', maxSelection: 4 },
+        config: {
+          event: 'ev_9',
+          apiBase: 'https://api.test',
+          locale: 'de',
+          maxSelection: 4,
+          initialView: 'perspective',
+        },
       },
     });
     await settle();
@@ -216,7 +224,24 @@ describe('bridge host — handshake', () => {
       apiBase: 'https://api.test',
       locale: 'de',
       maxSelection: 4,
+      initialView: 'perspective',
       seatTooltip: false,
+    });
+  });
+
+  it('rejects an unknown initial view before creating the chart', async () => {
+    const h = makeHarness();
+    h.recv({
+      sl: 1,
+      k: 'init',
+      t: 'init',
+      p: { protocol: 1, config: { event: 'ev_9', initialView: 'orbit' } },
+    });
+    await settle();
+    expect(h.created).toHaveLength(0);
+    expect(h.last('evt')).toMatchObject({
+      t: 'sys.error',
+      p: { code: 'bad_payload' },
     });
   });
 
@@ -352,8 +377,18 @@ describe('bridge host — commands', () => {
     expect(await cmd(h, 'releaseLabels', { labels: ['A-1', 'A-2'] })).toMatchObject({ p: { released: true } });
     expect(h.chart.releaseLabels).toHaveBeenCalledWith(['A-1', 'A-2']);
 
-    await cmd(h, 'bestAvailable', { qty: 3, categoryKey: 'vip' });
-    expect(h.chart.bestAvailableOrThrow).toHaveBeenCalledWith(3, 'vip');
+    await cmd(h, 'bestAvailable', {
+      qty: 3,
+      categoryKey: 'vip',
+      zoneId: 'north',
+      preferPremium: true,
+      ttlMs: 90_000,
+    });
+    expect(h.chart.bestAvailableOrThrow).toHaveBeenCalledWith(3, 'vip', {
+      zoneId: 'north',
+      preferPremium: true,
+      ttlMs: 90_000,
+    });
 
     await cmd(h, 'holdGA', { areaId: 'ga1', qty: 2, tierId: 'child' });
     expect(h.chart.holdGAOrThrow).toHaveBeenCalledWith('ga1', 2, { tierId: 'child', ttlMs: undefined });
@@ -371,6 +406,22 @@ describe('bridge host — commands', () => {
 
     await cmd(h, 'setColorblindSafe', { on: true });
     expect(h.chart.setColorblindSafe).toHaveBeenCalledWith(true);
+
+    await cmd(h, 'setViewMode', { mode: 'perspective' });
+    expect(h.chart.setViewMode).toHaveBeenCalledWith('perspective');
+    expect(await cmd(h, 'getViewMode')).toMatchObject({ p: { mode: 'flat' } });
+  });
+
+  it('rejects malformed best-available and view-mode options', async () => {
+    const h = await ready();
+    expect(await cmd(h, 'bestAvailable', { qty: 2, preferPremium: 'yes' })).toMatchObject({
+      k: 'err',
+      p: { code: 'bad_payload' },
+    });
+    expect(await cmd(h, 'setViewMode', { mode: 'orbit' })).toMatchObject({
+      k: 'err',
+      p: { code: 'bad_payload' },
+    });
   });
 
   it('answers an unknown command with unsupported_command, never a throw', async () => {

@@ -9,7 +9,7 @@
  * so imports stay byte-identical and no path rewriting is ever needed.
  *
  * Usage:
- *   node scripts/sync-core.mjs            copy app → core   (assumes ../seatmap)
+ *   node scripts/sync-core.mjs            copy app → core   (assumes ../../seatmap)
  *   node scripts/sync-core.mjs --check    fail (exit 1) if core differs from app
  *   SEATMAP_REPO=/path/to/seatmap node scripts/sync-core.mjs
  */

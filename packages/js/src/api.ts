@@ -42,7 +42,7 @@ export class ApiError extends Error {
 }
 
 export interface PubChartResult {
-  event: { key: string; name: string };
+  event: { key: string; name: string; inventoryModelVersion?: 1 | 2 };
   doc: ChartDoc;
 }
 
@@ -76,6 +76,7 @@ export interface BestAvailableResult {
   labels: string[];
   seats?: SelectedSeat[];
   items?: HoldResult['items'];
+  zoneId?: string;
 }
 
 async function request<T>(
@@ -132,7 +133,7 @@ export class PubApi {
     return request(this.base, `/pub/events/${encodeURIComponent(key)}/objects`);
   }
 
-  hold(key: string, selections: Array<{ label: string; tierId?: string | null }>, ttlMs?: number, replaceHoldId?: string): Promise<HoldResult> {
+  hold(key: string, selections: Array<{ label: string; tierId?: string | null; quantity?: number }>, ttlMs?: number, replaceHoldId?: string): Promise<HoldResult> {
     return request(this.base, `/pub/events/${encodeURIComponent(key)}/hold`, {
       method: 'POST',
       body: { selections, ...(ttlMs ? { ttlMs } : {}), ...(replaceHoldId ? { replaceHoldId } : {}) },

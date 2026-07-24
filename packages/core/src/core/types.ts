@@ -771,6 +771,21 @@ export interface SectionObject {
   scale?: number;
   /** 0–100: reviewed strength last used to bend member rows toward a common fitted arc. */
   smoothing?: number;
+  /**
+   * Corner smoothing: the raw clicked polygon this section was drawn from, kept
+   * verbatim so {@link cornerSmoothing} stays re-derivable and fully reversible.
+   * When present, {@link outlinePath} is a curve computed from THIS polygon (not
+   * a reference/blueprint contour); {@link outline} is its deterministic sample.
+   * Additive and optional — legacy charts and reference-derived curves omit it.
+   */
+  sourceOutline?: Point[];
+  /**
+   * 0–100 corner-smoothing strength applied to {@link sourceOutline} to produce
+   * the curved {@link outlinePath}. 0/absent = exact clicked corners. Higher
+   * rounds the wide (gently-angled) corners more; sharp corners stay crisp.
+   * Coordinate-free, so it round-trips over MCP (`update_sections`).
+   */
+  cornerSmoothing?: number;
   /** Degrees clockwise about the outline centroid (default 0). Rotates members too. */
   rotation?: number;
 }
@@ -1016,6 +1031,92 @@ export interface ReferenceScanProposal {
   totalSeats: number;
   totalRows: number;
   sections: ReferenceScanSectionProposal[];
+}
+
+/**
+ * Human-only Magic Trace request. `source` is one click in immutable
+ * source-image pixels; it is accepted only by the browser Designer HTTP
+ * surfaces and must never be added to an MCP schema.
+ */
+export interface ReferenceSectionTraceInput {
+  assetId: string;
+  floorId?: string;
+  expectedUpdatedAt: number;
+  source: Point;
+}
+
+/**
+ * Whole-reference Magic Trace request. Unlike the one-region request this
+ * carries no source coordinates: the server returns every persisted closed
+ * region as an ID-free proposal for explicit browser review.
+ */
+export interface ReferenceSectionTraceBatchInput {
+  assetId: string;
+  floorId?: string;
+  expectedUpdatedAt: number;
+}
+
+/**
+ * Read-only Magic Trace result. This is deliberately not a SectionObject:
+ * there is no object id or label until the author accepts the proposal through
+ * the normal Designer command/undo boundary.
+ *
+ * All geometry is in chart coordinates. Source pixels, private contour
+ * vertices and reference bounds are never returned.
+ */
+export interface ReferenceSectionTraceProposal {
+  assetId: string;
+  floorId: string;
+  outline: Point[];
+  /** Required exact fitted line/arc/cubic boundary. */
+  outlinePath: SectionOutlinePath;
+  /** Only structural source voids; printed labels/icons are filtered out. */
+  holes: Point[][];
+  color: string;
+  referenceSource: {
+    assetId: string;
+    regionId: string;
+  };
+  geometry: {
+    kind: 'contour';
+    sourceRegionId: string;
+    contourMethod: 'shared-edge-vector-fit-v1';
+    simplificationTolerancePx: number;
+    vectorFitErrorPx: number;
+    sharedEdgeCount: number;
+  };
+  provenance: {
+    regionId: string;
+    analysisVersion: number;
+    vectorTopologyVersion: number;
+    selection: 'human-source-pixel-seed' | 'human-bulk-reference-review';
+    registration: 'persisted-reference-registration-v1';
+  };
+  /** Coordinate-free evidence suitable for an author-facing confirmation. */
+  diagnostics: {
+    regionMarker: string;
+    structuralHoleCount: number;
+    fittedComponentCount: number;
+    sharedBoundaryCount: number;
+    maximumAllowedVectorErrorPx: number;
+    measuredVectorErrorPx: number;
+    /** Source component footprint, as a percentage of the analyzed image. */
+    sourceAreaPercent?: number;
+  };
+}
+
+/** Read-only whole-reference proposal. The author may approve each proposal or
+ * all proposals; the Designer then materializes the accepted set atomically. */
+export interface ReferenceSectionTraceBatchProposal {
+  assetId: string;
+  floorId: string;
+  proposals: ReferenceSectionTraceProposal[];
+  diagnostics: {
+    analyzedRegionCount: number;
+    proposalCount: number;
+    alreadyTracedCount: number;
+    withinToleranceCount: number;
+  };
 }
 
 /** Coordinate-free physical scale derived by server code from a confirmed

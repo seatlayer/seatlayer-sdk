@@ -27,7 +27,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
 const appRepo = process.env.SEATMAP_REPO
   ? resolve(process.env.SEATMAP_REPO)
-  : resolve(repoRoot, '..', 'seatmap');
+  : resolve(repoRoot, '..', '..', 'seatmap');
 const sourceRecord = join(appRepo, 'src/picker/widget/widget-source.json');
 
 // sdk source -> app vendored path. `core.ts` is app-owned and NOT in this list.
