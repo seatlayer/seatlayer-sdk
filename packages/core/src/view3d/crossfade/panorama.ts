@@ -25,13 +25,51 @@ export interface PanoramaHandle {
 }
 
 /**
+ * Vertical field of view (deg) the windowed panorama shows. The source image is
+ * a full 180° equirect sphere; showing it raw wastes ~⅔ of the frame on dead sky
+ * and black floor, with the horizon content band squished into the middle. We
+ * instead scale the image so only this central slice fills the viewport height,
+ * horizon-centred, and let the user drag pitch within ±`MAX_PITCH_DEG`.
+ */
+export const VFOV_DEG = 70;
+/** Users may look this far up/down from the horizon; well inside the image so
+ *  the clamp never reveals past its top/bottom edge. */
+export const MAX_PITCH_DEG = 35;
+
+/**
  * Horizontal background-position (px) that centres `bearingDeg` in the viewport,
- * assuming the equirect image's yaw 0 sits at its horizontal centre. `repeat-x`
+ * assuming the equirect image's yaw 0 sits at its horizontal centre. `bgW` is the
+ * full scaled image width representing 360° — so this is invariant to the vertical
+ * FOV windowing (which scales width and height by the same factor). `repeat-x`
  * handles the wrap, so any real value is valid.
  */
 export function bearingToOffsetPx(bearingDeg: number, viewportW: number, bgW: number): number {
   const col = (0.5 + bearingDeg / 360) * bgW; // image column (px) for the bearing
   return viewportW / 2 - col;
+}
+
+/**
+ * Full scaled image height (px) so that a `vfovDeg`-tall slice fills `viewportH`.
+ * The image spans 180° vertically, so height = viewportH · 180/vfov.
+ */
+export function windowedBgHeight(viewportH: number, vfovDeg: number = VFOV_DEG): number {
+  return viewportH * (180 / vfovDeg);
+}
+
+/**
+ * background-position Y (px) that centres the image's horizon (its vertical
+ * centre) in the viewport, offset by `pitchPx` (deviation from the horizon,
+ * clamped to ±`MAX_PITCH_DEG`). Positive `pitchPx` looks up.
+ */
+export function horizonOffsetPy(viewportH: number, bgH: number, pitchPx: number): number {
+  return (viewportH - bgH) / 2 + clampPitchPx(pitchPx, bgH);
+}
+
+/** Clamp a pitch drag (px) to ±MAX_PITCH_DEG of image travel, and never past the
+ *  image edge. `bgH` px map the full 180°, so a degree is `bgH/180` px. */
+export function clampPitchPx(pitchPx: number, bgH: number): number {
+  const limit = (MAX_PITCH_DEG / 180) * bgH;
+  return Math.max(-limit, Math.min(limit, pitchPx));
 }
 
 export interface PanoramaOptions {
@@ -85,22 +123,34 @@ export function mountPanorama(container: HTMLElement, view: SeatView, opts: Pano
 
   container.appendChild(root);
 
-  // Layout: size the image to the viewport height, pan horizontally. bgW comes
-  // from the loaded image's aspect; until then a first guess (2:1 equirect).
+  // Layout: window a ~70° vertical slice of the sphere (horizon-centred) so the
+  // venue fills the frame instead of floating in dead sky + black floor. The
+  // image is scaled so that slice is exactly the viewport height; width scales by
+  // the same factor, so `bearingToOffsetPx` stays correct. `pitchPx` is the
+  // vertical drag deviation from the horizon, clamped to ±35°.
   let bgW = 0;
+  let bgH = 0;
   let posX = 0;
-  let posY = 0;
+  let pitchPx = 0;
   const layout = (): void => {
     const vh = root.clientHeight || 1;
     const vw = root.clientWidth || 1;
     const natW = img.naturalWidth || vw * 2;
     const natH = img.naturalHeight || vh;
-    bgW = vh * (natW / natH);
-    pano.style.backgroundSize = `${bgW}px ${vh}px`;
+    bgH = windowedBgHeight(vh);
+    bgW = bgH * (natW / natH);
+    pano.style.backgroundSize = `${bgW}px ${bgH}px`;
     if (!posInitialised) { posX = bearingToOffsetPx(bearing, vw, bgW); posInitialised = true; }
-    pano.style.backgroundPosition = `${posX}px ${posY}px`;
+    pitchPx = clampPitchPx(pitchPx, bgH);
+    pano.style.backgroundPosition = `${posX}px ${horizonOffsetPy(vh, bgH, pitchPx)}px`;
   };
   let posInitialised = false;
+
+  const applyPos = (): void => {
+    const vh = root.clientHeight || 1;
+    pitchPx = clampPitchPx(pitchPx, bgH);
+    pano.style.backgroundPosition = `${posX}px ${horizonOffsetPy(vh, bgH, pitchPx)}px`;
+  };
 
   const img = new Image();
   img.onload = layout;
@@ -108,18 +158,21 @@ export function mountPanorama(container: HTMLElement, view: SeatView, opts: Pano
   // If it's already cached, onload may not fire — lay out on next frame too.
   requestAnimationFrame(layout);
 
-  // Horizontal pan (v1: horizontal only; repeat-x wraps seamlessly).
+  // Pan: horizontal (repeat-x wraps seamlessly) + vertical pitch (clamped ±35°).
   let dragging = false;
   let lastX = 0;
+  let lastY = 0;
   const onDown = (e: PointerEvent): void => {
-    dragging = true; lastX = e.clientX; pano.style.cursor = 'grabbing';
+    dragging = true; lastX = e.clientX; lastY = e.clientY; pano.style.cursor = 'grabbing';
     try { pano.setPointerCapture?.(e.pointerId); } catch { /* no active pointer */ }
   };
   const onMove = (e: PointerEvent): void => {
     if (!dragging) return;
     posX += e.clientX - lastX;
+    pitchPx += e.clientY - lastY;
     lastX = e.clientX;
-    pano.style.backgroundPosition = `${posX}px ${posY}px`;
+    lastY = e.clientY;
+    applyPos();
   };
   const onUp = (e: PointerEvent): void => {
     dragging = false; pano.style.cursor = 'grab';

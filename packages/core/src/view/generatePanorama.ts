@@ -58,12 +58,60 @@ const FLAT_DELTA_M = 0.6;
 /** Mid sky tone the distance haze blends banks toward (matches the shell). */
 const HAZE_SKY: [number, number, number] = [17, 23, 42];
 
-function blendToSky(base: [number, number, number], t: number, a = 1): string {
-  const k = Math.max(0, Math.min(0.72, t));
+type RGB = [number, number, number];
+
+function blendToSky(base: RGB, t: number, a = 1): string {
+  // Distance haze: blend toward the sky, but keep more of the band's own colour
+  // at distance than before (cap 0.58, was 0.72) so far stands stay legible
+  // architecture rather than dissolving into flat silhouettes.
+  const k = Math.max(0, Math.min(0.58, t));
   const r = Math.round(base[0] + (HAZE_SKY[0] - base[0]) * k);
   const g = Math.round(base[1] + (HAZE_SKY[1] - base[1]) * k);
   const b = Math.round(base[2] + (HAZE_SKY[2] - base[2]) * k);
   return `rgba(${r},${g},${b},${a})`;
+}
+
+function mixRgb(a: RGB, b: RGB, t: number): RGB {
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * t),
+    Math.round(a[1] + (b[1] - a[1]) * t),
+    Math.round(a[2] + (b[2] - a[2]) * t),
+  ];
+}
+
+function hslToRgb(h: number, s: number, l: number): RGB {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = (((h % 360) + 360) % 360) / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r = 0, g = 0, b = 0;
+  if (hp < 1) [r, g, b] = [c, x, 0];
+  else if (hp < 2) [r, g, b] = [x, c, 0];
+  else if (hp < 3) [r, g, b] = [0, c, x];
+  else if (hp < 4) [r, g, b] = [0, x, c];
+  else if (hp < 5) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  const m = l - c / 2;
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+
+/**
+ * A stable, DESATURATED tint for a section from its category key. The panorama
+ * has no access to the doc's category→colour map (its signature takes only
+ * seats), so it derives a deterministic hue per category and mutes it hard —
+ * same spirit as the 3D tier tinting in sceneModel.tintTop: enough to tell
+ * adjacent sections apart as coloured architecture, never a saturated poster.
+ */
+const tintCache = new Map<string, RGB>();
+function tintFromKey(key: string | undefined): RGB | null {
+  if (!key) return null;
+  const cached = tintCache.get(key);
+  if (cached) return cached;
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); }
+  const hue = (h >>> 0) % 360;
+  const rgb = hslToRgb(hue, 0.3, 0.42);
+  tintCache.set(key, rgb);
+  return rgb;
 }
 
 interface StandBin {
@@ -75,6 +123,8 @@ interface StandBin {
   nearM: number;
   /** A high, near mass overhead → hint a balcony ceiling lip. */
   overhead: boolean;
+  /** Desaturated section-colour hint (from the nearest member's category). */
+  tint: RGB | null;
 }
 
 /**
@@ -111,11 +161,12 @@ function buildStands(
     const idx = Math.min(NBINS - 1, Math.max(0, Math.floor((yaw + 180) / BIN_DEG)));
     const overhead = top > 34 && dM < 16;
     const cur = bins[idx];
-    if (!cur) bins[idx] = { top, base, nearM: dM, overhead };
+    if (!cur) bins[idx] = { top, base, nearM: dM, overhead, tint: tintFromKey(other.categoryKey) };
     else {
       if (top > cur.top) cur.top = top;
       if (base < cur.base) cur.base = base;
-      if (dM < cur.nearM) cur.nearM = dM;
+      // The nearest member drives the visible tint (it fills most of the bank).
+      if (dM < cur.nearM) { cur.nearM = dM; cur.tint = tintFromKey(other.categoryKey); }
       cur.overhead = cur.overhead || overhead;
     }
   }
@@ -146,18 +197,37 @@ function drawStands(
     const yBot = toY(bottom);
     if (yBot <= yTop) continue;
     const haze = b.nearM / 95;
+    // Fold the section's desaturated colour hint into the bank so the panorama
+    // and the 3D view read as the same venue. Kept subtle (~0.34) and only on
+    // the lit upper stops so the shadowed facade stays neutral.
+    const tint = b.tint;
+    const crest: RGB = tint ? mixRgb([44, 54, 80], tint, 0.34) : [44, 54, 80];
+    const seating: RGB = tint ? mixRgb([24, 30, 48], tint, 0.28) : [24, 30, 48];
     const grad = ctx.createLinearGradient(0, yTop, 0, yBot);
-    grad.addColorStop(0, blendToSky([40, 49, 74], haze)); // lit seat-row crest
-    grad.addColorStop(0.28, blendToSky([22, 28, 45], haze)); // seating
-    grad.addColorStop(1, blendToSky([9, 12, 20], haze)); // facade into shadow
+    grad.addColorStop(0, blendToSky(crest, haze)); // lit seat-row crest
+    grad.addColorStop(0.24, blendToSky(seating, haze)); // seating
+    grad.addColorStop(1, blendToSky([10, 13, 22], haze)); // facade into shadow
     ctx.fillStyle = grad;
     ctx.fillRect(x0, yTop, x1 - x0 + 1, yBot - yTop);
-    // row banding on the seated portion (crest down to the horizon)
+    // crest edge: a faint lit rim so the bank top reads as a hard architectural
+    // line even far away (distance no longer melts it into the sky).
+    ctx.fillStyle = `rgba(150,165,205,${0.35 * (1 - haze * 0.55)})`;
+    ctx.fillRect(x0, yTop, x1 - x0 + 1, 1.5);
+    // tier-band striping on the seated portion (crest down to the horizon):
+    // alternating lit/shadow rows so distant stands read as populated tiers, not
+    // a flat wash. More bands + higher contrast than before.
     const bandBottom = Math.min(yBot, toY(0));
     const bandSpan = bandBottom - yTop;
-    if (bandSpan > 10) {
-      ctx.fillStyle = `rgba(0,0,0,${0.1 * (1 - haze * 0.5)})`;
-      for (let r = 1; r < 4; r++) ctx.fillRect(x0, yTop + (bandSpan * r) / 4, x1 - x0 + 1, 1.5);
+    if (bandSpan > 8) {
+      const bands = 6;
+      const contrast = 1 - haze * 0.4;
+      for (let r = 1; r < bands; r++) {
+        const y = yTop + (bandSpan * r) / bands;
+        ctx.fillStyle = `rgba(0,0,0,${0.16 * contrast})`; // seat-row shadow gap
+        ctx.fillRect(x0, y, x1 - x0 + 1, 1.5);
+        ctx.fillStyle = `rgba(120,134,170,${0.1 * contrast})`; // lit seat-back band
+        ctx.fillRect(x0, y + 1.5, x1 - x0 + 1, 1.2);
+      }
     }
     // balcony overhang: a dark ceiling lip fading down onto the crest
     if (b.overhead) {
@@ -196,14 +266,27 @@ export function generateSeatPanorama(
   const eyeM = seat.eyeHeightM ?? SEATED_EYE_HEIGHT_M;
 
   // ---- room shell: ceiling → walls → floor -------------------------------
+  // Floor stops are lifted off near-black to a dim hall grey-blue: no region of
+  // the frame should read as pure void, so a far/upper seat lands in a room, not
+  // a black pit. Ceiling stays dark for the premium-hall look.
   const sky = ctx.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, '#05070c');
-  sky.addColorStop(0.42, '#11172a');
-  sky.addColorStop(0.5, '#1a2238');
-  sky.addColorStop(0.56, '#10141f');
-  sky.addColorStop(1, '#07090f');
+  sky.addColorStop(0, '#080b12');
+  sky.addColorStop(0.42, '#12182c');
+  sky.addColorStop(0.5, '#1c2440');
+  sky.addColorStop(0.56, '#151b2c');
+  sky.addColorStop(0.78, '#171e30');
+  sky.addColorStop(1, '#131829');
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, W, H);
+
+  // Ambient floor wash — a broad dim lift across the lower hall so foreground
+  // floor reads as a lit surface receding into shadow, never a black plane.
+  const floorAmb = ctx.createLinearGradient(0, pitchToY(-6), 0, H);
+  floorAmb.addColorStop(0, 'rgba(30, 37, 56, 0)');
+  floorAmb.addColorStop(0.55, 'rgba(30, 37, 56, 0.22)');
+  floorAmb.addColorStop(1, 'rgba(22, 28, 44, 0.12)');
+  ctx.fillStyle = floorAmb;
+  ctx.fillRect(0, pitchToY(-6), W, H - pitchToY(-6));
 
   // Bearing of the stage in screen coords (-y is "up" the hall) — every
   // bearing-relative placement below rotates around this so yaw 0 faces it.
@@ -216,14 +299,21 @@ export function generateSeatPanorama(
   const hasRelief = stands.maxDelta >= FLAT_DELTA_M;
   if (hasRelief) drawStands(ctx, stands.bins, yawToX, pitchToY);
 
+  // Distance drama factor: near seats get a strong warm spill (you feel the
+  // footlights), far seats a gentler one — but the stage stays the clear focal
+  // point at every distance. 1 at ~6 m, easing to ~0.3 by ~55 m.
+  const nearGlow = Math.max(0.3, Math.min(1, 1 - (distM - 6) / 60));
+
   // ---- open floor / GA tone between the seat and the stage ----------------
-  // A subtle warmer patch on the floor toward the stage — a hint of the flat
-  // standing/floor area, kept faint so a plain hall still reads as a plain hall.
-  const floorGlow = ctx.createRadialGradient(W / 2, pitchToY(-22), 20, W / 2, pitchToY(-22), W * 0.42);
-  floorGlow.addColorStop(0, 'rgba(34, 38, 52, 0.20)');
-  floorGlow.addColorStop(1, 'rgba(34, 38, 52, 0)');
+  // Warm light spilling off the stage onto the floor/GA in front of it — the eye
+  // lands on the stage. Warmer + stronger than the old neutral patch, and scaled
+  // by distance so near seats get footlight drama without blowing out far ones.
+  const floorGlow = ctx.createRadialGradient(W / 2, pitchToY(-16), 20, W / 2, pitchToY(-16), W * 0.5);
+  floorGlow.addColorStop(0, `rgba(240, 176, 96, ${0.16 * nearGlow})`);
+  floorGlow.addColorStop(0.5, `rgba(150, 120, 120, ${0.1 * nearGlow})`);
+  floorGlow.addColorStop(1, 'rgba(40, 44, 60, 0)');
   ctx.fillStyle = floorGlow;
-  ctx.fillRect(0, pitchToY(0), W, H - pitchToY(0));
+  ctx.fillRect(0, pitchToY(2), W, H - pitchToY(2));
 
   // ---- stage, centered at yaw 0 (the viewer opens facing it) -------------
   // Angular size from real proportions: stage ~8m wide, ~1m platform + 6m set.
@@ -240,10 +330,14 @@ export function generateSeatPanorama(
   const sw = sx1 - sx0;
   const sh = sy1 - sy0;
 
-  // glow behind the stage
-  const glow = ctx.createRadialGradient(W / 2, (sy0 + sy1) / 2, 10, W / 2, (sy0 + sy1) / 2, sw * 1.1);
-  glow.addColorStop(0, 'rgba(129, 140, 248, 0.5)');
-  glow.addColorStop(0.5, 'rgba(99, 102, 241, 0.16)');
+  // glow behind the stage — a warm core inside the cool halo so the focal point
+  // reads as lit, not just tinted. Radius widens a touch with distance so a far
+  // stage still carries a visible bloom.
+  const glowR = sw * (1.1 + (1 - nearGlow) * 0.5);
+  const glow = ctx.createRadialGradient(W / 2, (sy0 + sy1) / 2, 8, W / 2, (sy0 + sy1) / 2, glowR);
+  glow.addColorStop(0, 'rgba(255, 214, 150, 0.4)'); // warm footlight core
+  glow.addColorStop(0.28, 'rgba(150, 150, 230, 0.34)');
+  glow.addColorStop(0.6, 'rgba(99, 102, 241, 0.14)');
   glow.addColorStop(1, 'rgba(99, 102, 241, 0)');
   ctx.fillStyle = glow;
   ctx.fillRect(sx0 - sw * 0.6, sy0 - sh * 1.2, sw * 2.2, sh * 3.4);
@@ -328,27 +422,43 @@ export function generateSeatPanorama(
   // legacy fixed −atan2(0.35) offset exactly (rise = 0), so they don't change.
   const own = seat.sectionId;
   let seatAhead = false; // an own-section seat between you and the stage?
-  ctx.fillStyle = 'rgba(16, 20, 30, 0.95)';
   for (const other of neighborSeats) {
     if (other.id === seat.id) continue;
     const ox = other.x - seat.x;
     const oy = other.y - seat.y;
     const d = Math.hypot(ox, oy) * UNIT;
     if (own && other.sectionId === own && d < 3 && ox * dx + oy * dy > 0) seatAhead = true;
-    if (d < 0.3 || d > 14) continue;
+    if (d < 0.3 || d > 16) continue;
     const bearing = Math.atan2(ox, -oy) - stageBearing;
     const yaw = ((((bearing * 180) / Math.PI + 540) % 360) - 180);
     const rise = hasRelief ? (other.eyeHeightM ?? SEATED_EYE_HEIGHT_M) - eyeM : 0;
     const headPitch = (Math.atan2(rise - 0.35, d) * 180) / Math.PI; // heads ~eye level, rake-shifted
-    const headR = Math.min(46, 260 / (d / UNIT / 24 + 1.2) / 4);
+    // Cheap per-seat variation from a hash of the id: heads differ in size and
+    // tone so the near rows read as a real, varied crowd, not stamped clones.
+    let hh = 0;
+    for (let k = 0; k < other.id.length; k++) hh = (hh * 31 + other.id.charCodeAt(k)) & 0xffff;
+    const jitter = 0.86 + (hh & 15) / 48; // ~0.86..1.17
+    const headR = Math.min(46, (260 / (d / UNIT / 24 + 1.2) / 4)) * jitter;
     const hx = yawToX(yaw);
     const hy = pitchToY(headPitch);
+    // Tone: dim blue-grey, lifted a little for near heads and jittered per head;
+    // fades toward the hall with distance so far heads recede.
+    const fade = Math.max(0.35, 1 - d / 20);
+    const tone = 14 + ((hh >> 4) & 7) + Math.round((1 - d / 16) * 10);
+    ctx.fillStyle = `rgba(${tone},${tone + 4},${tone + 12},${(0.9 * fade).toFixed(3)})`;
     ctx.beginPath();
     ctx.arc(hx, hy, headR, 0, Math.PI * 2);
     ctx.fill();
-    ctx.beginPath(); // shoulders
-    ctx.ellipse(hx, hy + headR * 1.4, headR * 1.7, headR * 0.9, 0, Math.PI, 0, true);
+    ctx.beginPath(); // shoulders (slightly wide so near rows overlap into a crowd)
+    ctx.ellipse(hx, hy + headR * 1.4, headR * 1.85, headR * 0.95, 0, Math.PI, 0, true);
     ctx.fill();
+    // warm rim on the stage-facing top of near heads — footlights catching hair.
+    if (d < 9) {
+      ctx.fillStyle = `rgba(240, 200, 150, ${(0.16 * (1 - d / 9)).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(hx, hy - headR * 0.25, headR * 0.82, Math.PI * 1.15, Math.PI * 1.85);
+      ctx.fill();
+    }
   }
 
   // ---- foreground: the seat-back rail of the row right in front of you ----
@@ -372,8 +482,10 @@ export function generateSeatPanorama(
   const poleFade = ctx.createLinearGradient(0, 0, 0, H);
   poleFade.addColorStop(0, 'rgba(0,0,0,0.85)');
   poleFade.addColorStop(0.12, 'rgba(0,0,0,0)');
-  poleFade.addColorStop(0.88, 'rgba(0,0,0,0)');
-  poleFade.addColorStop(1, 'rgba(0,0,0,0.85)');
+  poleFade.addColorStop(0.9, 'rgba(0,0,0,0)');
+  // Softer at the nadir than the zenith: within the windowed pitch range the
+  // floor stays a dim lit hall; only the extreme straight-down pole darkens.
+  poleFade.addColorStop(1, 'rgba(0,0,0,0.55)');
   ctx.fillStyle = poleFade;
   ctx.fillRect(0, 0, W, H);
 
@@ -406,13 +518,14 @@ export function generateSeatThumb(seat: ExpandedSeat, focalPoint: Point, _neighb
   const dy = focalPoint.y - seat.y;
   const distM = Math.max(2, Math.hypot(dx, dy) * UNIT);
 
-  // hall shell (ceiling → wall → floor), horizon at mid-height
+  // hall shell (ceiling → wall → floor), horizon at mid-height. Floor lifted off
+  // near-black to a dim hall grey-blue, matching the full panorama's ambient.
   const sky = ctx.createLinearGradient(0, 0, 0, TH);
-  sky.addColorStop(0, '#05070c');
-  sky.addColorStop(0.44, '#141b30');
-  sky.addColorStop(0.5, '#1b2440');
-  sky.addColorStop(0.58, '#10141f');
-  sky.addColorStop(1, '#070910');
+  sky.addColorStop(0, '#080b12');
+  sky.addColorStop(0.44, '#151c32');
+  sky.addColorStop(0.5, '#1d2644');
+  sky.addColorStop(0.58, '#161c2e');
+  sky.addColorStop(1, '#131829');
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, TW, TH);
 
@@ -429,10 +542,11 @@ export function generateSeatThumb(seat: ExpandedSeat, focalPoint: Point, _neighb
   const sw = sx1 - sx0;
   const sh = sy1 - sy0;
 
-  // glow
-  const glow = ctx.createRadialGradient(TW / 2, (sy0 + sy1) / 2, 4, TW / 2, (sy0 + sy1) / 2, sw * 1.1);
-  glow.addColorStop(0, 'rgba(129,140,248,0.5)');
-  glow.addColorStop(0.5, 'rgba(99,102,241,0.15)');
+  // glow — warm footlight core inside the cool halo, matching the full panorama.
+  const glow = ctx.createRadialGradient(TW / 2, (sy0 + sy1) / 2, 4, TW / 2, (sy0 + sy1) / 2, sw * 1.15);
+  glow.addColorStop(0, 'rgba(255,214,150,0.4)');
+  glow.addColorStop(0.28, 'rgba(150,150,230,0.32)');
+  glow.addColorStop(0.6, 'rgba(99,102,241,0.13)');
   glow.addColorStop(1, 'rgba(99,102,241,0)');
   ctx.fillStyle = glow;
   ctx.fillRect(sx0 - sw * 0.6, sy0 - sh * 1.2, sw * 2.2, sh * 3.4);
