@@ -652,6 +652,13 @@ function expandFloorObjects(
   objects: ChartObject[],
   zones: ChartDoc['zones'],
   fallbackFocal: Point | undefined,
+  /**
+   * Lowest-priority authored view-from-seat fallback for this floor: the
+   * floor-level url if set, else the venue/chart-level default. Applied as the
+   * final `??=` after seat/row/section, so any closer photo always wins. Absent
+   * ⇒ seats with no closer photo keep `viewUrl` undefined (generated panorama).
+   */
+  viewFallback?: string,
 ): ExpandedSeat[] {
   const out: ExpandedSeat[] = [];
   const segmented = new Map<string, {
@@ -751,6 +758,8 @@ function expandFloorObjects(
     const resolvedFocal = zone?.focalPoint ?? fallbackFocal;
     for (const seat of seats) {
       if (inheritedView) seat.viewUrl ??= inheritedView;
+      // Floor > venue default: the last authored tier before a generated panorama.
+      if (viewFallback) seat.viewUrl ??= viewFallback;
       if (owner) seat.sectionId = owner.logicalSectionId ?? owner.id;
       if (owner?.zone) seat.zoneId = owner.zone;
       if (resolvedFocal) seat.focalPoint = { ...resolvedFocal };
@@ -768,13 +777,15 @@ export function expandChart(doc: ChartDoc, options: ExpandChartOptions = {}): Ex
     const out: ExpandedSeat[] = [];
     for (const floor of doc.floors) {
       const floorFocal = floor.focalPoint ?? doc.focalPoint;
-      const seats = expandFloorObjects(floor.objects, doc.zones, floorFocal);
+      // Per-floor photo overrides the venue default for seats on this floor.
+      const floorView = floor.viewFromSeatUrl ?? doc.viewFromSeatUrl;
+      const seats = expandFloorObjects(floor.objects, doc.zones, floorFocal, floorView);
       assignEyeHeights(floor.objects, floor.focalPoint ?? doc.focalPoint, floor.baseHeightM ?? 0, seats);
       out.push(...seats);
     }
     return out;
   }
-  const out = expandFloorObjects(doc.objects, doc.zones, doc.focalPoint);
+  const out = expandFloorObjects(doc.objects, doc.zones, doc.focalPoint, doc.viewFromSeatUrl);
   assignEyeHeights(doc.objects, doc.focalPoint, options.floorBaseHeightM ?? 0, out);
   return out;
 }

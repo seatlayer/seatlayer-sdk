@@ -957,6 +957,14 @@ export interface Floor {
    * by the background compatibility helpers.
    */
   backgroundImage?: ChartDoc['backgroundImage'];
+  /**
+   * Per-floor override of the venue-wide view-from-seat fallback: a single
+   * organizer 360° (or wide photo) inherited by every seat on THIS floor that
+   * has no closer row/section photo. Falls below section photos and above the
+   * chart-level `viewFromSeatUrl`. Absent ⇒ the venue default (then a synthetic
+   * panorama) applies.
+   */
+  viewFromSeatUrl?: string;
 }
 
 export interface ReferenceCalibration {
@@ -1184,6 +1192,12 @@ export interface ChartDoc {
    *  adjustable template family, and the designer offers a capacity control that
    *  regenerates it at a new target seat count (Batch 4 "curated singles + resize"). */
   template?: { family: string; targetSeats: number };
+  /**
+   * Venue-wide view-from-seat fallback: a single organizer 360° (or wide photo)
+   * inherited by every seat that has no closer row/section/floor photo. Absent ⇒
+   * the picker generates a synthetic panorama.
+   */
+  viewFromSeatUrl?: string;
 }
 
 // ---------------------------------------------------------------------------
