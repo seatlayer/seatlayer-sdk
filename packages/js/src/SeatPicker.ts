@@ -925,6 +925,12 @@ const CSS = `
   transform:translateX(-50%);width:min(342px,calc(100% - 24px))}
 .sl-picker[data-view3d="on"] .sl-confirm[data-placement]{transform:translateX(-50%)}
 
+/* Plain "View from here" action shown when no real photo exists (the synthetic
+   thumb is suppressed at card size — full-screen is where it earns its keep). */
+.sl-confirm-viewbtn{width:100%;margin-top:9px;padding:8px;border-radius:8px;border:1px solid var(--sl-line);
+  display:flex;align-items:center;justify-content:center;gap:7px;font-size:12px;font-weight:800;
+  color:var(--sl-text);background:transparent;transition:border-color .15s,background .15s}
+.sl-confirm-viewbtn:hover,.sl-confirm-viewbtn:focus-visible{border-color:var(--sl-accent);background:color-mix(in srgb,var(--sl-accent) 10%,transparent)}
 /* confirm-card "See it in 3D" / "View from this seat" action — the purchase-
    moment bridge into the cinematic. Styled like the view-from-seat button. */
 .sl-confirm-3d{width:100%;margin-top:9px;padding:8px;border-radius:8px;border:1px solid var(--sl-line);
@@ -1260,12 +1266,14 @@ export class SeatPicker {
     const hasStage = this.chartHasStage();
     // No organizer photo AND no stage to measure against → nothing honest to show.
     if (!realPhoto && !hasStage) return '';
-    let url = realPhoto;
     let distance: number | null = null;
-    if (!url) {
+    if (!realPhoto) {
       try {
+        // Rendered only for its distance figure — the synthetic image itself is
+        // deliberately NOT shown at card size, where it reads as a cheap fake
+        // photo (owner call 2026-07-24). Full-screen is where generated views
+        // earn their keep; the card keeps a plain "View from here" button.
         const thumb = generateSeatThumb(seat, seat.focalPoint ?? doc.focalPoint);
-        url = thumb.url;
         distance = thumb.distanceM ?? null;
       } catch {
         return '';
@@ -1277,13 +1285,15 @@ export class SeatPicker {
           ? t('picker.sightline', { m: distance })
           : this.tf('picker.sightlineClear', 'Clear sightline')}</div>`
       : '';
-    return (
-      `<button type="button" class="sl-confirm-view sl-confirm-thumbwrap" aria-label="${t('picker.viewFromSeat', { label: seat.label })}">` +
-      `<img class="sl-confirm-thumb" src="${url}" alt="" />` +
-      `<span class="sl-confirm-thumb-badge">🔭 ${this.tf('picker.viewFromHere', 'View from here')}</span>` +
-      `</button>` +
-      sightHtml
-    );
+    const viewBtn = realPhoto
+      ? `<button type="button" class="sl-confirm-view sl-confirm-thumbwrap" aria-label="${t('picker.viewFromSeat', { label: seat.label })}">` +
+        `<img class="sl-confirm-thumb" src="${realPhoto}" alt="" />` +
+        `<span class="sl-confirm-thumb-badge">🔭 ${this.tf('picker.viewFromHere', 'View from here')}</span>` +
+        `</button>`
+      : `<button type="button" class="sl-confirm-view sl-confirm-viewbtn" aria-label="${t('picker.viewFromSeat', { label: seat.label })}">` +
+        `<span aria-hidden="true">🔭</span><span>${this.tf('picker.viewFromHere', 'View from here')}</span>` +
+        `</button>`;
+    return viewBtn + sightHtml;
   }
 
   /** "See it in 3D" (2D) / "View from this seat" (already in 3D) action for the
