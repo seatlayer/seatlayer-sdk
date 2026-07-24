@@ -1003,15 +1003,15 @@ function drawArenaScene(
 
   // Deck top face — a lit elliptical platform.
   const deckTop = ctx.createLinearGradient(0, topCy - topRy, 0, topCy + topRy);
-  deckTop.addColorStop(0, '#2b3350');
-  deckTop.addColorStop(1, '#161b2c');
+  deckTop.addColorStop(0, '#3d4a72');
+  deckTop.addColorStop(1, '#232b47');
   ctx.fillStyle = deckTop;
   ctx.beginPath();
   ctx.ellipse(cx, topCy, halfW, topRy, 0, 0, TAU);
   ctx.fill();
   // warm bloom on the deck, centred under the LEAD, not the geometric middle.
   const deckGlow = ctx.createRadialGradient(leadX, topCy, 2, leadX, topCy, halfW);
-  deckGlow.addColorStop(0, `rgba(255,214,160,${(0.3 * nearGlow).toFixed(3)})`);
+  deckGlow.addColorStop(0, `rgba(255,214,160,${(0.5 * nearGlow).toFixed(3)})`);
   deckGlow.addColorStop(1, 'rgba(255,214,160,0)');
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -1059,11 +1059,11 @@ function drawArenaScene(
   for (const p of [...form].sort((a, b) => a.v - b.v)) {
     const depthScale = 0.82 + (p.v + 1) * 0.14; // −1..1 → 0.82..1.1
     drawPerformer(ctx, spotX(p), spotY(p), perfH * depthScale * (p.lead ? 1.06 : 0.92), {
-      tone: [10, 12, 20],
-      alpha: 0.92,
+      tone: [18, 21, 34],
+      alpha: 0.95,
       pose: p.pose,
-      rim: hslToRgb(40, 0.6, 0.72),
-      rimStrength: p.lead ? 1 : 0.65,
+      rim: hslToRgb(40, 0.72, 0.8),
+      rimStrength: p.lead ? 1.4 : 0.9,
     });
   }
 
@@ -1083,14 +1083,68 @@ function drawArenaScene(
     if (Math.sin(a) > -0.2) {
       // front-facing fixtures cast visible beams down onto the deck.
       const tx = cx + (rand() - 0.5) * halfW * 0.8;
-      drawBeam(ctx, fxX, fxY, tx, topCy, 3, halfW * 0.32, rigTintStr, 0.14 * (0.7 + nearGlow * 0.4));
+      drawBeam(ctx, fxX, fxY, tx, topCy, 3, halfW * 0.32, rigTintStr, 0.2 * (0.7 + nearGlow * 0.4));
     }
-    drawFixture(ctx, fxX, fxY, 2.2, rigTintStr);
+    drawFixture(ctx, fxX, fxY, 3, rigTintStr);
   }
+
+  // Centre-hung scoreboard over the deck — the iconic in-the-round silhouette.
+  // Without it the upper hemisphere is a black void at close range; with it the
+  // eye gets an anchor above the show and the room reads unmistakably "arena".
+  const scoreY = pitchToY(Math.min(52, farTopPitch + 24));
+  const scoreW = Math.max(60, halfW * 0.4);
+  const scoreH = Math.max(24, scoreW * 0.34);
+  // cables up toward the roof
+  ctx.strokeStyle = 'rgba(70,78,102,0.6)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - scoreW * 0.3, scoreY - scoreH / 2);
+  ctx.lineTo(cx - scoreW * 0.16, scoreY - scoreH * 2.2);
+  ctx.moveTo(cx + scoreW * 0.3, scoreY - scoreH / 2);
+  ctx.lineTo(cx + scoreW * 0.16, scoreY - scoreH * 2.2);
+  ctx.stroke();
+  // body
+  ctx.fillStyle = '#0d1220';
+  ctx.fillRect(cx - scoreW / 2, scoreY - scoreH / 2, scoreW, scoreH);
+  // glowing screen face with a soft video wash
+  const screen = ctx.createLinearGradient(0, scoreY - scoreH * 0.3, 0, scoreY + scoreH * 0.42);
+  screen.addColorStop(0, `rgba(${rigTintStr},0.5)`);
+  screen.addColorStop(1, 'rgba(255,214,160,0.32)');
+  ctx.fillStyle = screen;
+  ctx.fillRect(cx - scoreW * 0.42, scoreY - scoreH * 0.3, scoreW * 0.84, scoreH * 0.72);
+  // lit underside rim — reads as the ribbon board
+  ctx.fillStyle = 'rgba(255,214,160,0.55)';
+  ctx.fillRect(cx - scoreW / 2, scoreY + scoreH / 2 - 2, scoreW, 2);
+  // soft glow bleeding off the screens into the air
+  const scoreGlow = ctx.createRadialGradient(cx, scoreY, 4, cx, scoreY, scoreW * 1.1);
+  scoreGlow.addColorStop(0, `rgba(${rigTintStr},0.2)`);
+  scoreGlow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = scoreGlow;
+  ctx.fillRect(cx - scoreW * 1.1, scoreY - scoreW * 0.8, scoreW * 2.2, scoreW * 1.6);
+  // haze of light in the air between the rig and the deck — show-light spill.
+  const airGlow = ctx.createRadialGradient(cx, (trussY + topCy) / 2, 6, cx, (trussY + topCy) / 2, halfW * 1.5);
+  airGlow.addColorStop(0, `rgba(${rigTintStr},${(0.1 * (0.6 + nearGlow * 0.5)).toFixed(3)})`);
+  airGlow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = airGlow;
+  ctx.fillRect(cx - halfW * 1.5, trussY - 40, halfW * 3, topCy - trussY + 80);
+  ctx.restore();
   // Key light: one stronger, tighter beam pinned on the lead — the eye lands
   // where the show is, which is what was missing from the dead-centre wash.
   const keyX = cx + Math.sign(leadX - cx || 1) * halfW * 0.5;
-  drawBeam(ctx, keyX, trussY - trussRy * 0.4, leadX, spotY(lead), 2.5, halfW * 0.16, '255,224,178', 0.3 * (0.7 + nearGlow * 0.4));
+  drawBeam(ctx, keyX, trussY - trussRy * 0.4, leadX, spotY(lead), 2.5, halfW * 0.16, '255,224,178', 0.42 * (0.7 + nearGlow * 0.4));
+  // hot pool where the key lands — grounds the lead in light.
+  const pool2 = ctx.createRadialGradient(leadX, spotY(lead), 1, leadX, spotY(lead), halfW * 0.2);
+  pool2.addColorStop(0, `rgba(255,228,185,${(0.4 * nearGlow).toFixed(3)})`);
+  pool2.addColorStop(1, 'rgba(255,228,185,0)');
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = pool2;
+  ctx.beginPath();
+  ctx.ellipse(leadX, spotY(lead), halfW * 0.2, topRy * 0.24, 0, 0, TAU);
+  ctx.fill();
+  ctx.restore();
 }
 
 /**
