@@ -37,7 +37,16 @@ const FILES = [
   ['packages/js/src/SeatingChart.ts', 'src/picker/widget/SeatingChart.ts'],
 ];
 
-const rewrite = (text) => text.replaceAll("from '@seatlayer/core'", "from './core'");
+// Two deterministic import rewrites for the app's vendored copy:
+//   '@seatlayer/core/view3d' → '../../view3d'  (the app owns the view3d source;
+//        matches both the `import type … from` and the lazy `import(...)` forms)
+//   from '@seatlayer/core'    → from './core'   (the hand-written engine barrel)
+// The view3d rewrite MUST run first — its specifier is a superset of the general
+// one, and its closing quote sits after `/view3d` so the general rule never
+// matches it, but ordering keeps the intent obvious.
+const rewrite = (text) => text
+  .replaceAll("'@seatlayer/core/view3d'", "'../../view3d'")
+  .replaceAll("from '@seatlayer/core'", "from './core'");
 
 function sdkGit(...args) {
   return execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8' }).trim();

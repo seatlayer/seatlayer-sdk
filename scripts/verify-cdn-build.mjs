@@ -16,7 +16,10 @@ const indexDir = resolve(repoRoot, 'cdn/dist/-');
 const manifest = JSON.parse(readFileSync(resolve(releaseDir, 'release.json'), 'utf8'));
 assert.deepEqual(
   readdirSync(releaseDir).sort(),
-  ['release.json', 'seatlayer.js', 'seatlayer.mjs'],
+  // seatlayer-view3d.mjs is the ONE intentional lazy chunk — the 3D venue view,
+  // loaded by URL at 3D-open time (CDN bundles can't code-split). Any OTHER
+  // unexpected file here means an accidental split leaked out.
+  ['release.json', 'seatlayer-view3d.mjs', 'seatlayer.js', 'seatlayer.mjs'],
   'CDN releases must be self-contained; unexpected lazy chunks were emitted',
 );
 
@@ -26,7 +29,7 @@ assert.deepEqual(manifest.packages, Object.fromEntries(releasePackages().map((pk
 assert.deepEqual(manifest.source.engine, engineSource());
 assert.match(manifest.source.commit, /^[0-9a-f]{40}$/);
 
-for (const name of ['seatlayer.js', 'seatlayer.mjs']) {
+for (const name of ['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs']) {
   const releaseBytes = readFileSync(resolve(releaseDir, name));
   assert.ok(releaseBytes.byteLength > 50_000, `${name} unexpectedly small`);
   assert.equal(sha256(releaseBytes), manifest.files[name].sha256);

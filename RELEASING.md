@@ -80,6 +80,21 @@ The workflow is safely retryable: an existing npm version is skipped only after
 its unpacked payload matches the local package byte-for-byte, while an existing
 immutable CDN object must match the local SHA-256 or the release stops.
 
+### The lazy 3D chunk (`seatlayer-view3d.mjs`)
+
+The interactive 3D venue view (`@seatlayer/core/view3d`, an OGL scene) is loaded
+only when a buyer opens 3D, so it must never sit in the main bundle. On npm it
+chunk-splits automatically. On the CDN — where IIFE bundles can't code-split —
+it is built as a **separate self-contained ESM asset** (`cdn/vite.view3d.config.ts`,
+`ogl` + `earcut` bundled in) that lands beside the pinned files as
+`seatlayer-js@X.Y.Z/seatlayer-view3d.mjs`. The widget resolves it by URL relative
+to its own script (`import.meta.url` in the ESM output; `document.currentScript`
+in the IIFE) and imports it at 3D-open time — zero GL bytes until then. It is a
+pinned immutable object like the others: `finalize-cdn.mjs` records its
+SHA-256/size in `release.json`, `verify-cdn-build.mjs` gates it, `upload-cdn.mjs`
+ships it, and the CDN Worker's filename allowlist serves it. It is the ONE
+intentional lazy chunk; any other file in the release dir fails the build check.
+
 ### Release infrastructure prerequisites
 
 - R2 bucket: `seatlayer-sdk-releases`

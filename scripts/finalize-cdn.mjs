@@ -27,7 +27,10 @@ const indexDir = resolve(repoRoot, 'cdn/dist/-');
 const ledgerPath = resolve(repoRoot, 'cdn/versions.json');
 const files = {};
 
-for (const name of ['seatlayer.js', 'seatlayer.mjs']) {
+// seatlayer-view3d.mjs is the lazy 3D venue-view chunk built alongside the main
+// bundle (cdn/vite.view3d.config.ts). It ships as a pinned immutable object and
+// the widget loads it by URL at 3D-open time.
+for (const name of ['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs']) {
   const bytes = readFileSync(resolve(releaseDir, name));
   files[name] = { sha256: sha256(bytes), bytes: bytes.byteLength };
 }

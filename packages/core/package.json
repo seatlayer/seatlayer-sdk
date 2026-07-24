@@ -16,6 +16,13 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "view3d": [
+        "./dist/view3d/index.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "import": {
@@ -25,6 +32,16 @@
       "require": {
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
+      }
+    },
+    "./view3d": {
+      "import": {
+        "types": "./dist/view3d/index.d.ts",
+        "default": "./dist/view3d/index.js"
+      },
+      "require": {
+        "types": "./dist/view3d/index.d.cts",
+        "default": "./dist/view3d/index.cjs"
       }
     }
   },
@@ -45,9 +62,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "konva": "^10.3.0"
+    "earcut": "^3.2.3",
+    "konva": "^10.3.0",
+    "ogl": "^1.0.11"
   },
   "devDependencies": {
+    "@types/earcut": "^3.0.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.0"
   }

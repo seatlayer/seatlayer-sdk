@@ -33,7 +33,7 @@ const origin = (process.env.CDN_ORIGIN || 'https://cdn.seatlayer.io').replace(/\
 const root = mode === 'immutable' ? `seatlayer-js@${version}` : '-';
 const localRoot = resolve(repoRoot, 'cdn/dist', root);
 const names = mode === 'immutable'
-  ? ['seatlayer.js', 'seatlayer.mjs', 'release.json']
+  ? ['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs', 'release.json']
   : ['versions.json'];
 
 // The Worker sets response Cache-Control explicitly; these are the object-level

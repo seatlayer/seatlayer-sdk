@@ -40,6 +40,7 @@ import {
   type SectionSummary,
   type TableSelectionDetails,
 } from '@seatlayer/core';
+import type { Venue3DHandle, SeatView as View3DSeatView } from '@seatlayer/core/view3d';
 import { PubApi, type HoldLineItem, type HoldResult } from './api';
 
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
@@ -181,9 +182,26 @@ export interface SeatPickerOptions {
   currency?: string;
   /** Colorblind-safe rendering (Okabe-Ito palette, hollow booked seats). */
   colorblindSafe?: boolean;
-  /** Initial map projection. `perspective` is the exact-seat projected 2.5D
-   * buyer view; all authoring and inventory identities remain unchanged. */
+  /** Initial map projection. Buyers now toggle **Map (flat 2D) + 3D** only; the
+   * legacy `perspective` (2.5D) value is still ACCEPTED for source compatibility
+   * but is deprecated — it is coerced to `flat` with a one-time console warning.
+   * The 3D venue view is entered from the Map/3D control, not this option. */
   initialView?: RendererViewMode;
+  /**
+   * Offer the interactive 3D venue view (Map | 3D toggle + a "See it in 3D"
+   * action on the seat-confirm card). Default true. The 3D button is shown only
+   * when this is not false AND the browser exposes WebGL2; there are ZERO GL
+   * bytes on the wire until the buyer actually opens 3D (the OGL chunk is
+   * dynamically imported on first use). Set false for embed hosts that must
+   * stay strictly 2D. */
+  enable3D?: boolean;
+  /**
+   * Optional analytics sink for the widget's own journey events. Currently emits
+   * the 3D venue-view journey (`3d_opened`, `3d_orbit_engaged`, `3d_seat_picked`,
+   * `3d_cinematic_played`/`_skipped`/`_cancelled`, `3d_panorama_opened`/`_closed`)
+   * with `{ surface: 'buyer' }` merged into the props. A throwing sink never
+   * breaks the widget. Route it to your product analytics (e.g. PostHog). */
+  onAnalytics?: (event: string, props: Record<string, unknown>) => void;
   /**
    * Hide the "Powered by SeatLayer" attribution badge in the side panel foot.
    * The chart theme's own `hideBadge` flag (paid orgs) also hides it — the badge
@@ -275,6 +293,79 @@ function escapeOption(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   })[character]!);
+}
+
+// ---- 3D venue view: lazy loader + capability probe -------------------------
+
+/** The full module type for the lazy OGL venue-view chunk (`@seatlayer/core/view3d`). */
+type Venue3DModule = typeof import('@seatlayer/core/view3d');
+
+/**
+ * Injected `true` only in the CDN/IIFE build (see cdn/vite.config.ts `define`).
+ * Undefined in the npm/tsup build and the vendored app copy, so the runtime-URL
+ * branch below is never taken there and esbuild dead-code-eliminates it in the
+ * CDN build once the constant folds to `true`.
+ */
+declare const __SEATLAYER_CDN__: boolean | undefined;
+
+/**
+ * This bundle's own URL, used only in the CDN build to locate the sibling 3D
+ * chunk `./seatlayer-view3d.mjs`. `import.meta.url` resolves to the module URL in
+ * the ESM CDN output (`…/seatlayer.mjs`), and Rollup auto-shims it to a
+ * `document.currentScript.src` expression in the IIFE output (`…/seatlayer.js`),
+ * so both CDN formats find the chunk next to them. Guarded so no environment
+ * that lacks `import.meta` throws at module init.
+ */
+const SEATLAYER_MODULE_URL: string | undefined = (() => {
+  // IIFE/classic-script (CDN seatlayer.js): the tag sets document.currentScript
+  // synchronously while this module's top level runs. Resolve from it first —
+  // the IIFE build folds `import.meta` to `{}`, so import.meta.url is unusable
+  // there anyway.
+  if (typeof document !== 'undefined'
+    && document.currentScript instanceof HTMLScriptElement
+    && document.currentScript.src) {
+    return document.currentScript.src;
+  }
+  // ESM (CDN seatlayer.mjs / bundlers): import.meta.url is the module URL.
+  try {
+    const u = import.meta.url;
+    if (typeof u === 'string' && u) return u;
+  } catch {
+    /* no import.meta in this environment */
+  }
+  return undefined;
+})();
+
+let _webgl2Cache: boolean | null = null;
+/** Whether the browser exposes WebGL2 (cached). Gates the 3D affordances. */
+function hasWebGL2(): boolean {
+  if (_webgl2Cache !== null) return _webgl2Cache;
+  try {
+    if (typeof document === 'undefined') return (_webgl2Cache = false);
+    const canvas = document.createElement('canvas');
+    _webgl2Cache = !!canvas.getContext('webgl2');
+  } catch {
+    _webgl2Cache = false;
+  }
+  return _webgl2Cache;
+}
+
+/**
+ * Dynamically load the view3d module. Two build targets, one source:
+ * - CDN/IIFE (cannot code-split): load the sibling ESM asset by absolute URL
+ *   derived from this script's own src.
+ * - npm/ESM and the vendored app copy (rewritten to `../../view3d`): a bare
+ *   dynamic import the consumer's bundler chunk-splits automatically.
+ * Either way, ZERO GL bytes are fetched until this actually runs.
+ */
+async function loadVenue3d(): Promise<Venue3DModule> {
+  if (typeof __SEATLAYER_CDN__ !== 'undefined' && __SEATLAYER_CDN__) {
+    const base = SEATLAYER_MODULE_URL ?? (typeof location !== 'undefined' ? location.href : undefined);
+    if (!base) throw new Error('seatlayer: cannot resolve the 3D view chunk URL');
+    const url = new URL('./seatlayer-view3d.mjs', base).href;
+    return import(/* @vite-ignore */ url) as Promise<Venue3DModule>;
+  }
+  return import('@seatlayer/core/view3d');
 }
 
 /** Widget stylesheet — injected once per document. Every color/font/radius is a --sl-* token. */
@@ -809,6 +900,38 @@ const CSS = `
 .sl-projection button.on{background:var(--sl-accent);color:var(--sl-accent-ink)}
 .sl-picker[data-layout="narrow"] .sl-projection button{min-width:38px;min-height:32px;padding:5px 8px;font-size:9.5px}
 
+/* 3D venue overlay — mounts over the (paused) Konva stage inside the map host.
+   Carries its own gradient so it paints instantly before the scene builds, and
+   cross-fades on enter/exit via a compositor-only opacity transition. Sits below
+   the anchored chrome (z-index:5) and the confirm card (z-index:10) so the
+   Map|3D toggle and the seat confirm both stay usable over it. */
+.sl-view3d{position:absolute;inset:0;z-index:4;opacity:0;touch-action:none;
+  transition:opacity .3s ease;background:radial-gradient(120% 120% at 50% 0%,#191f28 0%,#0d1014 70%)}
+.sl-view3d canvas{display:block;width:100%;height:100%}
+.sl-view3d-back{position:absolute;top:12px;left:12px;z-index:2;display:inline-flex;align-items:center;gap:6px;
+  padding:7px 13px 7px 9px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.03em;
+  color:#e6edf3;background:rgba(10,14,20,.62);border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(6px)}
+.sl-view3d-back:hover,.sl-view3d-back:focus-visible{background:rgba(16,22,30,.82);border-color:rgba(255,255,255,.4)}
+.sl-view3d-back svg{width:15px;height:15px;stroke:currentColor;stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+/* While immersed, the 2D-only chrome is meaningless — hide it, keep Map|3D. */
+.sl-picker[data-view3d="on"] .sl-rungs,
+.sl-picker[data-view3d="on"] .sl-floors,
+.sl-picker[data-view3d="on"] .sl-zoom,
+.sl-picker[data-view3d="on"] .sl-seccard,
+.sl-picker[data-view3d="on"] .sl-minimap{display:none!important}
+/* The confirm card bottom-sheets over 3D (no 2D screen anchor to track). */
+.sl-picker[data-view3d="on"] .sl-confirm{left:50%!important;top:auto!important;bottom:16px;
+  transform:translateX(-50%);width:min(342px,calc(100% - 24px))}
+.sl-picker[data-view3d="on"] .sl-confirm[data-placement]{transform:translateX(-50%)}
+
+/* confirm-card "See it in 3D" / "View from this seat" action — the purchase-
+   moment bridge into the cinematic. Styled like the view-from-seat button. */
+.sl-confirm-3d{width:100%;margin-top:9px;padding:8px;border-radius:8px;border:1px solid var(--sl-line);
+  display:flex;align-items:center;justify-content:center;gap:7px;font-size:12px;font-weight:800;
+  color:var(--sl-text);background:color-mix(in srgb,var(--sl-accent) 12%,transparent);transition:border-color .15s,background .15s}
+.sl-confirm-3d:hover,.sl-confirm-3d:focus-visible{border-color:var(--sl-accent);background:color-mix(in srgb,var(--sl-accent) 20%,transparent)}
+.sl-confirm-3d svg{width:15px;height:15px;stroke:currentColor;stroke-width:1.9;fill:none;stroke-linecap:round;stroke-linejoin:round}
+
 /* multi-floor switcher (flows within the left-rail region) */
 .sl-floors{display:none;flex-direction:column;gap:6px;max-width:100%}
 .sl-floors.on{display:flex}
@@ -1055,6 +1178,15 @@ export class SeatPicker {
   // arena / multi-floor / seat-view chrome
   private rungsEl: HTMLDivElement | null = null;
   private projectionEl: HTMLDivElement | null = null;
+  // --- 3D venue view (Map | 3D) ---
+  private buyerView: 'map' | 'venue3d' = 'map';
+  private view3dEl: HTMLDivElement | null = null;
+  private view3dHandle: Venue3DHandle | null = null;
+  /** Monotonic token so a stale async mount (buyer left before OGL finished
+   *  loading) never installs its handle over a newer state. */
+  private view3dGen = 0;
+  /** Seat whose 2D confirm card launched "See it in 3D"; re-shown on return. */
+  private view3dReturnSeat: ExpandedSeat | null = null;
   private floorsEl: HTMLDivElement | null = null;
   private secCardEl: HTMLDivElement | null = null;
   private viewEl: HTMLDivElement | null = null;
@@ -1150,6 +1282,21 @@ export class SeatPicker {
       `<span class="sl-confirm-thumb-badge">🔭 ${this.tf('picker.viewFromHere', 'View from here')}</span>` +
       `</button>` +
       sightHtml
+    );
+  }
+
+  /** "See it in 3D" (2D) / "View from this seat" (already in 3D) action for the
+   *  confirm card. Only when 3D is available — the purchase-moment bridge into
+   *  the cinematic that reaches buyers who never press the Map | 3D toggle. */
+  private see3dConfirmHtml(): string {
+    if (!this.canOffer3d()) return '';
+    const label = this.buyerView === 'venue3d'
+      ? this.tf('picker.viewFromThisSeat', 'View from this seat')
+      : this.tf('picker.seeItIn3d', 'See it in 3D');
+    return (
+      `<button type="button" class="sl-confirm-3d" aria-label="${label}">`
+      + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M12 12l9-5M12 12v10M12 12L3 7"/></svg>'
+      + `<span>${label}</span></button>`
     );
   }
 
@@ -1440,6 +1587,8 @@ export class SeatPicker {
         this.syncTray();
         // Seat-picking has begun — collapse the section card out of the way.
         if (this.committedSelection().length) this.collapseSectionCard();
+        // Keep the 3D overlay's selection highlight in lockstep (both directions).
+        this.syncSelectionTo3d();
       },
       onStatusChange: () => {
         this.syncPrices();
@@ -1447,6 +1596,8 @@ export class SeatPicker {
         this.detectBooked();
         // Live open/close of a section repaints the minimap's static overview.
         this.refreshMinimap();
+        // Mirror every live availability delta into the 3D view while it's open.
+        this.pushAvailabilityTo3d();
       },
       onHoldExpired: () => {
         this.hold = null;
@@ -1729,7 +1880,7 @@ export class SeatPicker {
     this.els.boot.remove();
     // Read-only load state: the chart() payload carries salesClosed.
     this.salesClosed = !!info.salesClosed;
-    this.controller.setViewMode(this.opts.initialView ?? 'flat');
+    this.controller.setViewMode(this.normalizeInitialView(this.opts.initialView));
 
     // Feature 6: anchor regions for all persistent map chrome, then move the
     // pre-built zoom column + toast into their regions (both were in the skeleton).
@@ -2574,17 +2725,22 @@ export class SeatPicker {
     const hasSections = doc.objects.some((o) => o.type === 'section')
       || (doc.floors ?? []).some((f) => f.objects.some((o) => o.type === 'section'));
 
-    if (hasSections) {
+    // Buyer view toggle: **Map | 3D** (2.5D/perspective is retired from the buyer
+    // surface). The 3D button is offered only when 3D is enabled AND the browser
+    // exposes WebGL2 — otherwise the picker stays a plain flat map with no toggle
+    // at all. Available for ANY chart with a real 3D relief source, not just
+    // sectioned venues.
+    if (this.canOffer3d()) {
       const projection = document.createElement('div');
       projection.className = 'sl-projection';
       projection.setAttribute('role', 'group');
-      projection.setAttribute('aria-label', 'Map projection');
+      projection.setAttribute('aria-label', 'Venue view');
       projection.innerHTML =
-        '<button type="button" data-projection="flat" aria-pressed="false" title="Flat 2D map">2D</button>' +
-        '<button type="button" data-projection="perspective" aria-pressed="false" title="Perspective 2.5D map">2.5D</button>';
+        '<button type="button" data-view="map" aria-pressed="true" title="Flat 2D map">Map</button>' +
+        '<button type="button" data-view="venue3d" aria-pressed="false" title="Interactive 3D venue view">3D</button>';
       projection.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
         button.addEventListener('click', () => {
-          this.setViewMode(button.dataset.projection as RendererViewMode);
+          this.setBuyerView(button.dataset.view as 'map' | 'venue3d');
         });
       });
       this.regions['top-right'].appendChild(projection);
@@ -2662,12 +2818,17 @@ export class SeatPicker {
 
   private syncProjection(): void {
     if (!this.projectionEl) return;
-    const active = this.controller.getViewMode();
     this.projectionEl.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
-      const on = button.dataset.projection === active;
+      const on = button.dataset.view === this.buyerView;
       button.classList.toggle('on', on);
       button.setAttribute('aria-pressed', String(on));
     });
+  }
+
+  /** Can this picker offer the 3D venue view? Requires the option (default on)
+   *  and WebGL2, and a chart to render. */
+  private canOffer3d(): boolean {
+    return this.opts.enable3D !== false && hasWebGL2() && !!this.controller.doc;
   }
 
   /** Reflect the active floor onto the switcher rail. */
@@ -3078,6 +3239,7 @@ export class SeatPicker {
       this.wheelchairConfirmHtml(details?.wheelchairSpaceType) +
       this.commercialConfirmHtml(seat.commercial) +
       (this.seatViewEnabled() ? this.confirmThumbHtml(seat) : '') +
+      this.see3dConfirmHtml() +
       `<div class="sl-confirm-row">` +
       `<button type="button" class="sl-confirm-cancel">Cancel</button>` +
       `<button type="button" class="sl-confirm-add"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4 4L19 7"/></svg>Select</button></div></div>`;
@@ -3085,6 +3247,17 @@ export class SeatPicker {
     this.confirmEl = el;
     this.reanchorConfirm();
     el.querySelector('.sl-confirm-view')?.addEventListener('click', () => this.openSeatView(seat));
+    el.querySelector('.sl-confirm-3d')?.addEventListener('click', () => {
+      if (this.buyerView === 'venue3d') {
+        // Already immersed — just fly the cinematic to this seat.
+        void this.view3dHandle?.flyToSeat(seat.id);
+      } else {
+        // Enter 3D flying straight to the seat; re-show this card on return.
+        this.view3dReturnSeat = seat;
+        this.dismissConfirm();
+        void this.enter3d(seat.id);
+      }
+    });
     el.querySelector('.sl-confirm-add')!.addEventListener('click', () => this.commitConfirm());
     el.querySelector('.sl-confirm-cancel')!.addEventListener('click', () => this.cancelConfirm());
     requestAnimationFrame(() => el.querySelector<HTMLButtonElement>('.sl-confirm-add')?.focus());
@@ -3092,6 +3265,9 @@ export class SeatPicker {
 
   private reanchorConfirm(): void {
     if (!this.confirmEl || !this.confirmSeat) return;
+    // In 3D the seat has no stable 2D screen anchor, so CSS bottom-sheets the
+    // card (same treatment as the narrow layout). Nothing to position here.
+    if (this.root?.dataset.view3d === 'on') return;
     const p = this.controller.worldToScreen({ x: this.confirmSeat.x, y: this.confirmSeat.y });
     if (this.root?.dataset.layout === 'narrow') return;
     const mapWidth = this.els.map.clientWidth;
@@ -4265,9 +4441,10 @@ export class SeatPicker {
     writeStoredColorblind(on);
   }
 
-  /** Switch the buyer canvas between flat, isometric and Perspective 2.5D. */
+  /** Switch the underlying 2D renderer projection (flat / isometric). The buyer
+   *  UI no longer exposes `perspective`; it is coerced to `flat`. */
   setViewMode(mode: RendererViewMode): void {
-    this.controller.setViewMode(mode);
+    this.controller.setViewMode(this.normalizeInitialView(mode));
     this.syncProjection();
     this.dismissConfirm();
   }
@@ -4275,6 +4452,185 @@ export class SeatPicker {
   /** Current buyer canvas projection. */
   getViewMode(): RendererViewMode {
     return this.controller.getViewMode();
+  }
+
+  /** `perspective` (2.5D) is retired from the buyer surface — accept it for
+   *  source compatibility but coerce to `flat` with a one-time deprecation warn. */
+  private perspectiveWarned = false;
+  private normalizeInitialView(mode: RendererViewMode | undefined): RendererViewMode {
+    if (mode === 'perspective') {
+      if (!this.perspectiveWarned) {
+        this.perspectiveWarned = true;
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[seatlayer] initialView:'perspective' (2.5D) is deprecated for the buyer picker and "
+          + "was coerced to 'flat'. Use the Map | 3D control for the immersive view.",
+        );
+      }
+      return 'flat';
+    }
+    return mode ?? 'flat';
+  }
+
+  // ---- 3D venue view ---------------------------------------------------------
+
+  /** Current buyer view: the flat map, or the interactive 3D venue. */
+  getBuyerView(): 'map' | 'venue3d' {
+    return this.buyerView;
+  }
+
+  /** Toggle between the flat Map and the 3D venue view. No-op when unchanged or
+   *  when 3D is unavailable. */
+  setBuyerView(view: 'map' | 'venue3d'): void {
+    if (view === this.buyerView) return;
+    if (view === 'venue3d') void this.enter3d();
+    else this.exit3d();
+  }
+
+  /** SeatStatus → the view3d palette state. Selection is layered separately. */
+  private seatState3dFor(id: string): 'available' | 'held' | 'sold' | 'dimmed' {
+    switch (this.controller.getStatus(id)) {
+      case 'held': return 'held';
+      case 'booked': return 'sold';
+      case 'not_for_sale': return 'dimmed';
+      default: return 'available';
+    }
+  }
+
+  /** Push the full live availability snapshot into the 3D handle (selection is
+   *  preserved inside the module). Cheap enough per status delta. */
+  private pushAvailabilityTo3d(): void {
+    if (!this.view3dHandle) return;
+    const updates = this.allSeats().map((s) => ({ seatId: s.id, state: this.seatState3dFor(s.id) }));
+    this.view3dHandle.setAvailability(updates);
+  }
+
+  /** Mirror the authoritative widget selection into the 3D handle. */
+  private syncSelectionTo3d(): void {
+    if (!this.view3dHandle) return;
+    this.view3dHandle.setSelection(this.controller.getSelection().map((s) => s.id));
+  }
+
+  /** Build the view-from-seat panorama the cinematic dissolves into — reuses the
+   *  exact input path as the 2D `openSeatView` (organizer photo, else generated). */
+  private seatViewFor3d(seatId: string): View3DSeatView | null {
+    const seat = this.allSeats().find((s) => s.id === seatId);
+    if (!seat) return null;
+    if (seat.viewUrl) return { url: seat.viewUrl };
+    const doc = this.controller.doc;
+    if (!doc) return null;
+    const activeId = this.controller.getActiveFloorId();
+    const focal = seat.focalPoint
+      ?? doc.floors?.find((f) => f.id === activeId)?.focalPoint
+      ?? doc.focalPoint
+      ?? { x: 0, y: 0 };
+    try {
+      return { url: generateSeatPanorama(seat, focal, this.allSeats()).url };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Route the module's decoupled analytics into the host callback, tagged buyer. */
+  private emit3dAnalytics(event: string, props?: Record<string, unknown>): void {
+    try {
+      this.opts.onAnalytics?.(event, { ...props, surface: 'buyer' });
+    } catch {
+      /* a throwing host sink never breaks the widget */
+    }
+  }
+
+  /** A 3D seat tap runs the SAME selection path as a 2D tap: toggle through the
+   *  controller, then raise the shared confirm card (bottom-sheeted in 3D). */
+  private onView3dSeatPick(seatId: string): void {
+    if (this.salesClosed) {
+      this.toast(this.tf('picker.salesClosedToast', 'Sales are closed for this event.'), 'warning');
+      this.syncSelectionTo3d();
+      return;
+    }
+    const seat = this.allSeats().find((s) => s.id === seatId);
+    if (!seat) return;
+    // Tapping an already-committed seat clears it (mirrors the 2D toggle).
+    const already = this.committedSelection().some((s) => s.id === seatId);
+    if (already) {
+      this.controller.deselect([seatId]);
+      this.dismissConfirm();
+      return;
+    }
+    this.flashPickedSeat(seatId);
+    this.controller.select([seatId]); // programmatic select is silent → confirm ourselves
+    if (this.opts.confirmSelection !== false) this.showConfirm(seat);
+    else this.syncTray();
+  }
+
+  private async enter3d(flySeatId?: string): Promise<void> {
+    if (this.view3dEl || !this.canOffer3d() || !this.els.map) return;
+    const doc = this.controller.doc;
+    if (!doc) return;
+    this.buyerView = 'venue3d';
+    this.root?.setAttribute('data-view3d', 'on');
+    this.dismissConfirm();
+    this.syncProjection();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'sl-view3d';
+    overlay.setAttribute('role', 'group');
+    overlay.setAttribute('aria-label', 'Interactive 3D venue view');
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'sl-view3d-back';
+    back.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>'
+      + `<span>${this.tf('picker.backToMap', 'Back to map')}</span>`;
+    back.addEventListener('click', () => this.exit3d());
+    overlay.appendChild(back);
+    this.els.map.appendChild(overlay);
+    this.view3dEl = overlay;
+    requestAnimationFrame(() => { overlay.style.opacity = '1'; });
+
+    const gen = ++this.view3dGen;
+    try {
+      const seats = expandChart(doc);
+      const mod = await loadVenue3d();
+      // Left 3D (or was torn down) while the OGL chunk loaded → abandon.
+      if (gen !== this.view3dGen || this.buyerView !== 'venue3d' || this.view3dEl !== overlay) return;
+      const handle = mod.mountVenue3D(overlay, { doc, seats }, {
+        onSeatPick: (id) => this.onView3dSeatPick(id),
+        getSeatView: (id) => this.seatViewFor3d(id) ?? { url: '' },
+        onAnalytics: (event, props) => this.emit3dAnalytics(event, props),
+      });
+      this.view3dHandle = handle;
+      this.pushAvailabilityTo3d();
+      this.syncSelectionTo3d();
+      if (flySeatId) void handle.flyToSeat(flySeatId);
+    } catch (err) {
+      this.opts.onError?.(err);
+      this.exit3d();
+    }
+  }
+
+  private exit3d(): void {
+    if (this.buyerView !== 'venue3d' && !this.view3dEl) return;
+    this.view3dGen++; // supersede any in-flight mount
+    this.buyerView = 'map';
+    this.root?.removeAttribute('data-view3d');
+    try { this.view3dHandle?.dispose(); } catch { /* GL teardown best-effort */ }
+    this.view3dHandle = null;
+    const overlay = this.view3dEl;
+    this.view3dEl = null;
+    if (overlay) {
+      overlay.style.opacity = '0';
+      setTimeout(() => overlay.remove(), 320);
+    }
+    this.syncProjection();
+    // Zoom/pan of the underlying 2D stage was never touched, so the map is
+    // restored exactly. Re-offer the confirm the buyer left via "See it in 3D".
+    const seat = this.view3dReturnSeat;
+    this.view3dReturnSeat = null;
+    if (seat && this.committedSelection().some((s) => s.id === seat.id)
+      && this.opts.confirmSelection !== false) {
+      this.showConfirm(seat);
+    }
   }
 
   /** Current active/restored hold reflected in the tray. */
@@ -4392,6 +4748,7 @@ export class SeatPicker {
     this.closeConfirm();
     this.dismissTableDialog(false);
     this.closeSeatView();
+    this.exit3d(); // dispose GL + remove the 3D overlay if it's up
     this.stopHoldTimer();
     if (this.toastTimer) clearTimeout(this.toastTimer);
     if (this.liveTimer) clearTimeout(this.liveTimer);

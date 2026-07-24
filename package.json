@@ -11,7 +11,7 @@
     "build": "pnpm -r build",
     "test": "vitest run",
     "lint:packages": "publint packages/core && publint packages/js && publint packages/react && attw --pack packages/core && attw --pack packages/js && attw --pack packages/react",
-    "build:cdn": "vite build --config cdn/vite.config.ts && node scripts/finalize-cdn.mjs",
+    "build:cdn": "vite build --config cdn/vite.config.ts && vite build --config cdn/vite.view3d.config.ts && node scripts/finalize-cdn.mjs",
     "typecheck": "pnpm -r typecheck && tsc -p cdn/tsconfig.json",
     "verify:cdn": "node scripts/verify-cdn-build.mjs",
     "verify:cdn:remote": "node scripts/verify-cdn-deployment.mjs",

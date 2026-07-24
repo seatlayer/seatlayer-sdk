@@ -86,6 +86,30 @@ const FILES = [
   ['src/i18n/locales/de.ts', 'packages/core/src/i18n/locales/de.ts'],
   ['src/i18n/locales/fr.ts', 'packages/core/src/i18n/locales/fr.ts'],
   ['src/lib/money.ts', 'packages/core/src/lib/money.ts'],
+  // --- view3d: the lazy OGL venue-view chunk (3D buyer/designer surface) -----
+  // Mirrored as a SEPARATE subpath entry (@seatlayer/core/view3d), never bundled
+  // into the main engine export. Imports only `../../core/{types,units}` (both
+  // mirrored above) plus the external `ogl` runtime dep, so the closure resolves
+  // byte-identically here. Build config: packages/core/tsup.config.ts adds the
+  // `src/view3d/index.ts` entry and marks `ogl` external.
+  ['src/view3d/index.ts', 'packages/core/src/view3d/index.ts'],
+  ['src/view3d/analytics.ts', 'packages/core/src/view3d/analytics.ts'],
+  ['src/view3d/lod.ts', 'packages/core/src/view3d/lod.ts'],
+  ['src/view3d/loop.ts', 'packages/core/src/view3d/loop.ts'],
+  ['src/view3d/palette.ts', 'packages/core/src/view3d/palette.ts'],
+  ['src/view3d/camera/cinematic.ts', 'packages/core/src/view3d/camera/cinematic.ts'],
+  ['src/view3d/camera/cinematicMath.ts', 'packages/core/src/view3d/camera/cinematicMath.ts'],
+  ['src/view3d/camera/orbit.ts', 'packages/core/src/view3d/camera/orbit.ts'],
+  ['src/view3d/crossfade/panorama.ts', 'packages/core/src/view3d/crossfade/panorama.ts'],
+  ['src/view3d/gl/context.ts', 'packages/core/src/view3d/gl/context.ts'],
+  ['src/view3d/pick/encode.ts', 'packages/core/src/view3d/pick/encode.ts'],
+  ['src/view3d/pick/pickPipeline.ts', 'packages/core/src/view3d/pick/pickPipeline.ts'],
+  ['src/view3d/pick/selection.ts', 'packages/core/src/view3d/pick/selection.ts'],
+  ['src/view3d/scene/build.ts', 'packages/core/src/view3d/scene/build.ts'],
+  ['src/view3d/scene/geometry.ts', 'packages/core/src/view3d/scene/geometry.ts'],
+  ['src/view3d/scene/materials.ts', 'packages/core/src/view3d/scene/materials.ts'],
+  ['src/view3d/scene/sceneModel.ts', 'packages/core/src/view3d/scene/sceneModel.ts'],
+  ['src/view3d/scene/seatInstances.ts', 'packages/core/src/view3d/scene/seatInstances.ts'],
 ];
 
 if (!existsSync(appRepo)) {

@@ -22,7 +22,7 @@
  * must keep resolving forever. New releases stop writing these paths.
  */
 
-const FILE_NAMES = new Set(['seatlayer.js', 'seatlayer.mjs', 'release.json']);
+const FILE_NAMES = new Set(['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs', 'release.json']);
 
 /** Canonical pinned artifact: /seatlayer-js@1.2.3/seatlayer.js */
 const PINNED_PATH = /^seatlayer-js@(\d+\.\d+\.\d+)\/([^/]+)$/;
