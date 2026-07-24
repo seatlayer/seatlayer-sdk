@@ -4512,7 +4512,9 @@ export class SeatPicker {
    * Switch between the flat seat **Map** and the interactive **3D venue** view —
    * the same control the buyer's on-widget `Map | 3D` toggle drives.
    *
-   * Entering `'venue3d'` with `opts.flyToSeatId` runs the full cinematic tour:
+   * Entering `'venue3d'` with `opts.flyToSeatId` runs the cinematic tour: the
+   * camera flies to the seat and holds in the live scene (a chip offers the
+   * 360° view-from-seat) —
    * the widget enters 3D and auto-flies the camera to that seat, dissolving into
    * its view-from-seat panorama (the same chain as tapping "See the view from
    * here" on a seat's confirm card). When the widget is **already** in the 3D
