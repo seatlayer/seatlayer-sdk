@@ -61,8 +61,10 @@ export interface SeatingChartOptions {
    * Toggleable later with setColorblindSafe().
    */
   colorblindSafe?: boolean;
-  /** Initial canvas projection. `perspective` enables exact-seat projected
-   * 2.5D picking without changing booking identities or chart geometry. */
+  /** Initial canvas projection.
+   * @deprecated `'isometric'` and `'perspective'` are retired in favour of the
+   * real 3D venue view (`setBuyerView('venue3d')`); they remain accepted for
+   * source compatibility and will be removed in the next major. Use `'flat'`. */
   initialView?: RendererViewMode;
   /**
    * Built-in seat tooltip on mouse hover (seat · category · price · status).
@@ -484,7 +486,10 @@ export class SeatingChart {
     this.controller.setColorblindSafe(on);
   }
 
-  /** Switch between flat, isometric and exact-seat Perspective 2.5D views. */
+  /** Switch the 2D canvas projection.
+   * @deprecated `'isometric'` and `'perspective'` are retired in favour of the
+   * real 3D venue view (`setBuyerView('venue3d')`); accepted for source
+   * compatibility until the next major. */
   setViewMode(mode: RendererViewMode): void {
     this.controller.setViewMode(mode);
   }
