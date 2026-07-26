@@ -91,6 +91,7 @@ before building checkout.
 | --- | --- | --- |
 | React Native | Public preview | [`seatlayer/seatlayer-react-native`](https://github.com/seatlayer/seatlayer-react-native) |
 | iOS | Public release candidate | [`seatlayer/seatlayer-ios`](https://github.com/seatlayer/seatlayer-ios) |
+| Android | Public preview | [`seatlayer/seatlayer-android`](https://github.com/seatlayer/seatlayer-android) |
 | Flutter | Public release candidate | [`seatlayer/seatlayer-flutter`](https://github.com/seatlayer/seatlayer-flutter) |
 
 See the [mobile SDK guide](https://docs.seatlayer.io/buyer-sdk/mobile/) for the
@@ -103,6 +104,7 @@ current installation and release status.
 - [Live demo hub](https://app.seatlayer.io/demo)
 - [SeatLayer AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit)
 - [React Native SDK](https://github.com/seatlayer/seatlayer-react-native)
+- [Native Android SDK](https://github.com/seatlayer/seatlayer-android)
 - [Agent-readable docs index](https://docs.seatlayer.io/llms.txt)
 
 ## Development
