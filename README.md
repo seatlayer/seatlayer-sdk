@@ -4,6 +4,15 @@ The official SeatLayer SDKs — a framework-agnostic core plus per-framework wra
 Render an interactive seat picker, let buyers select and **hold** seats in the browser,
 then **book** them from your server. Docs: <https://docs.seatlayer.io>
 
+## SeatLayer ecosystem
+
+- [Developer documentation](https://docs.seatlayer.io/) — guides, API
+  references, examples, and agent-readable Markdown.
+- [SeatLayer AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit) —
+  portable coding-agent skills, diagnostics, and integration verification.
+- [SeatLayer on GitHub](https://github.com/seatlayer) — all public SeatLayer
+  repositories.
+
 ## Packages
 
 | Package | What it is | Use it when |
