@@ -210,7 +210,7 @@ for (const [from, to] of FILES) {
   copied++;
 }
 writeFileSync(sourceRecord, `${JSON.stringify({
-  repository: 'paiteq/seatmap',
+  visibility: 'private',
   commit: appCommit,
 }, null, 2)}\n`);
 console.log(`✓ Synced ${copied} engine files from ${appRepo}`);

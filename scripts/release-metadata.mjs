@@ -39,8 +39,8 @@ export function sourceCommit() {
 
 export function engineSource() {
   const source = readJson('packages/core/engine-source.json');
-  if (typeof source.repository !== 'string' || !/^[0-9a-f]{40}$/.test(source.commit)) {
-    throw new Error('packages/core/engine-source.json must contain a repository and full commit SHA');
+  if (source.visibility !== 'private' || !/^[0-9a-f]{40}$/.test(source.commit)) {
+    throw new Error('packages/core/engine-source.json must identify private visibility and a full commit SHA');
   }
   return source;
 }
