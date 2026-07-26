@@ -208,6 +208,7 @@ The browser **holds**; your **server books** with a secret key. See
 - [Holds and checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
 - [Complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
 - [`@seatlayer/react`](https://www.npmjs.com/package/@seatlayer/react)
+- [React Native SDK](https://github.com/seatlayer/seatlayer-react-native)
 - [iOS SDK](https://github.com/seatlayer/seatlayer-ios)
 - [Flutter package](https://pub.dev/packages/seatlayer)
 - [Agent-readable documentation](https://docs.seatlayer.io/llms.txt)
