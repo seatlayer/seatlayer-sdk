@@ -54,6 +54,12 @@ export const STRUCTURE = {
   decorWall: [0.15, 0.17, 0.20] as RGB,
   gaTop: [0.24, 0.28, 0.33] as RGB,
   gaWall: [0.16, 0.19, 0.23] as RGB,
+  /** Exhibition / trade-show booth stand. */
+  boothTop: [0.30, 0.33, 0.38] as RGB,
+  boothWall: [0.20, 0.23, 0.27] as RGB,
+  /** Banquet table top — warmer, so a laid table reads apart from structure. */
+  tableTop: [0.38, 0.34, 0.29] as RGB,
+  tableWall: [0.24, 0.21, 0.18] as RGB,
 } as const;
 
 /** Background vertical gradient (matches the app's dark UI). */

@@ -147,16 +147,28 @@ function polygonPointsEqual(a: Point, b: Point): boolean {
   return Math.abs(a.x - b.x) <= 1e-6 && Math.abs(a.y - b.y) <= 1e-6;
 }
 
-/** Drop consecutive duplicate vertices and any wrap-around duplicate close point. */
-function dedupeClosedPolygon(points: Point[]): Point[] {
+/**
+ * Dedupe, but also report which ORIGINAL index each surviving vertex came from.
+ *
+ * Per-edge curvature is indexed against the polygon the author clicked. Deduping
+ * silently renumbers edges, so anything carrying per-edge data must remap through
+ * `sourceIndex` rather than assuming the arrays still line up — otherwise a single
+ * duplicate click shifts every curve onto the wrong edge.
+ */
+function dedupeClosedPolygonIndexed(points: Point[]): { points: Point[]; sourceIndex: number[] } {
   const out: Point[] = [];
-  for (const point of points) {
-    if (!finitePoint(point)) continue;
-    if (out.length && polygonPointsEqual(out[out.length - 1], point)) continue;
+  const sourceIndex: number[] = [];
+  points.forEach((point, index) => {
+    if (!finitePoint(point)) return;
+    if (out.length && polygonPointsEqual(out[out.length - 1], point)) return;
     out.push({ x: point.x, y: point.y });
+    sourceIndex.push(index);
+  });
+  while (out.length > 1 && polygonPointsEqual(out[0], out[out.length - 1])) {
+    out.pop();
+    sourceIndex.pop();
   }
-  while (out.length > 1 && polygonPointsEqual(out[0], out[out.length - 1])) out.pop();
-  return out;
+  return { points: out, sourceIndex };
 }
 
 function lerp(a: Point, b: Point, t: number): Point {
@@ -180,12 +192,87 @@ export function sectionCornerSmoothingPath(
   strength: number,
   options?: { wideAngleThresholdDeg?: number },
 ): SectionOutlinePath | null {
-  const pts = dedupeClosedPolygon(polygon);
+  return sectionOutlinePathFrom(polygon, { cornerSmoothing: strength, ...options });
+}
+
+/**
+ * Largest bow, as a fraction of the edge's own length, at curvature ±100. Half
+ * the chord reads as a strong arc while staying well short of a shape that folds
+ * back on itself.
+ */
+export const MAX_EDGE_SAGITTA_RATIO = 0.5;
+
+/**
+ * Cubic control offset that makes the drawn curve pass exactly through the
+ * requested midpoint bulge. A cubic whose two controls are both offset by `d`
+ * perpendicular (at ⅓ and ⅔ along the chord) passes through 0.75·d at t=0.5, so
+ * the offset must be 4/3 of the wanted sagitta. Same constant the designer's
+ * bend handle already uses, so a dragged curve lands where the cursor was.
+ */
+const SAGITTA_TO_CONTROL = 4 / 3;
+
+export interface SectionOutlineDerivation {
+  /** 0–100. Rounds corners wider than the threshold. */
+  cornerSmoothing?: number;
+  /**
+   * One entry per edge of the clicked polygon, -100..100, 0 = straight. Edge `i`
+   * runs from vertex `i` to vertex `i+1`. Positive bows to the LEFT of that
+   * direction; the sign is relative to edge direction, never to world axes, so
+   * curvature survives rotate / flip / mirror untouched.
+   */
+  edgeCurvature?: readonly number[];
+  wideAngleThresholdDeg?: number;
+}
+
+/** Bow a straight run into a cubic that bulges `sagitta` at its midpoint. */
+function bowedSegment(from: Point, to: Point, sagitta: number): SectionPathSegment {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length <= 1e-9) return { kind: 'line', end: { ...to } };
+  // Unit normal, left of travel.
+  const nx = -dy / length;
+  const ny = dx / length;
+  const offset = sagitta * SAGITTA_TO_CONTROL;
+  return {
+    kind: 'bezier',
+    control1: { x: from.x + dx / 3 + nx * offset, y: from.y + dy / 3 + ny * offset },
+    control2: { x: from.x + (dx * 2) / 3 + nx * offset, y: from.y + (dy * 2) / 3 + ny * offset },
+    end: { ...to },
+  };
+}
+
+/**
+ * Derive the rendered outline from the clicked polygon plus its coordinate-free
+ * shaping (corner smoothing and per-edge curvature).
+ *
+ * The polygon stays authoritative — this is purely a rendered curve, so zeroing
+ * the shaping restores the exact clicked shape. Deterministic: same input always
+ * yields the same path. Returns `null` when there is nothing to draw beyond the
+ * raw polygon, letting the caller keep the straight outline.
+ */
+export function sectionOutlinePathFrom(
+  polygon: Point[],
+  derivation: SectionOutlineDerivation,
+): SectionOutlinePath | null {
+  const { points: pts, sourceIndex } = dedupeClosedPolygonIndexed(polygon);
   const n = pts.length;
   if (n < 3) return null;
-  const s = Math.min(100, Math.max(0, strength)) / 100;
-  if (s <= 0) return null;
-  const threshold = options?.wideAngleThresholdDeg ?? WIDE_ANGLE_THRESHOLD_DEG;
+  const s = Math.min(100, Math.max(0, derivation.cornerSmoothing ?? 0)) / 100;
+
+  // Remap curvature onto the deduped ring: surviving vertex k began life at
+  // sourceIndex[k], so the edge leaving it is the source edge of that index.
+  const rawCurvature = derivation.edgeCurvature;
+  const curvature: number[] = new Array(n).fill(0);
+  if (rawCurvature?.length) {
+    for (let i = 0; i < n; i += 1) {
+      const value = rawCurvature[sourceIndex[i]];
+      curvature[i] = Number.isFinite(value) ? Math.min(100, Math.max(-100, value)) / 100 : 0;
+    }
+  }
+  const anyCurved = curvature.some((c) => Math.abs(c) > 1e-6);
+  if (s <= 0 && !anyCurved) return null;
+  const threshold = derivation.wideAngleThresholdDeg ?? WIDE_ANGLE_THRESHOLD_DEG;
 
   const edgeLen: number[] = [];
   for (let i = 0; i < n; i += 1) edgeLen[i] = distance(pts[i], pts[(i + 1) % n]);
@@ -237,23 +324,32 @@ export function sectionCornerSmoothingPath(
     exit[i] = { x: curr.x + ((next.x - curr.x) / lenNext) * cut[i], y: curr.y + ((next.y - curr.y) / lenNext) * cut[i] };
   }
 
-  // Nothing rounded → let the caller keep the straight polygon.
-  if (cut.every((c) => c <= 1e-6)) return null;
+  // Nothing rounded AND nothing bowed → let the caller keep the straight polygon.
+  if (cut.every((c) => c <= 1e-6) && !anyCurved) return null;
 
   const segments: SectionPathSegment[] = [];
   const start = { ...exit[0] };
   let current = start;
-  const pushLine = (end: Point) => {
-    if (distance(current, end) > 1e-9) {
+  // `edgeIndex` is the edge being traversed: the run into vertex `i` came along
+  // the edge that leaves vertex `i-1`.
+  const pushEdge = (end: Point, edgeIndex: number) => {
+    if (distance(current, end) <= 1e-9) return;
+    const bend = curvature[edgeIndex];
+    if (Math.abs(bend) > 1e-6) {
+      // Sagitta is measured against the FULL edge, not the shortened run left
+      // between two rounded corners, so rounding a corner cannot flatten the
+      // curve the author asked for.
+      segments.push(bowedSegment(current, end, bend * MAX_EDGE_SAGITTA_RATIO * edgeLen[edgeIndex]));
+    } else {
       segments.push({ kind: 'line', end: { ...end } });
-      current = end;
     }
+    current = end;
   };
   for (let step = 1; step <= n; step += 1) {
     const i = step % n;
     const vertex = pts[i];
-    // Straight run along the edge from the previous exit to this vertex's entry.
-    pushLine(entry[i]);
+    // Run along the edge from the previous exit to this vertex's entry.
+    pushEdge(entry[i], (step - 1) % n);
     if (cut[i] > 1e-6 && distance(entry[i], exit[i]) > 1e-9) {
       // Rounded corner: a cubic pulling toward the original vertex.
       segments.push({
@@ -265,7 +361,7 @@ export function sectionCornerSmoothingPath(
       current = exit[i];
     }
   }
-  if (segments.length < 2) return null;
+  if (!segments.length) return null;
   // Guarantee exact closure onto the start point.
   const last = segments[segments.length - 1];
   if (distance(last.end, start) > 1e-9) {

@@ -7,15 +7,20 @@
  */
 
 import { Geometry, Mesh, Program, Transform, type OGLRenderingContext } from 'ogl';
-import { BACKGROUND, seatStateColorByIndex } from '../palette';
+import { SEAT_STATES, type RGB } from '../palette';
 import { createBackgroundProgram, createSeatProgram, createSolidProgram } from './materials';
 import type { SceneModel } from './sceneModel';
 import type { DirtyRun } from './seatInstances';
 
-/** Fill an iColor buffer range from the current iState values (state → colour). */
-function writeSeatColors(iColor: Float32Array, iState: Float32Array, start: number, count: number): void {
+/**
+ * Fill an iColor buffer range from the current iState values (state → colour).
+ *
+ * Reads the THEME's colours, not the module palette, so an organizer's brand
+ * selection colour applies to the 3D seats as it already does in the picker.
+ */
+function writeSeatColors(iColor: Float32Array, iState: Float32Array, start: number, count: number, states: readonly RGB[]): void {
   for (let i = start; i < start + count; i++) {
-    const c = seatStateColorByIndex(iState[i]);
+    const c = states[iState[i]] ?? states[0];
     iColor[i * 3] = c[0];
     iColor[i * 3 + 1] = c[1];
     iColor[i * 3 + 2] = c[2];
@@ -33,6 +38,7 @@ export interface GpuScene {
   /** Background scene, drawn first without depth. */
   background: Transform;
   seatProgram: Program;
+  solidProgram: Program;
   /** Shared instanced seat geometry (reused by the pick pass — no buffer copy). */
   seatGeometry: Geometry;
   /** Merged solid geometry (reused as the pick occluder). */
@@ -49,7 +55,8 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
 
   // --- Background ---
   const bgGeo = new Geometry(gl, { position: { size: 2, data: BG_TRI } });
-  const bgProg = createBackgroundProgram(gl, BACKGROUND.top as unknown as number[], BACKGROUND.bottom as unknown as number[]);
+  // The chart's own background, not the library's — see theme.ts.
+  const bgProg = createBackgroundProgram(gl, model.theme.background.top as number[], model.theme.background.bottom as number[]);
   const bgMesh = new Mesh(gl, { geometry: bgGeo, program: bgProg });
   bgMesh.frustumCulled = false;
   bgMesh.setParent(background);
@@ -59,6 +66,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
     position: { size: 3, data: model.solids.position },
     normal: { size: 3, data: model.solids.normal },
     color: { size: 3, data: model.solids.color },
+    floorIndex: { size: 1, data: model.solids.floor },
   });
   const solidProg = createSolidProgram(gl);
   const solidMesh = new Mesh(gl, { geometry: solidGeo, program: solidProg });
@@ -71,11 +79,18 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
   // Array, and a dynamic LUT index is best avoided anyway).
   const seatProg = createSeatProgram(gl);
   const iColor = new Float32Array(model.seats.count * 3);
-  writeSeatColors(iColor, model.seats.iState, 0, model.seats.count);
+  const stateColors: RGB[] = SEAT_STATES.map((st) => model.theme.seatStates[st]);
+  writeSeatColors(iColor, model.seats.iState, 0, model.seats.count, stateColors);
   const seatGeo = new Geometry(gl, {
     position: { size: 2, data: SEAT_QUAD },
     iOffset: { size: 3, data: model.seats.iPosition, instanced: 1 },
     iColor: { size: 3, data: iColor, instanced: 1 },
+    // Per-seat world-radius ceiling: what stops distant rows merging into one
+    // mass when the shader grows a dot to hold its minimum pixel size.
+    iMaxRadius: { size: 1, data: model.seats.iMaxRadius, instanced: 1 },
+    // Accommodation ring colour; (0,0,0) means the seat carries no access type.
+    iRing: { size: 3, data: model.seats.iRing, instanced: 1 },
+    iFloor: { size: 1, data: model.seats.iFloor, instanced: 1 },
   });
   const seatMesh = new Mesh(gl, { geometry: seatGeo, program: seatProg });
   seatMesh.frustumCulled = false;
@@ -87,6 +102,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
     main,
     background,
     seatProgram: seatProg,
+    solidProgram: solidProg,
     seatGeometry: seatGeo,
     solidGeometry: solidGeo,
     drawCalls: 3,
@@ -94,7 +110,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
       if (!runs.length) return;
       // Refresh only the changed instance colours from the (already-mutated)
       // iState, then upload just those contiguous ranges — never the whole buffer.
-      for (const run of runs) writeSeatColors(iColor, model.seats.iState, run.start, run.length);
+      for (const run of runs) writeSeatColors(iColor, model.seats.iState, run.start, run.length, stateColors);
       const buffer = colorAttr.buffer;
       if (!buffer) {
         // Not uploaded yet (no draw has happened) — full upload on next draw.

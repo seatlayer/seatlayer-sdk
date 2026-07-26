@@ -23,6 +23,7 @@ import { distributeAlongCubic } from './complexGeometry';
 import { translateSectionOutlinePath } from './sectionPath';
 import { toLetters, toRoman } from './labeling';
 import { METRES_PER_CHART_UNIT, SEATED_EYE_HEIGHT_M, sectionGeometry } from './units';
+import { resolveSection } from './venueStructure';
 
 /** Resolve a seat override's accessibility, honouring the legacy boolean flag. */
 function overrideAccessibility(o: SeatOverride | undefined): AccessibilityType[] {
@@ -819,36 +820,48 @@ function assignEyeHeights(
     for (const seat of seats) seat.eyeHeightM = floorBaseHeightM + SEATED_EYE_HEIGHT_M;
     return;
   }
-  // Pass 1: owning section (first drawn section containing the seat) + the drawn
-  // distance of the section's front edge (nearest member to the focal point).
+  // Pass 1: owning section (first drawn section containing the seat), grouped by
+  // row so each section can fit its own rake axis.
   const owner = new Array<SectionObject | null>(seats.length);
   const geo = new Map<string, { height: number; rake: number }>();
-  const frontDistU = new Map<string, number>();
+  const seatsBySection = new Map<string, number[]>();
   for (let i = 0; i < seats.length; i++) {
     const seat = seats[i];
     const sec = sections.find((s) => pointInPolygonWithHoles({ x: seat.x, y: seat.y }, s.outline, s.holes)) ?? null;
     owner[i] = sec;
     if (!sec) continue;
     if (!geo.has(sec.id)) geo.set(sec.id, sectionGeometry(sec, { floorBaseHeightM }));
-    const seatFocal = seat.focalPoint ?? focal;
-    const d = Math.hypot(seat.x - seatFocal.x, seat.y - seatFocal.y);
-    const cur = frontDistU.get(sec.id);
-    if (cur === undefined || d < cur) frontDistU.set(sec.id, d);
+    const list = seatsBySection.get(sec.id);
+    if (list) list.push(i); else seatsBySection.set(sec.id, [i]);
   }
-  // Pass 2: front-edge height + drawn-depth rise + seated eye.
+
+  // Pass 2: resolve each section's blocks and per-row depth, then bake a level.
+  //
+  // The SAME resolver the 3D deck is built from (`venueStructure.ts`). Depth is
+  // measured back from each BLOCK's own front row, not from the venue focal:
+  // measuring from the focal raised a bowl's side wedges as though they sat
+  // further back, by up to 4.4 m on the amphitheatre gallery. And it must be the
+  // same call in both files — a seat's eye height and the deck it stands on
+  // disagreeing is the trap that made every offset constant chart-specific.
+  const seatLevel = new Array<number | undefined>(seats.length).fill(undefined);
+  for (const [secId, indices] of seatsBySection) {
+    const g = geo.get(secId);
+    if (!g) continue;
+    const rakeTan = g.rake > 0 ? Math.tan((g.rake * Math.PI) / 180) : 0;
+    const structure = resolveSection(secId, seats, indices, focal);
+    for (const row of structure.rows) {
+      const riseM = row.blockDepth * METRES_PER_CHART_UNIT * rakeTan;
+      const level = g.height + riseM;
+      for (const si of row.seatIndices) seatLevel[si] = level;
+    }
+  }
+
   for (let i = 0; i < seats.length; i++) {
     const seat = seats[i];
     const sec = owner[i];
     if (!sec) { seat.eyeHeightM = floorBaseHeightM + SEATED_EYE_HEIGHT_M; continue; }
     const g = geo.get(sec.id)!;
-    let riseM = 0;
-    if (g.rake > 0) {
-      const seatFocal = seat.focalPoint ?? focal;
-      const d = Math.hypot(seat.x - seatFocal.x, seat.y - seatFocal.y);
-      const depthU = Math.max(0, d - (frontDistU.get(sec.id) ?? d));
-      riseM = depthU * METRES_PER_CHART_UNIT * Math.tan((g.rake * Math.PI) / 180);
-    }
-    seat.eyeHeightM = g.height + riseM + SEATED_EYE_HEIGHT_M;
+    seat.eyeHeightM = (seatLevel[i] ?? g.height) + SEATED_EYE_HEIGHT_M;
   }
 }
 

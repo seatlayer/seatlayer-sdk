@@ -41,12 +41,14 @@ const FILES = [
   // also a buildable dependency closure.
   ['src/core/complexGeometry.ts', 'packages/core/src/core/complexGeometry.ts'],
   ['src/core/sectionPath.ts', 'packages/core/src/core/sectionPath.ts'],
+  ['src/core/venueStructure.ts', 'packages/core/src/core/venueStructure.ts'],
   // Shared renderer dependencies. Keep these in the generated mirror whenever
   // SeatmapRenderer or PickerController imports them so release:prep proves the
   // SDK from the exact same dependency closure as the app.
   ['src/core/chartBackgrounds.ts', 'packages/core/src/core/chartBackgrounds.ts'],
   ['src/core/spatialIndex.ts', 'packages/core/src/core/spatialIndex.ts'],
   ['src/core/perspectiveProjection.ts', 'packages/core/src/core/perspectiveProjection.ts'],
+  ['src/core/rake.ts', 'packages/core/src/core/rake.ts'],
   ['src/core/shapeLineStyle.ts', 'packages/core/src/core/shapeLineStyle.ts'],
   // Vector wayfinding icon registry (OV-71) — imported by SeatmapRenderer (and
   // the designer) to draw venue icons as platform-stable Konva paths.
@@ -94,9 +96,12 @@ const FILES = [
   // `src/view3d/index.ts` entry and marks `ogl` external.
   ['src/view3d/index.ts', 'packages/core/src/view3d/index.ts'],
   ['src/view3d/analytics.ts', 'packages/core/src/view3d/analytics.ts'],
+  ['src/view3d/labelOverlay.ts', 'packages/core/src/view3d/labelOverlay.ts'],
+  ['src/view3d/labels.ts', 'packages/core/src/view3d/labels.ts'],
   ['src/view3d/lod.ts', 'packages/core/src/view3d/lod.ts'],
   ['src/view3d/loop.ts', 'packages/core/src/view3d/loop.ts'],
   ['src/view3d/palette.ts', 'packages/core/src/view3d/palette.ts'],
+  ['src/view3d/theme.ts', 'packages/core/src/view3d/theme.ts'],
   ['src/view3d/camera/cinematic.ts', 'packages/core/src/view3d/camera/cinematic.ts'],
   ['src/view3d/camera/cinematicMath.ts', 'packages/core/src/view3d/camera/cinematicMath.ts'],
   ['src/view3d/camera/orbit.ts', 'packages/core/src/view3d/camera/orbit.ts'],
@@ -106,10 +111,13 @@ const FILES = [
   ['src/view3d/pick/pickPipeline.ts', 'packages/core/src/view3d/pick/pickPipeline.ts'],
   ['src/view3d/pick/selection.ts', 'packages/core/src/view3d/pick/selection.ts'],
   ['src/view3d/scene/build.ts', 'packages/core/src/view3d/scene/build.ts'],
+  ['src/view3d/scene/deckBands.ts', 'packages/core/src/view3d/scene/deckBands.ts'],
   ['src/view3d/scene/geometry.ts', 'packages/core/src/view3d/scene/geometry.ts'],
   ['src/view3d/scene/materials.ts', 'packages/core/src/view3d/scene/materials.ts'],
+  ['src/view3d/scene/rowSteps.ts', 'packages/core/src/view3d/scene/rowSteps.ts'],
   ['src/view3d/scene/sceneModel.ts', 'packages/core/src/view3d/scene/sceneModel.ts'],
   ['src/view3d/scene/seatInstances.ts', 'packages/core/src/view3d/scene/seatInstances.ts'],
+  ['src/view3d/scene/surface.ts', 'packages/core/src/view3d/scene/surface.ts'],
 ];
 
 if (!existsSync(appRepo)) {

@@ -1,9 +1,9 @@
 {
   "name": "@seatlayer/core",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "description": "Framework-agnostic seat-rendering engine (Konva) shared by the SeatLayer SDKs.",
   "license": "MIT",
-  "homepage": "https://docs.seatlayer.io",
+  "homepage": "https://docs.seatlayer.io/buyer-sdk/install/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/seatlayer/seatlayer-sdk.git",
@@ -55,6 +55,7 @@
     "seatlayer",
     "konva",
     "canvas",
+    "seating-chart",
     "reserved-seating"
   ],
   "scripts": {
@@ -64,7 +65,8 @@
   "dependencies": {
     "earcut": "^3.2.3",
     "konva": "^10.3.0",
-    "ogl": "^1.0.11"
+    "ogl": "^1.0.11",
+    "polygon-clipping": "^0.15.7"
   },
   "devDependencies": {
     "@types/earcut": "^3.0.0",

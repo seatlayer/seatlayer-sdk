@@ -1,8 +1,21 @@
 # @seatlayer/react
 
-React component for the [SeatLayer](https://seatlayer.io) embed SDK. Render an
-interactive seat map, let buyers select and **hold** seats in the browser, then
-**book** them from your server. Full docs: <https://docs.seatlayer.io>
+[![npm](https://img.shields.io/npm/v/@seatlayer/react)](https://www.npmjs.com/package/@seatlayer/react)
+[![npm downloads](https://img.shields.io/npm/dm/@seatlayer/react)](https://www.npmjs.com/package/@seatlayer/react)
+[![React](https://img.shields.io/badge/React-%E2%89%A517-61DAFB.svg)](https://react.dev/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](../../LICENSE)
+
+The official React components for SeatLayer reserved seating. Render the
+complete buyer picker or a headless interactive chart, hold inventory in the
+browser, and complete the booking from your trusted server.
+
+[Package on npm](https://www.npmjs.com/package/@seatlayer/react) ·
+[SeatPicker docs](https://docs.seatlayer.io/buyer-sdk/seat-picker/) ·
+[Live demo](https://app.seatlayer.io/demo/play) ·
+[Website](https://seatlayer.io/developers/) ·
+[AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit)
+
+## Install
 
 ```bash
 npm install @seatlayer/react
@@ -60,7 +73,8 @@ Changing a callback prop does **not** rebuild the canvas; only `event`, `apiBase
 ## The model
 
 The browser **holds**; your **server books** with a secret key — a browser never
-books directly. See the [integration guide](https://docs.seatlayer.io/getting-started/how-it-works/).
+books directly. See
+[how the integration works](https://docs.seatlayer.io/start/how-it-works/).
 
 Built on [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js).
 
@@ -121,7 +135,8 @@ export function VenueEditor({ session }: { session: {
 ```
 
 Changing `designerUrl` replaces the iframe, so a newly-minted fragment token never
-continues an earlier session. See [the embedded Designer guide](https://docs.seatlayer.io/guides/embedded-designer/).
+continues an earlier session. See
+[the embedded Designer guide](https://docs.seatlayer.io/platform/embedded-designer/).
 
 The default `height: 'fill'` is **container-aware**: give the container element a
 definite height (a fixed-height block, `flex-1 min-h-0`, a resolved `%`) and the
@@ -193,3 +208,18 @@ export function VenueEditor({ chartId }: { chartId: string }) {
   );
 }
 ```
+
+## Related resources
+
+- [Buyer SDK documentation](https://docs.seatlayer.io/buyer-sdk/install/)
+- [SeatPicker reference](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
+- [Holds and checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
+- [Complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
+- [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js)
+- [iOS SDK](https://github.com/seatlayer/seatlayer-ios)
+- [Flutter package](https://pub.dev/packages/seatlayer)
+- [Agent-readable documentation](https://docs.seatlayer.io/llms.txt)
+
+## License
+
+MIT © SeatLayer

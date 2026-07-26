@@ -1,11 +1,23 @@
 # @seatlayer/js
 
-The framework-agnostic [SeatLayer](https://seatlayer.io) embed SDK. Render an
-interactive seat map, let buyers select and **hold** seats in the browser, then
-**book** them from your server. Full docs: <https://docs.seatlayer.io>
+[![npm](https://img.shields.io/npm/v/@seatlayer/js)](https://www.npmjs.com/package/@seatlayer/js)
+[![npm downloads](https://img.shields.io/npm/dm/@seatlayer/js)](https://www.npmjs.com/package/@seatlayer/js)
+[![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](../../LICENSE)
+
+The framework-agnostic SeatLayer embed SDK. Render the complete buyer picker or
+a headless interactive chart, let buyers select and **hold** inventory in the
+browser, then **book** it from your trusted server.
+
+[Package on npm](https://www.npmjs.com/package/@seatlayer/js) ·
+[Install guide](https://docs.seatlayer.io/buyer-sdk/install/) ·
+[Live demo](https://app.seatlayer.io/demo/play) ·
+[Website](https://seatlayer.io/developers/) ·
+[AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit)
 
 Works in plain HTML and any framework (React, Vue, Svelte, Angular…). For React,
 prefer the [`@seatlayer/react`](https://www.npmjs.com/package/@seatlayer/react) wrapper.
+
+## Install
 
 ```bash
 npm install @seatlayer/js
@@ -186,5 +198,20 @@ The full `SeatPicker` automatically restores an active hold after same-tab
 checkout navigation and lets the buyer remove individual held tickets. Set
 `restoreHold: false` and pass `initialHoldId` when your host owns persistence.
 
-The browser **holds**; your **server books** with a secret key. See the
-[integration guide](https://docs.seatlayer.io/getting-started/how-it-works/).
+The browser **holds**; your **server books** with a secret key. See
+[how the integration works](https://docs.seatlayer.io/start/how-it-works/).
+
+## Related resources
+
+- [Buyer SDK documentation](https://docs.seatlayer.io/buyer-sdk/install/)
+- [SeatingChart reference](https://docs.seatlayer.io/buyer-sdk/seating-chart/)
+- [Holds and checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
+- [Complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
+- [`@seatlayer/react`](https://www.npmjs.com/package/@seatlayer/react)
+- [iOS SDK](https://github.com/seatlayer/seatlayer-ios)
+- [Flutter package](https://pub.dev/packages/seatlayer)
+- [Agent-readable documentation](https://docs.seatlayer.io/llms.txt)
+
+## License
+
+MIT © SeatLayer

@@ -767,6 +767,25 @@ export interface SectionObject {
    * Phase A. Range 0–45°.
    */
   rake?: number;
+  /**
+   * Override how 3D builds this section's seating surface. Absent = inferred.
+   *
+   * The renderer infers structure from the authored geometry — which rows form a
+   * stand, where its front is, whether the rows are concentric arcs or straight
+   * blocks — and that inference is correct across every shipped template. But
+   * inference cannot be right on every chart a customer will ever draw, and when
+   * it is wrong the author needs a way to say so without us inventing a second
+   * source of truth for the geometry itself.
+   *
+   * - `flat`: a level deck, whatever the rake says. Terraces, boxes, standing.
+   * - `rakedRows`: level ribbons stepping back, the default for a raked stand.
+   *
+   * Deliberately NOT a "venue type" picker: the chart is authored once in 2D,
+   * and every 3D-only property that is not derived from that authoring is a
+   * source of drift. This is a per-section correction, in the same place and of
+   * the same kind as {@link height} and {@link rake}.
+   */
+  surfaceKind?: 'flat' | 'rakedRows';
   /** Uniform scale about the outline centroid (1 = as drawn). Scales members too. */
   scale?: number;
   /** 0–100: reviewed strength last used to bend member rows toward a common fitted arc. */
@@ -786,6 +805,19 @@ export interface SectionObject {
    * Coordinate-free, so it round-trips over MCP (`update_sections`).
    */
   cornerSmoothing?: number;
+  /**
+   * Per-edge curvature, one entry per edge of {@link sourceOutline}, -100..100,
+   * 0 = straight. Edge `i` runs from clicked vertex `i` to vertex `i+1`.
+   *
+   * Positive bows to the LEFT of that edge's own direction. The sign is relative
+   * to the edge, never to world axes, which is what lets curvature survive
+   * rotate / flip / mirror / radial repeat with no per-operation handling.
+   *
+   * Coordinate-free like {@link cornerSmoothing}, so it round-trips over MCP and
+   * the server never accepts client geometry. Absent/all-zero = straight edges;
+   * zeroing it restores the exact clicked polygon.
+   */
+  edgeCurvature?: number[];
   /** Degrees clockwise about the outline centroid (default 0). Rotates members too. */
   rotation?: number;
 }
@@ -1110,6 +1142,13 @@ export interface ReferenceSectionTraceProposal {
     measuredVectorErrorPx: number;
     /** Source component footprint, as a percentage of the analyzed image. */
     sourceAreaPercent?: number;
+    /**
+     * The name already printed on the plan for this region, when one has been
+     * read. The review proposes it instead of a generated number — a venue plan
+     * names its own sections, and retyping forty of them is work the author
+     * should never have to do. Absent means fall back to numbering.
+     */
+    visibleLabel?: string;
   };
 }
 
@@ -1124,6 +1163,9 @@ export interface ReferenceSectionTraceBatchProposal {
     proposalCount: number;
     alreadyTracedCount: number;
     withinToleranceCount: number;
+    /** Regions that could not be traced into a usable boundary and were left
+     *  out. One unusable region must not cost the author the rest of the plan. */
+    unusableRegionCount?: number;
   };
 }
 

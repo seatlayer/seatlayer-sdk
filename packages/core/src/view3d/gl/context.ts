@@ -30,8 +30,27 @@ export class GLContext {
   readonly gl: OGLRenderingContext;
   readonly canvas: HTMLCanvasElement;
   private container: HTMLElement;
+  /** Current clear colour, so a context restore repaints the themed background. */
+  private clearRgb: [number, number, number] = [0, 0, 0];
   private lostHandler: (e: Event) => void;
   private restoredHandler: () => void;
+
+  /**
+   * Repaint the clear colour from the chart's theme.
+   *
+   * The clear shows for one frame before the background triangle draws, and on
+   * any frame the scene does not cover — so leaving it at the library default
+   * flashes SeatLayer grey into a white-labelled venue.
+   */
+  setClearColor(rgb: readonly number[]): void {
+    this.clearRgb = [rgb[0], rgb[1], rgb[2]];
+    this.gl.clearColor(rgb[0], rgb[1], rgb[2], 1);
+  }
+
+  /** The clear colour currently set (the pick pass restores through this). */
+  get clearColor(): readonly number[] {
+    return this.clearRgb;
+  }
 
   constructor(container: HTMLElement, opts: GLContextOptions) {
     this.container = container;
@@ -52,9 +71,12 @@ export class GLContext {
       webgl: 2,
     });
     this.gl = this.renderer.gl;
-    this.gl.clearColor(BACKGROUND.top[0], BACKGROUND.top[1], BACKGROUND.top[2], 1);
+    this.clearRgb = [BACKGROUND.top[0], BACKGROUND.top[1], BACKGROUND.top[2]];
+    this.gl.clearColor(this.clearRgb[0], this.clearRgb[1], this.clearRgb[2], 1);
 
     container.appendChild(this.canvas);
+
+
 
     this.lostHandler = (e: Event) => {
       e.preventDefault();

@@ -11,7 +11,7 @@
 import { Geometry, Mesh, Program, RenderTarget, Transform } from 'ogl';
 import type { Camera, OGLRenderingContext, Renderer } from 'ogl';
 import { createPickDepthProgram, createSeatPickProgram } from '../scene/materials';
-import { BACKGROUND } from '../palette';
+
 import { pickNearestFromBuffer } from './encode';
 
 const SYNC_KEYS = ['uSeatRadius', 'uSeatScale', 'uMinPixels', 'uPixelToWorld'] as const;
@@ -25,6 +25,14 @@ export class PickPipeline {
   private solidScene = new Transform();
   private target: RenderTarget | null = null;
   private maxIndex: number;
+
+  /** Display clear colour to restore after the pick pass (theme-dependent). */
+  private restoreClear: readonly number[] = [0, 0, 0];
+
+  /** Follow the theme's background when the scene is (re)built. */
+  setRestoreClear(rgb: readonly number[]): void {
+    this.restoreClear = [rgb[0], rgb[1], rgb[2]];
+  }
 
   constructor(renderer: Renderer, seatGeo: Geometry, solidGeo: Geometry, seatCount: number) {
     this.renderer = renderer;
@@ -87,7 +95,10 @@ export class PickPipeline {
     // Clear the pick target to TRUE BLACK so empty + occluded pixels decode to
     // no-hit structurally (not by a range guard). Occluders drawn black + depth
     // first, then seats (pick colours) depth-tested.
-    const [br, bg, bb] = BACKGROUND.top;
+    // Restore whatever the display clear colour currently is — the theme may have
+    // replaced it, and restoring the library default would flash grey on a
+    // white-labelled chart every time the pointer moves.
+    const [br, bg, bb] = this.restoreClear;
     gl.clearColor(0, 0, 0, 1);
     this.renderer.render({ scene: this.solidScene, camera, target, clear: true });
     this.renderer.render({ scene: this.seatScene, camera, target, clear: false });

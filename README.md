@@ -1,87 +1,132 @@
 # SeatLayer SDK
 
-The official SeatLayer SDKs — a framework-agnostic core plus per-framework wrappers.
-Render an interactive seat picker, let buyers select and **hold** seats in the browser,
-then **book** them from your server. Docs: <https://docs.seatlayer.io>
+[![CI](https://github.com/seatlayer/seatlayer-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/seatlayer/seatlayer-sdk/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@seatlayer/js?label=%40seatlayer%2Fjs)](https://www.npmjs.com/package/@seatlayer/js)
+[![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](LICENSE)
 
-## SeatLayer ecosystem
+Official JavaScript and React SDKs for SeatLayer reserved seating. Embed the
+complete buyer picker or a headless seating chart, hold inventory in the
+browser, and complete the booking from your trusted server.
 
-- [Developer documentation](https://docs.seatlayer.io/) — guides, API
-  references, examples, and agent-readable Markdown.
-- [SeatLayer AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit) —
-  portable coding-agent skills, diagnostics, and integration verification.
-- [SeatLayer on GitHub](https://github.com/seatlayer) — all public SeatLayer
-  repositories.
+[Website](https://seatlayer.io/) ·
+[Developer docs](https://docs.seatlayer.io/) ·
+[Demo hub](https://app.seatlayer.io/demo) ·
+[Try the buyer experience](https://app.seatlayer.io/demo/play) ·
+[AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit)
 
-## Packages
+## Choose a package
 
-| Package | What it is | Use it when |
+| Package | Use it for | Documentation |
 | --- | --- | --- |
-| [`@seatlayer/core`](packages/core) | The shared rendering engine (Konva, no framework) | You almost never depend on this directly — it's the shared brain. |
-| [`@seatlayer/js`](packages/js) | The vanilla SDK (`SeatingChart` class) | Plain HTML, or any framework via its lifecycle hooks (Vue, Svelte, Angular…). |
-| [`@seatlayer/react`](packages/react) | React component wrapper | React apps — the flagship wrapper. |
+| [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js) | Plain JavaScript, Vue, Svelte, Angular, and any DOM-based framework | [Install and embed](https://docs.seatlayer.io/buyer-sdk/install/) |
+| [`@seatlayer/react`](https://www.npmjs.com/package/@seatlayer/react) | React applications and component-driven checkout flows | [SeatPicker reference](https://docs.seatlayer.io/buyer-sdk/seat-picker/) |
+| [`@seatlayer/core`](https://www.npmjs.com/package/@seatlayer/core) | Low-level renderer and domain primitives for custom SDK authors | [Core package guide](packages/core/README.md) |
 
-New frameworks are added as thin wrappers over `@seatlayer/js` as needed
-(`@seatlayer/vue`, `@seatlayer/svelte`, `@seatlayer/react-native`, …).
+Most buyer integrations should start with `SeatPicker` from `@seatlayer/js` or
+`@seatlayer/react`. Use `SeatingChart` only when your product intentionally owns
+the surrounding selection, pricing, confirmation, and hold UI.
 
-## Quick look
+## Quick start
+
+```bash
+npm install @seatlayer/react
+```
 
 ```tsx
-// React
-import { SeatingChart } from '@seatlayer/react';
+import { SeatPicker } from '@seatlayer/react';
 
-<SeatingChart
-  event="ev_9f3a"
-  onHold={({ holdId }) => bookOnYourServer(holdId)}
-/>;
+export function Tickets() {
+  return (
+    <SeatPicker
+      event="ev_9f3a"
+      style={{ width: '100%', height: 640 }}
+      onCheckout={(_, __, handoff) => {
+        beginCheckoutOnYourServer(handoff.holdId);
+      }}
+    />
+  );
+}
+```
+
+Plain JavaScript:
+
+```bash
+npm install @seatlayer/js
 ```
 
 ```js
-// Plain JS / any framework
-import { SeatingChart } from '@seatlayer/js';
+import { SeatPicker } from '@seatlayer/js';
 
-const chart = new SeatingChart({ container: '#chart', event: 'ev_9f3a' });
-await chart.render();
+const picker = new SeatPicker({
+  container: '#picker',
+  event: 'ev_9f3a',
+  onCheckout: (_, __, handoff) => {
+    beginCheckoutOnYourServer(handoff.holdId);
+  },
+});
+
+await picker.render();
 ```
 
-For the **full buyer experience** (branded header, price panel, tray, hold
-countdown, extend-hold, booked confirmation) use `SeatPicker` — inline, modal, or
-a plain iframe. Copy-paste recipes: **[docs/embedding.md](docs/embedding.md)**.
+The embed container needs an explicit usable height. See the
+[installation guide](https://docs.seatlayer.io/buyer-sdk/install/) for hosted
+script, browser ESM, npm, React, and responsive-container examples.
 
-## Develop
+## Security boundary
+
+The browser or mobile app **selects and holds** inventory. Your trusted server
+**inspects and books** the hold after payment or order validation.
+
+- Never expose a SeatLayer secret key in browser or mobile code.
+- Calculate the charge from server-inspected hold items, not client input.
+- Reuse your stable order id as `bookingRef` for safe retries.
+- Treat `409` inventory conflicts and expired holds as expected recovery paths.
+
+Read [how the integration works](https://docs.seatlayer.io/start/how-it-works/)
+before building checkout.
+
+## Mobile SDKs
+
+| SDK | Status | Repository |
+| --- | --- | --- |
+| iOS | Public release candidate | [`seatlayer/seatlayer-ios`](https://github.com/seatlayer/seatlayer-ios) |
+| Flutter | Public release candidate | [`seatlayer/seatlayer-flutter`](https://github.com/seatlayer/seatlayer-flutter) |
+
+See the [mobile SDK guide](https://docs.seatlayer.io/buyer-sdk/mobile/) for the
+current installation and release status.
+
+## Examples and agent support
+
+- [Embedding recipes](docs/embedding.md)
+- [Complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
+- [Live demo hub](https://app.seatlayer.io/demo)
+- [SeatLayer AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit)
+- [Agent-readable docs index](https://docs.seatlayer.io/llms.txt)
+
+## Development
 
 ```bash
 pnpm install
-pnpm sync:core   # pull the latest engine from the main app (see below)
-pnpm build       # build every package
+pnpm sync:core
+pnpm build
 pnpm typecheck
+pnpm test
 ```
 
-### The `@seatlayer/core` sync
+The rendering engine is synced from SeatLayer's private platform source. Do not
+hand-edit `packages/core/src/{core,engine,picker}`; update the platform source
+and run `pnpm sync:core`. The public barrel in `packages/core/src/index.ts` is
+owned here.
 
-The rendering engine is currently shared with the main SeatLayer app. Until the app
-migrates to consume `@seatlayer/core` directly, `packages/core/src/{core,engine,picker}`
-is **synced byte-for-byte** from the app with:
+## Releasing
 
-```bash
-pnpm sync:core                                  # assumes ../seatmap
-SEATMAP_REPO=/path/to/seatmap pnpm sync:core    # or point at it
-```
+All npm packages and CDN channels use one version. Releases are created from a
+`vX.Y.Z` tag only after `pnpm release:prep` passes. The GitHub workflow builds,
+uploads and verifies the immutable CDN release, publishes all npm packages with
+provenance, and then promotes the compatible CDN alias.
 
-Do not hand-edit files under `packages/core/src/core`, `.../engine`, or `.../picker` —
-edit them in the app and re-sync. `packages/core/src/index.ts` (the barrel) is owned here.
+Do not run `npm publish` manually. Follow [RELEASING.md](RELEASING.md).
 
-## Publishing
+## License
 
-Every release uses one version for npm and the CDN. Push a `vX.Y.Z` tag only
-after `pnpm release:prep` passes. The release workflow then:
-
-1. builds all three npm packages and a self-contained browser bundle from the
-   same `packages/{core,js}` source tree;
-2. publishes and hash-verifies immutable CDN files at
-   `https://cdn.seatlayer.io/sdk/vX.Y.Z/`;
-3. publishes `@seatlayer/core`, `@seatlayer/js`, and `@seatlayer/react` with npm
-   provenance; and
-4. promotes `https://cdn.seatlayer.io/sdk/v1/seatmap.js` only after npm succeeds.
-
-Do not run `npm publish` manually. See [RELEASING.md](RELEASING.md).
+MIT © SeatLayer

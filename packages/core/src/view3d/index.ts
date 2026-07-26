@@ -17,7 +17,9 @@ import { GLContext } from './gl/context';
 import { OrbitCamera } from './camera/orbit';
 import { RenderLoop, type RenderLoopStats } from './loop';
 import { computeSeatLod } from './lod';
-import { buildSceneModel, type SceneModel } from './scene/sceneModel';
+import { SEAT_DOT_RADIUS_M } from './scene/seatInstances';
+import { buildSceneModel, type SceneModel, type SceneZone, type SceneFloor } from './scene/sceneModel';
+import { LabelOverlay } from './labelOverlay';
 import { buildGpuScene, type GpuScene } from './scene/build';
 import { applySeatStates } from './scene/seatInstances';
 import { PickPipeline } from './pick/pickPipeline';
@@ -81,6 +83,30 @@ export interface Venue3DHandle {
   loseContextForTest(): void;
   /** Test hook: force (or clear) the reduced-motion path. */
   setReducedMotionForTest(value: boolean | null): void;
+  /** The venue's zones (id, label, colour, seat count) in authored order. */
+  zones(): SceneZone[];
+  /**
+   * Frame a zone: the camera moves to sit over that zone looking at what the
+   * zone faces. Returns false for an unknown or empty zone.
+   *
+   * This is the navigation the venue's own structure implies — a buyer picks
+   * "Grand Circle", not a set of coordinates — and it is what the 2D renderer's
+   * farthest LOD rung already offers. Approaching from the zone's focal side
+   * means the seats face the camera rather than presenting their backs.
+   */
+  focusZone(zoneId: string): boolean;
+  /** The venue's floors (id, name, seat count) in authored order. */
+  floors(): SceneFloor[];
+  /**
+   * Isolate one floor, or pass null to show the whole venue.
+   *
+   * Every shipped multi-floor chart puts its floors at the same base height and
+   * takes relief from the sections, so all three of an opera house draw at once
+   * and the balcony sits over the parterre. Unfocused floors are DIMMED rather
+   * than hidden, so the buyer keeps the venue as context while looking at the
+   * level they are booking. Returns false for an unknown index.
+   */
+  focusFloor(index: number | null): boolean;
 }
 
 const DEG = Math.PI / 180;
@@ -122,10 +148,24 @@ export function mountVenue3D(
   const prefetch = new Map<string, Promise<SeatView>>();
   let flightGen = 0;
   let reducedForced: boolean | null = null;
+  /** Focused floor, or -1 for the whole venue. Survives a context restore. */
+  let focusedFloor = -1;
 
   const rebuildGpu = (): void => {
     gpu = buildGpuScene(glctx.gl, model);
     pick = new PickPipeline(glctx.renderer, gpu.seatGeometry, gpu.solidGeometry, model.seats.count);
+    // Apply the chart's authored theme to everything outside the scene graph:
+    // the clear colour (visible for a frame before the background draws, and on
+    // any frame the scene does not cover) and the pick pass's restore.
+    glctx.setClearColor(model.theme.background.top);
+    pick.setRestoreClear(model.theme.background.top);
+    // Seat size is authored too (`ChartTheme.seatScale`) — bigger seats for
+    // charts with longer labels.
+    gpu.seatProgram.uniforms.uSeatRadius.value = SEAT_DOT_RADIUS_M * model.theme.seatScale;
+    // A context restore rebuilds the GPU scene, so re-apply the focused floor
+    // rather than silently reverting the buyer to the whole venue.
+    gpu.seatProgram.uniforms.uFocusFloor.value = focusedFloor;
+    gpu.solidProgram.uniforms.uFocusFloor.value = focusedFloor;
   };
 
   const glctx = new GLContext(container, {
@@ -163,6 +203,18 @@ export function mountVenue3D(
 
   const cinematic = new Cinematic(orbit.camera);
 
+  // Labels are DOM, projected from world anchors — see labels.ts for why. The
+  // container must establish a positioning context or the overlay would anchor
+  // to the page instead of the canvas.
+  if (!container.style.position || container.style.position === 'static') {
+    container.style.position = 'relative';
+  }
+  const labelOverlay = new LabelOverlay(container, {
+    fontFamily: input.doc.theme?.fontFamily,
+    ink: input.doc.theme?.textColor,
+  });
+  labelOverlay.setLabels(model.labels);
+
   rebuildGpu();
 
   const loop = new RenderLoop((/* dt */) => {
@@ -178,6 +230,15 @@ export function mountVenue3D(
 
     glctx.renderer.render({ scene: gpu.background, clear: true });
     glctx.renderer.render({ scene: gpu.main, camera: orbit.camera, clear: false });
+    // After the render, so the camera's matrices are the ones just drawn with —
+    // projecting from stale matrices makes labels lag the venue by a frame.
+    labelOverlay.update(
+      orbit.camera.projectionViewMatrix as unknown as ArrayLike<number>,
+      glctx.canvas.clientWidth || 1,
+      glctx.canvas.clientHeight || 1,
+      orbit.currentDistance,
+      model.bounds.radius,
+    );
     return moving;
   });
 
@@ -442,6 +503,46 @@ export function mountVenue3D(
     loseContextForTest() {
       glctx.simulateContextLossCycle();
     },
+    floors(): SceneFloor[] {
+      return model.floors;
+    },
+    focusFloor(index: number | null): boolean {
+      if (index !== null && !model.floors.some((f) => f.index === index)) return false;
+      const value = index ?? -1;
+      if (gpu) {
+        gpu.seatProgram.uniforms.uFocusFloor.value = value;
+        gpu.solidProgram.uniforms.uFocusFloor.value = value;
+      }
+      focusedFloor = value;
+      if (index !== null) {
+        const f = model.floors[index];
+        if (f.seatCount > 0) {
+          cinematic.cancel();
+          orbit.frame({ center: f.center, radius: f.radius * 1.25 });
+        }
+      }
+      loop.requestRender();
+      return true;
+    },
+    zones(): SceneZone[] {
+      return model.zones;
+    },
+    focusZone(zoneId: string): boolean {
+      const zone = model.zones.find((z) => z.id === zoneId);
+      if (!zone || zone.seatCount === 0) return false;
+      cinematic.cancel();
+      // Approach from the side the zone faces, so its seats present their fronts
+      // rather than their backs — the same reasoning as the venue's intro shot.
+      const dx = zone.focalWorld[0] - zone.center[0];
+      const dz = zone.focalWorld[2] - zone.center[2];
+      const azimuth = Math.hypot(dx, dz) > zone.radius * 0.12 ? Math.atan2(dx, dz) : undefined;
+      // Padded past the zone's own radius: framing exactly to its edge reads as
+      // cropped, and a buyer needs the neighbouring geometry to know where in the
+      // venue they have landed.
+      orbit.frame({ center: zone.center, radius: zone.radius * 1.25 }, false, azimuth);
+      loop.requestRender();
+      return true;
+    },
     setReducedMotionForTest(value) {
       reducedForced = value;
     },
@@ -451,6 +552,7 @@ export function mountVenue3D(
       overviewChip.remove();
       cancelFlight();
       loop.stop();
+      labelOverlay.dispose();
       ro?.disconnect();
       if (panorama) { panorama.dispose(); panorama = null; }
       glctx.canvas.removeEventListener('pointerdown', onDown);
