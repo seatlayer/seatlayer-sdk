@@ -21,7 +21,7 @@ import {
 import polygonClipping from 'polygon-clipping';
 import { buildSeatInstances, SEAT_DOT_RADIUS_M, type SeatInstanceData } from './seatInstances';
 import { buildVenueSurfaces, CAP_MAX_ERROR_M, type SectionSurface } from './surface';
-import { emitDeckBands, deckFootprints } from './deckBands';
+import { emitDeckBands, deckFootprints, rowNeighbourhoods } from './deckBands';
 
 /** One resolved plane of geometry — a single-floor chart is one of these. */
 interface FloorUnit {
@@ -206,9 +206,7 @@ function boxesOverlap(a: RingBox, b: RingBox): boolean {
  * over another section's floor.
  */
 function paddedFootprint(section: SectionObject, siblings: readonly SectionObject[]): Point[][] {
-  const __tp = performance.now();
   const padded = outsetRing(section.outline, SEAT_DOT_RADIUS_M * 1.5 * CHART_UNITS_PER_METRE);
-  __t('outsetRing', __tp);
   // Only siblings whose bounding box actually overlaps can remove any area, and
   // a polygon boolean is expensive. Differencing against EVERY sibling made
   // scene build quadratic in section count: measured 2.7 s at 50k seats / 40
@@ -257,6 +255,13 @@ function clipFootprints(
   const allowedPolys = allowed.map((a) => [toRing(a)]);
   const out: ReturnType<typeof deckFootprints> = [];
   for (const b of blocks) {
+    // NOTE: a "skip the clip when the block looks contained" fast path was tried
+    // here and reverted. Testing that the block's VERTICES lie inside the allowed
+    // ring is not sound for a CONCAVE allowed region — and a section footprint is
+    // routinely concave, since an arena wedge curves inward and siblings are
+    // subtracted from it. An edge can bulge outside while every vertex is inside,
+    // which buried seats on the arena. A sound test needs edge-intersection
+    // checks, which is most of the cost of the boolean it would be avoiding.
     let pieces;
     try {
       pieces = polygonClipping.intersection([toRing(b.outline)], ...[allowedPolys.flat()]);
@@ -313,9 +318,9 @@ function buildTier(
     // Clipped to the section's own footprint like the treads are: a block base is
     // built from a ribbon union carrying its own outward margin, so it overhangs
     // for the same reason and buries a lower neighbour's seats the same way.
-    const __tf = performance.now();
-    const blocks = clipFootprints(deckFootprints(surface.rowLevels, unit.focal), footprint);
-    __t('deckFootprints', __tf);
+    // One neighbourhood solve, shared by the footprint and the emission below.
+    const nbrs = rowNeighbourhoods(surface.rowLevels);
+    const blocks = clipFootprints(deckFootprints(surface.rowLevels, unit.focal, nbrs), footprint);
     // Explicit UP normals rather than face normals. A block footprint is a
     // boolean union of ~100 overlapping ribbons, and such a union always leaves
     // some very thin triangles along its seams; deriving a normal from one by
@@ -333,14 +338,12 @@ function buildTier(
       extrudePrism(builder, outline, section.holes, () => surface.landingY, bottomY,
         colTop, S.tierWall, AO);
     }
-    const __tb = performance.now();
     emitDeckBands(builder, surface.rowLevels, unit.focal, surface.landingY, {
       tread: [colTop[0] * AO.top, colTop[1] * AO.top, colTop[2] * AO.top],
       // Risers read as the structure they are, a shade below their tread, which
       // is what makes the stepping legible from a low angle.
       riser: [colTop[0] * 0.72, colTop[1] * 0.72, colTop[2] * 0.72],
-    }, footprint.length === 1 ? outline : footprint.flat());
-    __t('emitDeckBands', __tb);
+    }, footprint.length === 1 ? outline : footprint.flat(), nbrs);
     return;
   }
 
@@ -425,6 +428,9 @@ const BOOTH_LABEL_LIFT_M = 0.3;
 
 /** Height of a banquet table top, world metres (standard dining height). */
 const TABLE_HEIGHT_M = 0.75;
+
+/** Thickness of a décor-image floor plate — a marking on the ground, not an object. */
+const DECOR_PLATE_M = 0.04;
 
 /** Resolve a booth to its closed chart-unit polygon, honouring a custom outline. */
 function boothPolygon(booth: Extract<ChartObject, { type: 'booth' }>): Point[] | null {
@@ -513,6 +519,97 @@ function buildShape(builder: MeshBuilder, shape: Extract<ChartObject, { type: 's
   extrudePrism(builder, poly, undefined, () => height, base, colTop, colWall, AO);
 }
 
+/**
+ * Resolve a décor image to its closed chart-unit polygon.
+ *
+ * `DecorImageObject` is authored as a top-left anchor plus size, rotated about
+ * its own CENTRE — the same convention the 2D renderer uses when it offsets the
+ * Konva node by half its extent.
+ */
+function decorPolygon(decor: Extract<ChartObject, { type: 'decorImage' }>): Point[] | null {
+  const { x, y, width, height } = decor;
+  if (!width || !height) return null;
+  const cx = x + width / 2, cy = y + height / 2;
+  const a = ((decor.rotation ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(a), sin = Math.sin(a);
+  const hw = width / 2, hh = height / 2;
+  return [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([lx, ly]) => ({
+    x: cx + lx * cos - ly * sin,
+    y: cy + lx * sin + ly * cos,
+  }));
+}
+
+/**
+ * The colour a décor plate is painted, sniffed from an SVG data URL.
+ *
+ * The renderer is deliberately texture-free (three draw calls, no atlas), so a
+ * décor image cannot be drawn as an image. What it CAN do is paint the plate in
+ * the graphic's own dominant colour, which is the difference between an ice rink
+ * reading as ice and reading as a grey slab.
+ *
+ * The heuristic is narrow on purpose: take the paint of the FIRST covering
+ * element (`<rect>` or `<path>`), because an SVG floor graphic is built up
+ * background-first — the rink surface, then the lines on top of it. A gradient
+ * reference resolves to the mean of that gradient's stops. Anything else (a
+ * raster data URL, an external href, an SVG that does not match) returns null
+ * and the caller falls back to the neutral décor tone, which is what the object
+ * rendered as before this existed.
+ */
+function decorPlatePaint(href: string | undefined): RGB | null {
+  if (!href || !href.startsWith('data:image/svg+xml')) return null;
+  let svg = href.slice(href.indexOf(',') + 1);
+  if (/;base64/i.test(href.slice(0, href.indexOf(',')))) {
+    try { svg = atob(svg); } catch { return null; }
+  } else {
+    try { svg = decodeURIComponent(svg); } catch { /* already literal */ }
+  }
+
+  const covering = svg.match(/<(?:rect|path)\b[^>]*\bfill="([^"]+)"/i);
+  if (!covering) return null;
+  const paint = covering[1].trim();
+  if (paint === 'none' || paint === 'transparent') return null;
+
+  const gradient = paint.match(/^url\(#([^)]+)\)$/);
+  if (!gradient) return hexToRgb(paint);
+
+  // Average the referenced gradient's stops — a two-stop ice gradient is one
+  // colour as far as a flat-shaded plate is concerned.
+  const def = svg.match(new RegExp(`<(?:linear|radial)Gradient\\b[^>]*\\bid="${gradient[1]}"[^>]*>([\\s\\S]*?)</(?:linear|radial)Gradient>`, 'i'));
+  if (!def) return null;
+  const stops: RGB[] = [];
+  for (const m of def[1].matchAll(/stop-color="([^"]+)"/gi)) {
+    const c = hexToRgb(m[1].trim());
+    if (c) stops.push(c);
+  }
+  if (!stops.length) return null;
+  return stops.reduce<RGB>((acc, c, i) => mix(acc, c, 1 / (i + 1)), stops[0]);
+}
+
+function buildDecorImage(
+  builder: MeshBuilder,
+  decor: Extract<ChartObject, { type: 'decorImage' }>,
+  base: number,
+  S: typeof STRUCTURE,
+): void {
+  // A `foreground` décor image draws ABOVE the seats in 2D — a canopy or an
+  // overlay graphic. In 3D an opaque plate over the seating would hide the very
+  // thing the buyer came to pick from, so it is left undrawn rather than drawn
+  // wrongly. No shipped template authors one; the designer can.
+  if (decor.layer === 'foreground') return;
+  const poly = decorPolygon(decor);
+  if (!poly) return;
+  // The plate is a floor marking, not an object: it sits a few centimetres proud
+  // of the ground slab so it cannot z-fight, and well under the 0.25 m décor
+  // shapes that may be standing on it.
+  const top = base + DECOR_PLATE_M;
+  let paint = decorPlatePaint(decor.href) ?? S.decorTop;
+  // No alpha in the solid pass, so authored opacity is honoured by mixing the
+  // plate toward the ground it would otherwise be showing through to.
+  const opacity = Math.max(0, Math.min(1, decor.opacity ?? 1));
+  if (opacity < 1) paint = mix(S.ground, paint, opacity);
+  extrudePrism(builder, poly, undefined, () => top, base, paint, mix(paint, S.decorWall, 0.5), AO);
+}
+
 function buildGa(builder: MeshBuilder, ga: Extract<ChartObject, { type: 'gaArea' }>, base: number, fill: RGB | null, S: typeof STRUCTURE): void {
   if (!ga.points || ga.points.length < 3) return;
   const colTop = tintTop(fill, S.gaTop);
@@ -534,6 +631,7 @@ function chartFootprint(units: FloorUnit[], seats: ExpandedSeat[]): { minX: numb
       else if (o.type === 'gaArea') for (const p of o.points) acc(p.x, p.y);
       else if (o.type === 'booth') { const b = boothPolygon(o); if (b) for (const p of b) acc(p.x, p.y); }
       else if (o.type === 'table') { const t = tablePolygon(o); if (t) for (const p of t) acc(p.x, p.y); }
+      else if (o.type === 'decorImage') { const d = decorPolygon(o); if (d) for (const p of d) acc(p.x, p.y); }
     }
   }
   if (!Number.isFinite(minX)) { minX = -100; minY = -100; maxX = 100; maxY = 100; }
@@ -547,13 +645,7 @@ export interface SceneModelInput {
   initialState?: (seat: ExpandedSeat) => import('../palette').SeatState3D;
 }
 
-export const __PROF: Record<string, number> = {};
-const __t = (k: string, t0: number): void => {
-  __PROF[k] = (__PROF[k] ?? 0) + (performance.now() - t0);
-};
-
 export function buildSceneModel(input: SceneModelInput): SceneModel {
-  for (const k of Object.keys(__PROF)) delete __PROF[k];
   const { doc, seats } = input;
   // Resolved once and threaded down, so no builder reaches for the module-level
   // palette and quietly ignores an organizer's branding.
@@ -575,9 +667,7 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
 
   // ONE seating surface per section, resolved from the same model layout.ts uses
   // for eye heights. Consumed below by the tier caps and by the seat instances.
-  const __t0 = performance.now();
   const surfaces = buildVenueSurfaces(units, seats);
-  __t('surfaces', __t0);
   /** Owning floor per seat, for per-instance floor isolation. */
   const seatFloor = new Float32Array(seats.length);
 
@@ -589,15 +679,12 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
     const claimed = new ClaimedArea();
     const siblings = unit.objects.filter((o): o is SectionObject => o.type === 'section' && !!o.outline && o.outline.length >= 3);
     for (const o of unit.objects) {
-      if (o.type === 'section') {
-        const t = performance.now();
-        buildTier(builder, o, unit, sectionFill(o, sectionFills), surfaces.bySection.get(o.id), claimed, siblings, S);
-        __t('buildTier', t);
-      }
+      if (o.type === 'section') buildTier(builder, o, unit, sectionFill(o, sectionFills), surfaces.bySection.get(o.id), claimed, siblings, S);
       else if (o.type === 'shape') buildShape(builder, o, unit.baseHeightM, S);
       else if (o.type === 'gaArea') buildGa(builder, o, unit.baseHeightM, hexToRgb(catColor.get(o.categoryKey)), S);
       else if (o.type === 'booth') buildBooth(builder, o, unit.baseHeightM, hexToRgb(catColor.get(o.categoryKey)), S);
       else if (o.type === 'table') buildTable(builder, o, unit.baseHeightM, hexToRgb(catColor.get(o.categoryKey)), S);
+      else if (o.type === 'decorImage') buildDecorImage(builder, o, unit.baseHeightM, S);
     }
   }
 
@@ -614,12 +701,8 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
   // The module is kept (with its measurements in the doc comments) as input to
   // that rework; re-enabling it as-is is not the intended path.
 
-  const __tm = performance.now();
   const solids = mergeMeshData([builder.build()]);
-  __t('meshBuild+merge', __tm);
-  const __ts = performance.now();
   const seatData: SeatInstanceData = buildSeatInstances(seats, input.initialState, surfaces, seatFloor);
-  __t('seatInstances', __ts);
 
   // --- Zones -----------------------------------------------------------------
   // Resolved from the SEATS, not the section outlines: a zone's meaning to a

@@ -17,6 +17,7 @@ import {
   type SeatHoverDetails,
 } from '@seatlayer/core';
 import { PubApi, type BestAvailableResult, type HoldResult } from './api';
+import { SEATLAYER_ATTRIBUTION_MARK_SVG } from './seatLayerBrand';
 
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
 const DEFAULT_MAX_SELECTION = 10;
@@ -257,10 +258,8 @@ export class SeatingChart {
       'box-shadow:0 2px 8px rgba(0,0,0,.12);';
     badge.innerHTML =
       '<span aria-hidden="true" style="width:16px;height:16px;border-radius:4px;flex:none;' +
-      'display:flex;align-items:center;justify-content:center;background:#f4b740;color:#1a1200">' +
-      '<svg viewBox="0 0 24 24" style="width:11px;height:11px;fill:currentColor">' +
-      '<path d="M4 15c0-1.1.9-2 2-2h12a2 2 0 0 1 2 2v3h-3v-2H7v2H4v-3Z"/>' +
-      '<rect x="7" y="7" width="10" height="5" rx="1.6"/></svg></span>' +
+      'display:flex;align-items:center;justify-content:center;background:#0c1220;color:#fcf7ee">' +
+      SEATLAYER_ATTRIBUTION_MARK_SVG + '</span>' +
       `<span>${t('picker.poweredBy')}</span>`;
     host.appendChild(badge);
   }

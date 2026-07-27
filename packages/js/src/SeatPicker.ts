@@ -42,11 +42,14 @@ import {
 } from '@seatlayer/core';
 import type { Venue3DHandle, SeatView as View3DSeatView } from '@seatlayer/core/view3d';
 import { PubApi, type HoldLineItem, type HoldResult } from './api';
+import { SEATLAYER_ATTRIBUTION_MARK_SVG } from './seatLayerBrand';
 
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
 const DEFAULT_MAX_SELECTION = 10;
 /** Show the "Need more time?" prompt when the hold has this long (ms) left. */
 const EXTEND_PROMPT_MS = 60_000;
+/** Default seat ceiling for offering 3D — see the `max3DSeats` option. */
+const MAX_3D_SEATS_DEFAULT = 15_000;
 
 /** Minimal shape of a section object read off the ChartDoc for the minimap. */
 interface SectionLike {
@@ -195,6 +198,16 @@ export interface SeatPickerOptions {
    * dynamically imported on first use). Set false for embed hosts that must
    * stay strictly 2D. */
   enable3D?: boolean;
+  /**
+   * Seat-count ceiling above which 3D is not offered. Default: the measured-good
+   * ceiling of 15,000 seats (14,142 renders at 58 fps), halved to 7,500 on a
+   * device that reports itself as small/low-core.
+   *
+   * The 3D scene holds EVERY seat resident — there is no streaming rung yet — so
+   * a 53,000-seat chart builds its scene in ~780 ms on a desktop and much worse
+   * on a phone. Offering 3D there is offering a stall. A host that knows its
+   * audience can raise this; the ceiling goes away when seat streaming lands. */
+  max3DSeats?: number;
   /**
    * Optional analytics sink for the widget's own journey events. Currently emits
    * the 3D venue-view journey (`3d_opened`, `3d_orbit_engaged`, `3d_seat_picked`,
@@ -725,14 +738,14 @@ const CSS = `
 .sl-closed-pill.on{display:inline-flex}
 .sl-closed-pill svg{width:13px;height:13px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
 
-/* "Powered by SeatLayer" attribution badge (side-panel foot) — the small gold
-   rounded logo mark + wordmark. Hidden when the host opts out or the org's paid
+/* "Powered by SeatLayer" attribution badge (side-panel foot) — the canonical
+   Layered Rows mark + wordmark. Hidden when the host opts out or the org's paid
    theme sets hideBadge. */
 .sl-powered{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:10px;
   font-size:11px;letter-spacing:.03em;color:var(--sl-muted)}
 .sl-powered-mark{width:16px;height:16px;border-radius:4px;flex:none;display:flex;align-items:center;justify-content:center;
-  background:var(--sl-accent);color:var(--sl-accent-ink)}
-.sl-powered-mark svg{width:11px;height:11px;fill:currentColor}
+  background:#0c1220;color:#fcf7ee}
+.sl-powered-mark svg{width:12px;height:11px}
 
 /* a11y filter chips (flow within the top-left region) */
 .sl-chips{display:flex;gap:6px;flex-wrap:wrap}
@@ -914,6 +927,20 @@ const CSS = `
   color:#e6edf3;background:rgba(10,14,20,.62);border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(6px)}
 .sl-view3d-back:hover,.sl-view3d-back:focus-visible{background:rgba(16,22,30,.82);border-color:rgba(255,255,255,.4)}
 .sl-view3d-back svg{width:15px;height:15px;stroke:currentColor;stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+/* Venue navigation inside 3D: levels (isolate a floor) and areas (fly to a zone).
+   Bottom-LEFT, clear of the module's own chips (Overview bottom-right, 360
+   bottom-centre) and of the bottom-sheeted confirm card. Horizontally scrollable
+   so a venue with many zones never pushes the rail off a phone screen. */
+.sl-view3d-nav{position:absolute;left:12px;bottom:16px;z-index:3;display:flex;flex-direction:column;gap:6px;
+  max-width:calc(100% - 24px);pointer-events:none}
+.sl-view3d-nav > div{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;pointer-events:auto;
+  padding:1px;-webkit-overflow-scrolling:touch}
+.sl-view3d-nav > div::-webkit-scrollbar{display:none}
+.sl-view3d-nav button{flex:0 0 auto;min-height:32px;padding:7px 12px;border-radius:999px;white-space:nowrap;
+  font-size:11.5px;font-weight:700;color:#c9d4ea;background:rgba(12,18,32,.72);
+  border:1px solid rgba(150,165,205,.35);backdrop-filter:blur(6px);cursor:pointer}
+.sl-view3d-nav button:hover,.sl-view3d-nav button:focus-visible{color:#eef1f8;border-color:rgba(190,205,240,.6)}
+.sl-view3d-nav button[aria-pressed="true"]{background:var(--sl-accent);color:var(--sl-accent-ink);border-color:transparent}
 /* While immersed, the 2D-only chrome is meaningless — hide it, keep Map|3D. */
 .sl-picker[data-view3d="on"] .sl-rungs,
 .sl-picker[data-view3d="on"] .sl-floors,
@@ -2209,7 +2236,7 @@ export class SeatPicker {
     el.className = 'sl-powered';
     el.innerHTML =
       `<span class="sl-powered-mark" aria-hidden="true">` +
-      `<svg viewBox="0 0 24 24"><path d="M4 15c0-1.1.9-2 2-2h12a2 2 0 0 1 2 2v3h-3v-2H7v2H4v-3Z"/><rect x="7" y="7" width="10" height="5" rx="1.6"/></svg>` +
+      SEATLAYER_ATTRIBUTION_MARK_SVG +
       `</span><span>${this.tf('picker.poweredBy', 'Powered by SeatLayer')}</span>`;
     foot.appendChild(el);
   }
@@ -2836,10 +2863,26 @@ export class SeatPicker {
     });
   }
 
-  /** Can this picker offer the 3D venue view? Requires the option (default on)
-   *  and WebGL2, and a chart to render. */
+  /** Can this picker offer the 3D venue view? Requires the option (default on),
+   *  WebGL2, a chart to render, and a chart small enough to render WELL. */
   private canOffer3d(): boolean {
-    return this.opts.enable3D !== false && hasWebGL2() && !!this.controller.doc;
+    if (this.opts.enable3D === false || !this.controller.doc || !hasWebGL2()) return false;
+    return this.allSeats().length <= this.max3dSeats();
+  }
+
+  /**
+   * The seat ceiling for offering 3D. See `max3DSeats` — an explicit host value
+   * always wins; otherwise a small/low-core device gets half the desktop budget,
+   * because it is the device that turns "slow" into "stalled".
+   */
+  private max3dSeats(): number {
+    const authored = this.opts.max3DSeats;
+    if (typeof authored === 'number' && authored > 0) return authored;
+    const nav = globalThis.navigator as (Navigator & { deviceMemory?: number }) | undefined;
+    const small = (nav?.hardwareConcurrency ?? 8) <= 4
+      || (nav?.deviceMemory ?? 8) <= 4
+      || (globalThis.matchMedia?.('(pointer: coarse)').matches ?? false);
+    return small ? MAX_3D_SEATS_DEFAULT / 2 : MAX_3D_SEATS_DEFAULT;
   }
 
   /** Reflect the active floor onto the switcher rail. */
@@ -4625,6 +4668,77 @@ export class SeatPicker {
     else this.syncTray();
   }
 
+  /**
+   * The venue-navigation rail inside 3D: levels and areas.
+   *
+   * In 2D a buyer moves through the venue by floor switcher and by the LOD
+   * rungs. Both are hidden while immersed, and the 3D module's own chips only
+   * cover "go home" and "see the 360" — so on a multi-floor or multi-zone chart
+   * the buyer entered 3D and LOST the ability to reach the level or area they
+   * were booking. The camera moves for both already exist on the handle
+   * (`focusFloor` / `focusZone`); this is the surface that offers them.
+   *
+   * Levels are a TOGGLE (a floor stays isolated until you pick another), areas
+   * are an ACTION (the camera flies there and you are then free to orbit), which
+   * is why only the level pills carry a pressed state.
+   */
+  private buildView3dNav(overlay: HTMLElement, handle: Venue3DHandle): void {
+    const floors = handle.floors();
+    // An empty zone has nothing to frame and `focusZone` refuses it — offering
+    // a pill that cannot move the camera is worse than offering nothing.
+    const zones = handle.zones().filter((z) => z.seatCount > 0);
+    // One of anything is not a choice — a single-floor, single-zone venue gets
+    // no rail rather than a rail that does nothing.
+    const wantFloors = floors.length > 1;
+    const wantZones = zones.length > 1;
+    if (!wantFloors && !wantZones) return;
+
+    const nav = document.createElement('div');
+    nav.className = 'sl-view3d-nav';
+
+    if (wantFloors) {
+      const row = document.createElement('div');
+      row.setAttribute('role', 'group');
+      row.setAttribute('aria-label', this.tf('picker.levels', 'Levels'));
+      const pills: HTMLButtonElement[] = [];
+      const select = (index: number | null): void => {
+        if (!handle.focusFloor(index)) return;
+        pills.forEach((p) => {
+          p.setAttribute('aria-pressed', String((p.dataset.floor === '' ? null : Number(p.dataset.floor)) === index));
+        });
+      };
+      const add = (label: string, index: number | null): void => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        b.dataset.floor = index === null ? '' : String(index);
+        b.setAttribute('aria-pressed', String(index === null));
+        b.addEventListener('click', () => select(index));
+        pills.push(b);
+        row.appendChild(b);
+      };
+      add(this.tf('picker.allLevels', 'All levels'), null);
+      for (const f of floors) add(f.label || `Level ${f.index + 1}`, f.index);
+      nav.appendChild(row);
+    }
+
+    if (wantZones) {
+      const row = document.createElement('div');
+      row.setAttribute('role', 'group');
+      row.setAttribute('aria-label', this.tf('picker.areas', 'Areas'));
+      for (const z of zones) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = z.label || z.id;
+        b.addEventListener('click', () => handle.focusZone(z.id));
+        row.appendChild(b);
+      }
+      nav.appendChild(row);
+    }
+
+    overlay.appendChild(nav);
+  }
+
   private async enter3d(flySeatId?: string): Promise<void> {
     if (this.view3dEl || !this.canOffer3d() || !this.els.map) return;
     const doc = this.controller.doc;
@@ -4679,6 +4793,7 @@ export class SeatPicker {
       this.view3dHandle = handle;
       this.pushAvailabilityTo3d();
       this.syncSelectionTo3d();
+      this.buildView3dNav(overlay, handle);
       if (flySeatId) void handle.flyToSeat(flySeatId);
     } catch (err) {
       this.opts.onError?.(err);

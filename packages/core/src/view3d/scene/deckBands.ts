@@ -217,7 +217,22 @@ interface Neighbourhood {
  * the nearest row that is closer to the focal is the one this ribbon steps down
  * onto.
  */
-function neighbourhoods(rows: readonly BandRow[]): Neighbourhood[] {
+export function rowNeighbourhoods(rows: readonly BandRow[]): Neighbourhood[] {
+  // Bounding circle per row, so the exact polyline test is skipped for rows that
+  // cannot possibly be nearest. This is O(rows^2) at heart and a big venue has
+  // thousands of rows in a section.
+  const bounds = rows.map((r) => {
+    let cx = 0, cy = 0;
+    for (const p of r.pts) { cx += p.x; cy += p.y; }
+    const n = r.pts.length || 1;
+    cx /= n; cy /= n;
+    let rad = 0;
+    for (const p of r.pts) {
+      const d = Math.hypot(p.x - cx, p.y - cy);
+      if (d > rad) rad = d;
+    }
+    return { cx, cy, rad };
+  });
   // Probe from points ON the row, at a quarter, a half and three quarters along
   // it. The centroid was tried and broke the arena: its rows are strong arcs, and
   // an arc's centroid lies well inside the curve rather than on it, so distances
@@ -251,6 +266,13 @@ function neighbourhoods(rows: readonly BandRow[]): Neighbourhood[] {
         // lateral neighbour across an aisle shares this row's level (it is the
         // same row, split), while the row in front or behind does not.
         if (j === i || Math.abs(rows[j].y - rows[i].y) < 1e-3) continue;
+        // Admissible lower bound: the true distance can never be smaller than
+        // this, so a row that cannot beat EITHER accumulator can be skipped
+        // outright. Guarding on only one of them left the prune almost never
+        // firing, which is the whole cost of this function.
+        const b = bounds[j];
+        const lower = Math.hypot(c.x - b.cx, c.y - b.cy) - b.rad;
+        if (lower >= nearest && lower >= bestFrontD) continue;
         const d = distToPolyline(rows[j].pts, c.x, c.y);
         if (d < nearest) nearest = d;
         // "In front" = nearer the focal, i.e. a smaller depth ordinate.
@@ -329,6 +351,8 @@ function ribbonOf(rows: readonly BandRow[], i: number, nbrs: Neighbourhood[], fo
 }
 
 /** A block: the footprint its ribbons cover, and the level its base sits at. */
+export type { Neighbourhood };
+
 export interface DeckFootprint {
   /** Outer ring, chart units. */
   outline: Point[];
@@ -353,93 +377,22 @@ export interface DeckFootprint {
  * level rather than sharing the section's. Costs 7–13 ms per section at build
  * time, which is paid once.
  */
-export function deckFootprints(rows: readonly BandRow[], focal: Point): DeckFootprint[] {
-  if (rows.length < 2) return [];
-  const nbrs = neighbourhoods(rows);
-  const rings: Array<[number, number][][]> = [];
-  const ribbons: Array<Ribbon | null> = [];
-  for (let i = 0; i < rows.length; i++) {
-    const r = ribbonOf(rows, i, nbrs, focal);
-    ribbons.push(r);
-    if (!r) continue;
-    const f: [number, number][] = [];
-    const b: [number, number][] = [];
-    const rf = r.front + FOOTPRINT_MARGIN_U;
-    const rb = r.back + FOOTPRINT_MARGIN_U;
-    for (let k = 0; k < r.pts.length; k++) {
-      const p = r.pts[k], n = r.nrm[k];
-      f.push([p.x - n[0] * rf, p.y - n[1] * rf]);
-      b.push([p.x + n[0] * rb, p.y + n[1] * rb]);
-    }
-    const ring = [...f, ...b.reverse()];
-    if (ring.length < 3) continue;
-    ring.push(ring[0]); // polygon-clipping wants closed rings
-    rings.push([ring]);
-  }
-  if (!rings.length) return [];
-
-  let merged: ReturnType<typeof polygonClipping.union>;
-  try {
-    merged = polygonClipping.union(rings[0], ...rings.slice(1));
-  } catch {
-    return []; // never let a degenerate row set break the whole scene
-  }
-
-  const out: DeckFootprint[] = [];
-  for (const poly of merged) {
-    if (!poly.length || poly[0].length < 4) continue;
-    const toPts = (ring: readonly [number, number][]): Point[] => {
-      const pts = ring.map(([x, y]) => ({ x, y }));
-      // union() repeats the first point to close the ring; drop the duplicate.
-      const first = pts[0], last = pts[pts.length - 1];
-      if (pts.length > 1 && Math.abs(first.x - last.x) < 1e-9 && Math.abs(first.y - last.y) < 1e-9) pts.pop();
-      return pts;
-    };
-    const outline = toPts(poly[0]);
-    if (outline.length < 3) continue;
-    // This block's base is its own lowest row, not the section's — otherwise a
-    // block set high in the bowl would be drawn standing on the front block's floor.
-    let topY = Infinity;
-    for (let i = 0; i < rows.length; i++) {
-      const r = ribbons[i];
-      if (!r) continue;
-      const mid = r.pts[Math.floor(r.pts.length / 2)];
-      if (pointInRing(outline, mid.x, mid.y) && rows[i].y < topY) topY = rows[i].y;
-    }
-    if (!Number.isFinite(topY)) continue;
-    out.push({
-      outline: simplifyRing(outline, FOOTPRINT_TOLERANCE_U),
-      holes: poly.slice(1).map(toPts).map((h) => simplifyRing(h, FOOTPRINT_TOLERANCE_U))
-        .filter((h) => h.length >= 3),
-      topY,
-    });
-  }
-  return out;
-}
-
 /**
- * Douglas-Peucker simplification tolerance for a block outline, chart units
- * (~7 mm in world metres).
+ * Extra width given to a ribbon in the block footprint, chart units (~3 cm).
  *
- * Unioning ~100 overlapping ribbons leaves long runs of near-collinear vertices
- * along a block's boundary, and earcut fans those into needles — measured aspect
- * ratios of 18,893 and 4,576,013, the same defect that flat-shades as dark
- * hairlines. The block outline carries no detail at this scale (the SEATS are
- * carried by the ribbons above it, not by this base), so simplifying is free.
- */
-const FOOTPRINT_TOLERANCE_U = 0.3;
-
-/**
- * Extra width given to a ribbon before it is unioned into a block footprint,
- * chart units (~3 cm world).
- *
- * Unioning ribbons at their exact width makes neighbouring ribbons meet
- * TANGENTIALLY, and a boolean union of tangential shapes emits zero-width slits
- * along the seam — metres long, well under a millimetre wide. Overlapping them
- * decisively removes the seam instead of leaving one to clean up afterwards. The
- * footprint is only the base beneath the ribbons, so a 3 cm margin is invisible.
+ * The footprint is the base the ribbons stand on, so a small margin keeps its
+ * edge from coinciding exactly with a tread edge and z-fighting it.
  */
 const FOOTPRINT_MARGIN_U = 1.5;
+
+/**
+ * Douglas-Peucker tolerance for a block outline, chart units (~7 mm).
+ *
+ * The base carries no detail at this scale — the SEATS are carried by the
+ * ribbons above it — and long runs of near-collinear vertices are what earcut
+ * fans into needle triangles.
+ */
+const FOOTPRINT_TOLERANCE_U = 0.3;
 
 /** Douglas-Peucker on an open point run. */
 function simplifyRun(pts: Point[], tol: number): Point[] {
@@ -464,10 +417,142 @@ function simplifyRun(pts: Point[], tol: number): Point[] {
 /** Simplify a closed ring, keeping it closed. */
 function simplifyRing(ring: Point[], tol: number): Point[] {
   if (ring.length < 4) return ring;
-  // Split at the two extreme points so the closing edge is simplified too.
   const out = simplifyRun([...ring, ring[0]], tol);
   out.pop();
   return out.length >= 3 ? out : ring;
+}
+
+export function deckFootprints(rows: readonly BandRow[], focal: Point, shared?: Neighbourhood[]): DeckFootprint[] {
+  if (rows.length < 2) return [];
+  const nbrs = shared ?? rowNeighbourhoods(rows);
+
+  // Group by the block the structure resolver already identified. The first
+  // implementation instead recovered blocks by UNIONING every ribbon and reading
+  // off the resulting polygons — correct, but it made a boolean solve the
+  // question a resolved field already answers, and ribbons overlap each other by
+  // design (FRONT_REACH is past the halfway line), which is the worst case for a
+  // sweep-line union. Profiled at 48 % of scene build on a 50k venue and 58 % on
+  // 99k, growing superlinearly: 1,024 ms -> 5,285 ms for twice the seats.
+  const byBlock = new Map<number, number[]>();
+  for (let i = 0; i < rows.length; i++) {
+    const a = byBlock.get(rows[i].blockId);
+    if (a) a.push(i); else byBlock.set(rows[i].blockId, [i]);
+  }
+
+  const out: DeckFootprint[] = [];
+  for (const [, indices] of byBlock) {
+    // Front to back, so the ring below traces the block's real outline.
+    indices.sort((a, b) => rows[a].depth - rows[b].depth);
+    const ribbons = indices.map((i) => ribbonOf(rows, i, nbrs, focal));
+    const usable = ribbons.filter((r): r is Ribbon => r !== null);
+    if (!usable.length) continue;
+
+    const frontOf = (r: Ribbon, k: number): Point => ({
+      x: r.pts[k].x - r.nrm[k][0] * (r.front + FOOTPRINT_MARGIN_U),
+      y: r.pts[k].y - r.nrm[k][1] * (r.front + FOOTPRINT_MARGIN_U),
+    });
+    const backOf = (r: Ribbon, k: number): Point => ({
+      x: r.pts[k].x + r.nrm[k][0] * (r.back + FOOTPRINT_MARGIN_U),
+      y: r.pts[k].y + r.nrm[k][1] * (r.back + FOOTPRINT_MARGIN_U),
+    });
+
+    // Trace the boundary directly: the front row's front edge, down the right
+    // ends, the back row's back edge reversed, and up the left ends. O(rows)
+    // instead of a boolean over every ribbon.
+    const first = usable[0], last = usable[usable.length - 1];
+    const ring: Point[] = [];
+    for (let k = 0; k < first.pts.length; k++) ring.push(frontOf(first, k));
+    for (const r of usable) ring.push(backOf(r, r.pts.length - 1));
+    for (let k = last.pts.length - 1; k >= 0; k--) ring.push(backOf(last, k));
+    for (let i = usable.length - 1; i >= 0; i--) ring.push(frontOf(usable[i], 0));
+
+    const deduped = dedupeAdjacent(ring);
+    let topY = Infinity;
+    for (const i of indices) if (rows[i].y < topY) topY = rows[i].y;
+    if (!Number.isFinite(topY)) continue;
+
+    // VERIFY the traced ring before trusting it. Tracing assumes a block's rows
+    // stack cleanly front to back; a block that folds or wraps can trace a
+    // self-intersecting ring, which still has positive area but covers the wrong
+    // ground — on the West End theatre that left seats standing over a base that
+    // had moved out from under them. The property that matters is that the base
+    // covers its own ribbons, so test exactly that and fall back to the boolean
+    // union for the rare block that fails.
+    const covers = deduped.length >= 3
+      && Math.abs(ringArea(deduped)) > 1e-6
+      && usable.every((r) => {
+        const mid = r.pts[Math.floor(r.pts.length / 2)];
+        return pointInRing(deduped, mid.x, mid.y);
+      });
+
+    if (covers) {
+      out.push({ outline: simplifyRing(deduped, FOOTPRINT_TOLERANCE_U), holes: [], topY });
+      continue;
+    }
+    for (const poly of unionRibbons(usable)) out.push({ outline: poly, holes: [], topY });
+  }
+  return out;
+}
+
+/**
+ * The original boolean union, kept as the fallback for blocks the direct trace
+ * cannot describe. Correct but expensive, so it now runs for a handful of blocks
+ * rather than for every one.
+ */
+function unionRibbons(ribbons: readonly Ribbon[]): Point[][] {
+  const rings: Array<[number, number][][]> = [];
+  for (const r of ribbons) {
+    const f: [number, number][] = [];
+    const b: [number, number][] = [];
+    const rf = r.front + FOOTPRINT_MARGIN_U;
+    const rb = r.back + FOOTPRINT_MARGIN_U;
+    for (let k = 0; k < r.pts.length; k++) {
+      const p = r.pts[k], n = r.nrm[k];
+      f.push([p.x - n[0] * rf, p.y - n[1] * rf]);
+      b.push([p.x + n[0] * rb, p.y + n[1] * rb]);
+    }
+    const ring = [...f, ...b.reverse()];
+    if (ring.length < 3) continue;
+    ring.push(ring[0]);
+    rings.push([ring]);
+  }
+  if (!rings.length) return [];
+  try {
+    const merged = polygonClipping.union(rings[0], ...rings.slice(1));
+    const out: Point[][] = [];
+    for (const poly of merged) {
+      if (!poly.length || poly[0].length < 4) continue;
+      const pts = poly[0].map(([x, y]) => ({ x, y }));
+      const first = pts[0], last = pts[pts.length - 1];
+      if (pts.length > 1 && Math.abs(first.x - last.x) < 1e-9 && Math.abs(first.y - last.y) < 1e-9) pts.pop();
+      if (pts.length >= 3) out.push(simplifyRing(pts, FOOTPRINT_TOLERANCE_U));
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Shoelace area of a ring. */
+function ringArea(ring: readonly Point[]): number {
+  let a = 0;
+  for (let i = 0, n = ring.length; i < n; i++) {
+    const p = ring[i], q = ring[(i + 1) % n];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a / 2;
+}
+
+/** Drop consecutive duplicates, which the traced ring produces at its corners. */
+function dedupeAdjacent(ring: readonly Point[]): Point[] {
+  const out: Point[] = [];
+  for (const p of ring) {
+    const last = out[out.length - 1];
+    if (last && Math.hypot(p.x - last.x, p.y - last.y) < 1e-9) continue;
+    out.push(p);
+  }
+  while (out.length > 2 && Math.hypot(out[0].x - out[out.length - 1].x, out[0].y - out[out.length - 1].y) < 1e-9) out.pop();
+  return out;
 }
 
 /** Even-odd point-in-ring test. */
@@ -589,9 +674,12 @@ export function emitDeckBands(
   landingY: number,
   colors: BandColors,
   clip?: readonly Point[],
+  shared?: Neighbourhood[],
 ): void {
   if (rows.length < 2) return;
-  const nbrs = neighbourhoods(rows);
+  // Reused from the footprint pass when the caller has one: this is the O(rows^2)
+  // step and computing it twice per section doubled it for nothing.
+  const nbrs = shared ?? rowNeighbourhoods(rows);
   const UP = [0, 1, 0] as const;
   const clipRing: [number, number][][] | null = clip && clip.length >= 3
     ? [[...clip.map((p) => [p.x, p.y] as [number, number]), [clip[0].x, clip[0].y]]]

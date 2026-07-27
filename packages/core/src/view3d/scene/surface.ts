@@ -257,26 +257,34 @@ export function buildVenueSurfaces(units: SurfaceUnit[], seats: ExpandedSeat[]):
     const kind = a.section.surfaceKind;
     const flat = kind === 'flat' ? true : kind === 'rakedRows' ? geo.rake > 0.01 ? false : inferredFlat : inferredFlat;
 
-    // The section's own rake axis, fitted from its rows. `layout.ts` fits the
-    // identical axis from the identical grouping; DEPTH, the front datum and the
-    // rise all then come from one field, which is what keeps a seat dot and the
-    // deck it stands on from being computed under different models.
-    const rake = buildSectionRake([...a.rows.values()].map((points) => ({ points })), a.unit.focal);
+    // Resolve the structure FIRST: when it yields row levels, the rake field is
+    // never consulted and building it is pure waste. Profiled at 7 % of scene
+    // build on a 50k venue — `sampleRows` doing inverse-distance work for a field
+    // nothing would read.
+    const structure = a.hasSeats
+      ? resolveSection(id, seats, a.seatIndices, a.unit.focal)
+      : { sectionId: id, rows: [] as ResolvedRow[], blockCount: 0 };
+    const needsRake = structure.rows.length < 2;
+    const rake = needsRake
+      ? buildSectionRake([...a.rows.values()].map((points) => ({ points })), a.unit.focal)
+      : null;
 
     let frontU = Infinity;
-    if (a.hasSeats) {
-      for (const pts of a.rows.values()) {
-        for (const p of pts) {
+    if (rake) {
+      if (a.hasSeats) {
+        for (const pts of a.rows.values()) {
+          for (const p of pts) {
+            const d = rake.depthAt(p.x, p.y);
+            if (d < frontU) frontU = d;
+          }
+        }
+      }
+      if (!a.hasSeats || !Number.isFinite(frontU)) {
+        frontU = Infinity;
+        for (const p of a.section.outline) {
           const d = rake.depthAt(p.x, p.y);
           if (d < frontU) frontU = d;
         }
-      }
-    }
-    if (!a.hasSeats || !Number.isFinite(frontU)) {
-      frontU = Infinity;
-      for (const p of a.section.outline) {
-        const d = rake.depthAt(p.x, p.y);
-        if (d < frontU) frontU = d;
       }
     }
     const flatTop = bottomY + FLAT_SLAB_TOP_M;
@@ -303,9 +311,6 @@ export function buildVenueSurfaces(units: SurfaceUnit[], seats: ExpandedSeat[]):
     // (which is what `rake.depthAt` does, and what this used to do) raised a
     // bowl's side wedges as though they were further back: sec-gall's six blocks
     // are one tier authored at 6.20 m and started at 6.35 to 10.65 m.
-    const structure = a.hasSeats
-      ? resolveSection(id, seats, a.seatIndices, a.unit.focal)
-      : { sectionId: id, rows: [] as ResolvedRow[], blockCount: 0 };
     const rowLevels = flat
       ? []
       : structure.rows.map((r) => ({
@@ -349,7 +354,7 @@ export function buildVenueSurfaces(units: SurfaceUnit[], seats: ExpandedSeat[]):
           }
           return bestY;
         }
-        : (x: number, y: number): number => levelFor(rake.depthAt(x, y));
+        : (x: number, y: number): number => (rake ? levelFor(rake.depthAt(x, y)) : flatTop);
 
     // The gradient of the same expression. Height rises with radial distance
     // only, so the surface tilts purely along the outward radial direction and
@@ -364,6 +369,7 @@ export function buildVenueSurfaces(units: SurfaceUnit[], seats: ExpandedSeat[]):
     const normalAt = rowLevels.length >= 2 || flat
       ? (): [number, number, number] => UP
       : (x: number, y: number): [number, number, number] => {
+        if (!rake) return UP;
         const d = rake.depthAt(x, y);
         if (d <= frontU) return UP;
         const depthM = (d - frontU) * METRES_PER_CHART_UNIT;

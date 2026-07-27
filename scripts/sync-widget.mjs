@@ -35,6 +35,11 @@ const FILES = [
   ['packages/js/src/SeatPicker.ts', 'src/picker/widget/SeatPicker.ts'],
   ['packages/js/src/api.ts', 'src/picker/widget/api.ts'],
   ['packages/js/src/SeatingChart.ts', 'src/picker/widget/SeatingChart.ts'],
+  // The attribution mark both widgets embed. Added after the brand rollout was
+  // authored straight into the app's VENDORED copy and never came back here,
+  // which left this script about to overwrite the app's own branding. It is
+  // widget chrome, so it belongs on this side of the boundary like the widgets.
+  ['packages/js/src/seatLayerBrand.ts', 'src/picker/widget/seatLayerBrand.ts'],
 ];
 
 // Two deterministic import rewrites for the app's vendored copy:
