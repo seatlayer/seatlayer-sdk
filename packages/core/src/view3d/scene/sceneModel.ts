@@ -56,6 +56,24 @@ export interface SceneZone {
   focalWorld: [number, number, number];
 }
 
+/**
+ * One seated section, resolved for navigation — the middle rung of the venue
+ * ladder, between a zone and a seat. A chart with no zones authored still has
+ * sections, so this is the level at which every venue can be navigated.
+ */
+export interface SceneSection {
+  id: string;
+  /** Buyer-facing name, matching the section label. */
+  label: string;
+  seatCount: number;
+  /** World-metre centre of the section's seats (camera target). */
+  center: [number, number, number];
+  /** Half-diagonal of its seat footprint, world metres (camera fit). */
+  radius: number;
+  /** What this section faces — the camera approaches from this side. */
+  focalWorld: [number, number, number];
+}
+
 /** A navigable floor — a logical level of the venue. */
 export interface SceneFloor {
   index: number;
@@ -86,6 +104,8 @@ export interface SceneModel {
   focalWorld: [number, number, number];
   /** The venue's zones, in authored order. Empty when the chart has none. */
   zones: SceneZone[];
+  /** Seated sections, in authored order — the navigable middle rung. */
+  sections: SceneSection[];
   /**
    * The venue's floors, in authored order. A single-floor chart reports one.
    *
@@ -425,12 +445,29 @@ const ZONE_LABEL_LIFT_M = 6;
 const SECTION_LABEL_LIFT_M = 2.2;
 const ANNOTATION_LIFT_M = 0.1;
 const BOOTH_LABEL_LIFT_M = 0.3;
+/** A GA area is flat, so its name sits at head height over the standing floor. */
+const GA_LABEL_LIFT_M = 1.8;
+/** Row and seat labels ride just above their own deck, like painted markings. */
+const ROW_LABEL_LIFT_M = 0.9;
+const SEAT_LABEL_LIFT_M = 0.55;
+/**
+ * Seat-label ceiling. Above this the whole set is not emitted — see the note at
+ * the emit site. 6,000 covers theatres, halls, cinemas and mid-size arenas; the
+ * charts above it are exactly the ones where a per-seat label is least readable.
+ */
+const SEAT_LABEL_MAX = 6_000;
 
 /** Height of a banquet table top, world metres (standard dining height). */
 const TABLE_HEIGHT_M = 0.75;
 
-/** Thickness of a décor-image floor plate — a marking on the ground, not an object. */
-const DECOR_PLATE_M = 0.04;
+/**
+ * Height of a décor-image floor plate — a marking on the ground, not an object.
+ *
+ * Matched to the GA slab (0.15 m) rather than made as thin as it "should" be: a
+ * 4 cm plate under a 76 m rink is a depth ratio of 5e-4 and Uber Arena's ice
+ * z-fought the ground slab into horizontal stripes across the whole surface.
+ */
+const DECOR_PLATE_M = 0.15;
 
 /** Resolve a booth to its closed chart-unit polygon, honouring a custom outline. */
 function boothPolygon(booth: Extract<ChartObject, { type: 'booth' }>): Point[] | null {
@@ -514,7 +551,12 @@ function buildShape(builder: MeshBuilder, shape: Extract<ChartObject, { type: 's
   if (!poly) return;
   const isStage = shape.role === 'stage';
   const height = isStage ? base + 1.0 : base + 0.25;
-  const colTop = isStage ? S.stageTop : S.decorTop;
+  // An authored `fill` is what the 2D renderer paints this shape (see
+  // `renderShape`), and 3D used to discard it for a fixed grey — so an organizer
+  // who coloured their stage, dance floor or pitch saw it in the map and lost it
+  // the moment they switched to 3D. Muted through `tintTop` like every other
+  // authored colour, so it keeps its hue without out-shouting the seating.
+  const colTop = tintTop(hexToRgb(shape.fill), isStage ? S.stageTop : S.decorTop);
   const colWall = isStage ? S.stageWall : S.decorWall;
   extrudePrism(builder, poly, undefined, () => height, base, colTop, colWall, AO);
 }
@@ -602,7 +644,12 @@ function buildDecorImage(
   // of the ground slab so it cannot z-fight, and well under the 0.25 m décor
   // shapes that may be standing on it.
   const top = base + DECOR_PLATE_M;
-  let paint = decorPlatePaint(decor.href) ?? S.decorTop;
+  // Muted into the structure palette exactly like a category fill on a tier cap.
+  // Taken literally, the rink's #f4f9ff ice is the BRIGHTEST thing in the venue
+  // and the floor out-shouts the seating — against the look brief, which puts
+  // saturated colour only on seats. Through `tintTop` it keeps its blue cast and
+  // sits in the same tonal range as every other surface.
+  let paint = tintTop(decorPlatePaint(decor.href), S.decorTop);
   // No alpha in the solid pass, so authored opacity is honoured by mixing the
   // plate toward the ground it would otherwise be showing through to.
   const opacity = Math.max(0, Math.min(1, decor.opacity ?? 1));
@@ -765,6 +812,7 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
 
   // --- Labels ----------------------------------------------------------------
   const labels: SceneLabel[] = [];
+  const sections: SceneSection[] = [];
   for (const z of zones) {
     if (z.seatCount === 0) continue;
     // Zone labels float above the seating they name, so they read as belonging
@@ -782,28 +830,117 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
     // outline centroid would drift into the aisles a concave section wraps, and
     // on a raked tier the label would sit at the wrong height entirely.
     const acc = new Map<string, { n: number; x: number; y: number; deck: number }>();
+    // Seat extent per section, for the camera fit `focusSection` needs.
+    const ext = new Map<string, { minX: number; maxX: number; minY: number; maxY: number }>();
     for (let i = 0; i < seats.length; i++) {
       const owner = surfaces.seatOwner[i];
       if (!owner) continue;
       let a = acc.get(owner);
       if (!a) { a = { n: 0, x: 0, y: 0, deck: 0 }; acc.set(owner, a); }
       a.n++; a.x += seats[i].x; a.y += seats[i].y; a.deck += surfaces.seatDeckY(i);
+      let e = ext.get(owner);
+      if (!e) { e = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }; ext.set(owner, e); }
+      if (seats[i].x < e.minX) e.minX = seats[i].x;
+      if (seats[i].x > e.maxX) e.maxX = seats[i].x;
+      if (seats[i].y < e.minY) e.minY = seats[i].y;
+      if (seats[i].y > e.maxY) e.maxY = seats[i].y;
     }
     for (const unit of units) {
       for (const o of unit.objects) {
         if (o.type !== 'section') continue;
         const a = acc.get(o.id);
         if (!a || a.n === 0) continue;
+        const e = ext.get(o.id)!;
+        const centre: [number, number, number] = [(a.x / a.n) * M, a.deck / a.n, (a.y / a.n) * M];
+        sections.push({
+          id: o.id,
+          label: o.displayLabel || o.label || o.id,
+          seatCount: a.n,
+          center: centre,
+          // Half-diagonal of the seat extent — the same fit the zones use.
+          radius: Math.max(1, Math.hypot(e.maxX - e.minX, e.maxY - e.minY) * 0.5 * M),
+          // A section faces its floor's focal, which is what the camera should
+          // look along so the seats present their fronts.
+          focalWorld: [unit.focal.x * M, unit.baseHeightM + 1.5, unit.focal.y * M],
+        });
         labels.push({
           id: `section:${o.id}`,
           kind: 'section',
           // The buyer-facing name wins over the technical one, as it does in 2D.
           text: o.displayLabel || o.label || o.id,
-          anchor: [(a.x / a.n) * M, a.deck / a.n + SECTION_LABEL_LIFT_M, (a.y / a.n) * M],
+          anchor: [centre[0], centre[1] + SECTION_LABEL_LIFT_M, centre[2]],
         });
       }
     }
   }
+  // --- GA areas, rows and seats ----------------------------------------------
+  {
+    for (const unit of units) {
+      for (const o of unit.objects) {
+        if (o.type !== 'gaArea') continue;
+        const c = centroidOf(o.points);
+        if (!c) continue;
+        // A GA area's capacity IS its buyer-facing fact — "Standing Floor" alone
+        // does not say whether 40 or 4,000 people fit in it, and 2D shows the
+        // number. The label carries both, as one line.
+        const name = o.displayLabel || o.label || o.id;
+        labels.push({
+          id: `ga:${o.id}`,
+          kind: 'ga',
+          text: o.capacity > 0 ? `${name} · ${o.capacity.toLocaleString()}` : name,
+          anchor: [c.x * M, unit.baseHeightM + GA_LABEL_LIFT_M, c.y * M],
+        });
+      }
+    }
+
+    // Rows are labelled at the END of the row, where a real venue paints them —
+    // on the aisle, not over the middle of the seating. Anchored to the outermost
+    // seat so the label tracks the row's own rake instead of a flat guess.
+    const rowEnds = new Map<string, { seat: ExpandedSeat; index: number; far: number }>();
+    for (let i = 0; i < seats.length; i++) {
+      const s = seats[i];
+      const far = Math.hypot(s.x - focal.x, s.y - focal.y);
+      const cur = rowEnds.get(s.rowId);
+      // "End" = furthest along the row from its own midpoint; approximated by
+      // distance from the venue focal, which for a row is one of its two ends.
+      if (!cur || far > cur.far) rowEnds.set(s.rowId, { seat: s, index: i, far });
+    }
+    for (const [rowId, end] of rowEnds) {
+      // A seat's public label is `${rowLabel}-${seatNumber}`, so the row's name
+      // is everything before the LAST separator — a row legitimately called
+      // "A-1" in a segmented plan must not be truncated to "A".
+      const cut = end.seat.label ? end.seat.label.lastIndexOf('-') : -1;
+      const text = cut > 0 ? end.seat.label.slice(0, cut) : rowId;
+      if (!text) continue;
+      labels.push({
+        id: `row:${rowId}`,
+        kind: 'row',
+        text,
+        anchor: [end.seat.x * M, surfaces.seatDeckY(end.index) + ROW_LABEL_LIFT_M, end.seat.y * M],
+      });
+    }
+
+    // Seat labels are the densest rung by far, and unlike every other kind their
+    // count is the seat count. On a 52,000-seat ground that is 52,000 DOM-backed
+    // labels to hold and project, for text that is only legible when a handful
+    // are on screen. So they are emitted for charts where the whole set stays
+    // cheap, and above that a seat identifies itself the way it already does on
+    // every surface: by being tapped, which raises the seat's own card.
+    if (seats.length <= SEAT_LABEL_MAX) {
+      for (let i = 0; i < seats.length; i++) {
+        const s = seats[i];
+        const text = s.displayLabel || s.label;
+        if (!text) continue;
+        labels.push({
+          id: `seat:${s.id}`,
+          kind: 'seat',
+          text,
+          anchor: [s.x * M, surfaces.seatDeckY(i) + SEAT_LABEL_LIFT_M, s.y * M],
+        });
+      }
+    }
+  }
+
   for (const unit of units) {
     for (const o of unit.objects) {
       if (o.type === 'text') {
@@ -885,6 +1022,7 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
     // Look-at target ~1.5 m up so a seated camera aims slightly down at the stage.
     focalWorld: [focal.x * M, 1.5, focal.y * M],
     zones,
+    sections,
     labels,
     floors,
   };

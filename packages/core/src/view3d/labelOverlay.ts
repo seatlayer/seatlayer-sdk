@@ -29,8 +29,31 @@ const SEPARATION_Y_PX = 20;
 const KIND_STYLE: Record<SceneLabel['kind'], { size: number; weight: string; opacity: number }> = {
   zone: { size: 15, weight: '600', opacity: 0.95 },
   section: { size: 12, weight: '500', opacity: 0.88 },
+  ga: { size: 12, weight: '500', opacity: 0.88 },
   booth: { size: 11, weight: '500', opacity: 0.85 },
   annotation: { size: 11, weight: '400', opacity: 0.75 },
+  // Row and seat identity are quieter than the structure they sit inside: at
+  // this range the venue is already understood and the label is a detail, so it
+  // must not compete with the seating it is printed over.
+  row: { size: 10.5, weight: '600', opacity: 0.8 },
+  seat: { size: 9.5, weight: '500', opacity: 0.72 },
+};
+
+/**
+ * Per-kind declutter spacing, CSS px. Seat and row labels are short strings sat
+ * on a tight grid, so the wide section-name box would throw away almost all of
+ * them — a row of seat numbers needs to survive side by side.
+ */
+const DENSE_KINDS = new Set<SceneLabel['kind']>(['row', 'seat']);
+/**
+ * Per-kind, because the two are different shapes of text. A seat number is 1–3
+ * characters and wants to survive shoulder to shoulder along a row; a row name
+ * is a word ("ORCH-L") and needs roughly twice the width before the next one is
+ * legible. One shared value crowded the row names into each other.
+ */
+const DENSE_SEPARATION: Record<'row' | 'seat', { x: number; y: number }> = {
+  row: { x: 62, y: 16 },
+  seat: { x: 24, y: 13 },
 };
 
 export interface LabelOverlayOptions {
@@ -91,8 +114,18 @@ export class LabelOverlay {
     }
 
     // Nearest-wins declutter, then paint. Everything not kept is hidden rather
-    // than removed, so a small camera move does not thrash the DOM.
-    const kept = cullOverlapping(candidates, SEPARATION_X_PX, SEPARATION_Y_PX);
+    // than removed, so a small camera move does not thrash the DOM. Dense kinds
+    // declutter against their OWN spacing and separately from the structure
+    // labels, so a section name never suppresses the seat numbers under it.
+    const structure = candidates.filter((c) => !DENSE_KINDS.has(c.label.kind));
+    const kept = [
+      ...cullOverlapping(structure, SEPARATION_X_PX, SEPARATION_Y_PX),
+      ...(['row', 'seat'] as const).flatMap((kind) => cullOverlapping(
+        candidates.filter((c) => c.label.kind === kind),
+        DENSE_SEPARATION[kind].x,
+        DENSE_SEPARATION[kind].y,
+      )),
+    ];
     const keptIds = new Set(kept.map((k) => k.label.id));
 
     for (const { label, screen } of kept) {

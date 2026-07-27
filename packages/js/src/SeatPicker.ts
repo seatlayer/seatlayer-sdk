@@ -50,6 +50,8 @@ const DEFAULT_MAX_SELECTION = 10;
 const EXTEND_PROMPT_MS = 60_000;
 /** Default seat ceiling for offering 3D — see the `max3DSeats` option. */
 const MAX_3D_SEATS_DEFAULT = 15_000;
+/** Most section pills the 3D navigation rail will offer before it stays quiet. */
+const MAX_3D_SECTION_PILLS = 12;
 
 /** Minimal shape of a section object read off the ChartDoc for the minimap. */
 interface SectionLike {
@@ -1235,6 +1237,8 @@ export class SeatPicker {
   // F4 price-band filter — active band's category keys (null = all prices)
   private priceBandKeys: Set<string> | null = null;
   private focusedCatKey: string | null = null;
+  /** "Hide limited-view seats" — mirrored into 3D by `seatState3dFor`. */
+  private limitedViewFilter = false;
   private pricesExpanded = false;
   /** Last surfaced section summary (re-rendered when the price band changes). */
   private lastSection: SectionSummary | null = null;
@@ -2029,12 +2033,14 @@ export class SeatPicker {
         limited.setAttribute('aria-pressed', 'false');
         limited.innerHTML = `◐ ${this.tf('picker.hideLimitedView', 'Hide limited-view seats')}`;
         chips.appendChild(limited);
-        let limitedOn = false;
         limited.addEventListener('click', () => {
-          limitedOn = !limitedOn;
+          const limitedOn = !this.limitedViewFilter;
+          this.limitedViewFilter = limitedOn;
           limited.classList.toggle('on', limitedOn);
           limited.setAttribute('aria-pressed', String(limitedOn));
           this.controller.setCommercialLimitedFilter(limitedOn);
+          // Keep 3D in step — the filter must survive the switch between views.
+          this.pushAvailabilityTo3d();
           if (limitedOn) focusSeatsForFilter();
         });
       }
@@ -2744,6 +2750,9 @@ export class SeatPicker {
       this.priceBandKeys = keys ? new Set(keys) : null;
       this.controller.setCategoryFilter(keys);
       this.controller.focusCategoryFilter(keys);
+      // The band has to survive a switch into 3D, which paints from its own
+      // state snapshot rather than from Konva opacity.
+      this.pushAvailabilityTo3d();
       // A band whose seats live on another deck switches floors — mirror it.
       this.syncFloors();
       this.syncRung();
@@ -3626,6 +3635,7 @@ export class SeatPicker {
     if (select) select.value = 'all';
     this.controller.setCategoryFilter(next ? [next] : null);
     this.controller.focusCategoryFilter(next ? [next] : null);
+    this.pushAvailabilityTo3d();
     // Focusing a category on another deck switches floors — mirror that onto
     // the floor pills / rung pills / minimap, same as a manual deck switch.
     this.syncFloors();
@@ -4593,20 +4603,30 @@ export class SeatPicker {
   }
 
   /** SeatStatus → the view3d palette state. Selection is layered separately. */
-  private seatState3dFor(id: string): 'available' | 'held' | 'sold' | 'dimmed' {
-    switch (this.controller.getStatus(id)) {
+  private seatState3dFor(seat: ExpandedSeat): 'available' | 'held' | 'sold' | 'dimmed' {
+    switch (this.controller.getStatus(seat.id)) {
       case 'held': return 'held';
       case 'booked': return 'sold';
       case 'not_for_sale': return 'dimmed';
-      default: return 'available';
+      default: break;
     }
+    // A filter that dims a seat on the map has to dim it in 3D too. 2D applies
+    // these as Konva opacity, which the GL view never saw — so a buyer who
+    // filtered to one price band and then switched to 3D got the unfiltered
+    // venue back with no indication the filter was still on. The 'dimmed' state
+    // already exists for held-back inventory and is exactly this treatment.
+    if (this.priceBandKeys != null && !this.priceBandKeys.has(seat.categoryKey)) return 'dimmed';
+    if (this.limitedViewFilter && (seat.commercial?.restrictedView || seat.commercial?.obstructedView)) {
+      return 'dimmed';
+    }
+    return 'available';
   }
 
   /** Push the full live availability snapshot into the 3D handle (selection is
    *  preserved inside the module). Cheap enough per status delta. */
   private pushAvailabilityTo3d(): void {
     if (!this.view3dHandle) return;
-    const updates = this.allSeats().map((s) => ({ seatId: s.id, state: this.seatState3dFor(s.id) }));
+    const updates = this.allSeats().map((s) => ({ seatId: s.id, state: this.seatState3dFor(s) }));
     this.view3dHandle.setAvailability(updates);
   }
 
@@ -4687,11 +4707,19 @@ export class SeatPicker {
     // An empty zone has nothing to frame and `focusZone` refuses it — offering
     // a pill that cannot move the camera is worse than offering nothing.
     const zones = handle.zones().filter((z) => z.seatCount > 0);
+    // Zones are optional; sections are not. A chart that authors no zones (or
+    // one) still needs a way to move around the venue, so the rail falls back to
+    // the rung below. Capped, because a 51-section arena is a list, not a rail —
+    // past that the buyer is better served by the 2D map's section navigation.
+    const sections = zones.length > 1
+      ? []
+      : handle.sections().filter((s) => s.seatCount > 0).slice(0, MAX_3D_SECTION_PILLS);
     // One of anything is not a choice — a single-floor, single-zone venue gets
     // no rail rather than a rail that does nothing.
     const wantFloors = floors.length > 1;
     const wantZones = zones.length > 1;
-    if (!wantFloors && !wantZones) return;
+    const wantSections = sections.length > 1;
+    if (!wantFloors && !wantZones && !wantSections) return;
 
     const nav = document.createElement('div');
     nav.className = 'sl-view3d-nav';
@@ -4722,15 +4750,18 @@ export class SeatPicker {
       nav.appendChild(row);
     }
 
-    if (wantZones) {
+    if (wantZones || wantSections) {
       const row = document.createElement('div');
       row.setAttribute('role', 'group');
       row.setAttribute('aria-label', this.tf('picker.areas', 'Areas'));
-      for (const z of zones) {
+      const entries: Array<{ id: string; label: string; go: () => void }> = wantZones
+        ? zones.map((z) => ({ id: z.id, label: z.label || z.id, go: () => { handle.focusZone(z.id); } }))
+        : sections.map((s) => ({ id: s.id, label: s.label || s.id, go: () => { handle.focusSection(s.id); } }));
+      for (const e of entries) {
         const b = document.createElement('button');
         b.type = 'button';
-        b.textContent = z.label || z.id;
-        b.addEventListener('click', () => handle.focusZone(z.id));
+        b.textContent = e.label;
+        b.addEventListener('click', e.go);
         row.appendChild(b);
       }
       nav.appendChild(row);

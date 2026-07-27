@@ -28,7 +28,7 @@
 
 import type { Point } from '../core/types';
 
-export type LabelKind = 'zone' | 'section' | 'annotation' | 'booth';
+export type LabelKind = 'zone' | 'section' | 'ga' | 'annotation' | 'booth' | 'row' | 'seat';
 
 export interface SceneLabel {
   id: string;
@@ -54,6 +54,14 @@ export interface SceneLabel {
 const ZONE_MIN_DISTANCE = 1.15;
 const SECTION_MAX_DISTANCE = 2.2;
 const NEAR_MAX_DISTANCE = 0.85;
+/**
+ * Row and seat identity are the last two rungs, mirroring 2D's melt: a buyer
+ * this close has stopped choosing a part of the venue and started choosing a
+ * place to sit. Seats come in last of all — a seat number is unreadable and
+ * useless until you are close enough that one row fills much of the screen.
+ */
+const ROW_MAX_DISTANCE = 0.5;
+const SEAT_MAX_DISTANCE = 0.26;
 
 /** Which label kinds should show at this camera distance. */
 export function visibleLabelKinds(distance: number, venueRadius: number): Set<LabelKind> {
@@ -61,8 +69,12 @@ export function visibleLabelKinds(distance: number, venueRadius: number): Set<La
   const d = distance / r;
   const out = new Set<LabelKind>();
   if (d >= ZONE_MIN_DISTANCE) out.add('zone');
-  if (d <= SECTION_MAX_DISTANCE) out.add('section');
+  // A GA area is named at the same rung as a section because that is what it is
+  // — a sellable part of the venue the buyer picks before picking a place in it.
+  if (d <= SECTION_MAX_DISTANCE) { out.add('section'); out.add('ga'); }
   if (d <= NEAR_MAX_DISTANCE) { out.add('annotation'); out.add('booth'); }
+  if (d <= ROW_MAX_DISTANCE) out.add('row');
+  if (d <= SEAT_MAX_DISTANCE) out.add('seat');
   return out;
 }
 

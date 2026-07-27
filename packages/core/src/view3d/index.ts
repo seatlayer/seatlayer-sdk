@@ -18,7 +18,7 @@ import { OrbitCamera } from './camera/orbit';
 import { RenderLoop, type RenderLoopStats } from './loop';
 import { computeSeatLod } from './lod';
 import { SEAT_DOT_RADIUS_M } from './scene/seatInstances';
-import { buildSceneModel, type SceneModel, type SceneZone, type SceneFloor } from './scene/sceneModel';
+import { buildSceneModel, type SceneModel, type SceneZone, type SceneSection, type SceneFloor } from './scene/sceneModel';
 import { LabelOverlay } from './labelOverlay';
 import { buildGpuScene, type GpuScene } from './scene/build';
 import { applySeatStates } from './scene/seatInstances';
@@ -95,6 +95,15 @@ export interface Venue3DHandle {
    * means the seats face the camera rather than presenting their backs.
    */
   focusZone(zoneId: string): boolean;
+  /** The venue's seated sections (id, name, seat count) in authored order. */
+  sections(): SceneSection[];
+  /**
+   * Frame a section — the middle rung of the venue ladder, and the one every
+   * chart has. Zones are optional and a chart may author none or one; sections
+   * are what a buyer picks between when "which part of the venue" has already
+   * been answered. Returns false for an unknown or empty section.
+   */
+  focusSection(sectionId: string): boolean;
   /** The venue's floors (id, name, seat count) in authored order. */
   floors(): SceneFloor[];
   /**
@@ -540,6 +549,25 @@ export function mountVenue3D(
       // cropped, and a buyer needs the neighbouring geometry to know where in the
       // venue they have landed.
       orbit.frame({ center: zone.center, radius: zone.radius * 1.25 }, false, azimuth);
+      loop.requestRender();
+      return true;
+    },
+    sections(): SceneSection[] {
+      return model.sections;
+    },
+    focusSection(sectionId: string): boolean {
+      const sec = model.sections.find((s) => s.id === sectionId);
+      if (!sec || sec.seatCount === 0) return false;
+      cinematic.cancel();
+      // Approached from the side it faces, like a zone — a section framed from
+      // behind shows the buyer the backs of the seats they are considering.
+      const dx = sec.focalWorld[0] - sec.center[0];
+      const dz = sec.focalWorld[2] - sec.center[2];
+      const azimuth = Math.hypot(dx, dz) > sec.radius * 0.12 ? Math.atan2(dx, dz) : undefined;
+      // Tighter padding than a zone's: a section IS the thing being looked at,
+      // so it should fill more of the frame, but still with enough around it to
+      // place it in the venue.
+      orbit.frame({ center: sec.center, radius: sec.radius * 1.45 }, false, azimuth);
       loop.requestRender();
       return true;
     },
