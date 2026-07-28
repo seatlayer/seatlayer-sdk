@@ -45,6 +45,7 @@ import type {
 } from '../core/types';
 import { accessibilityRingColor } from '../core/types';
 import { chartBounds, expandChart, floorsOf, pointInPolygonWithHoles, polygonLabelPoint, stackFloors } from '../core/layout';
+import { distanceToRings, polygonNetArea } from '../core/polygonAnchor';
 import { buyerBackgroundImage } from '../core/chartBackgrounds';
 import { venueIconPath, VENUE_ICON_VIEWBOX, VENUE_ICON_STROKE } from '../core/icons';
 import { sectionGeometry } from '../core/sections';
@@ -151,7 +152,17 @@ const CAMERA_GLIDE_MS = 650;
  *  states (normal / nearly-gone / sold-out / closed) — never a continuous
  *  price-or-demand heatmap ramp. See overviewStateFill / SectionAvailabilityState. */
 const BLOCK_FILL_ALPHA = 1;
-const SECTION_STROKE_PX = 2;
+/**
+ * Section outlines are drawn TWICE — the colour-tinted outline underneath and
+ * the neutral overview shell on top — so the border an author sees is the sum
+ * of both. At 2px each that reads as a heavy double rule, and on a traced plan
+ * whose sections now abut along a deliberate 2px gutter it swallows the gutter
+ * entirely: neighbours look welded together rather than separated.
+ *
+ * One screen pixel per stroke keeps the boundary crisp at every zoom without
+ * competing with the gap itself for the author's attention.
+ */
+const SECTION_STROKE_PX = 1;
 const LIGHT_OVERVIEW_SECTION_FILL = '#e5e7eb';
 const LIGHT_OVERVIEW_SECTION_STROKE = '#c7cbd1';
 const LIGHT_OVERVIEW_SECTION_INK = '#595f69';
@@ -165,6 +176,8 @@ const DARK_OVERVIEW_FOCAL_STROKE = '#64748b';
 /** Screen-space target sizes (px) for scale-compensated section/zone labels. */
 const SECTION_LABEL_PX = 20;
 const MIN_SECTION_LABEL_PX = 12;
+/** Successive shrinks tried on a colliding section name before it is hidden. */
+const SECTION_LABEL_SHRINK_STEPS = [0.85, 0.72, 0.62] as const;
 const ZONE_LABEL_PX = 18;
 const ZONE_SUB_PX = 12;
 const HIERARCHY_PILL_BACKGROUND = '#111827';
@@ -425,10 +438,18 @@ function rotatedRectFitsPolygon(
   return true;
 }
 
-/** Centre-first interior anchors used when a hole/concavity occupies the shell centre. */
+/**
+ * Interior anchors to try when fitting a section name, fattest first.
+ *
+ * `preferred` is the polygon's pole of inaccessibility, so it leads. The grid
+ * fallbacks used to be ordered by distance to the bounding-box centre, which on
+ * a concave shell ranks points by where the *box* middle is rather than by how
+ * much room they have — the fitter then walked down font sizes at cramped
+ * anchors before reaching a roomy one. Ordering by clearance from every ring
+ * means the first anchor tried is always the one most likely to hold the label.
+ */
 function polygonLabelCandidates(outer: Point[], holes: Point[][], preferred: Point): Point[] {
   const bounds = polyBounds(outer);
-  const centre = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
   const points: Point[] = [preferred];
   for (let row = 1; row < 12; row += 1) {
     for (let column = 1; column < 12; column += 1) {
@@ -439,9 +460,11 @@ function polygonLabelCandidates(outer: Point[], holes: Point[][], preferred: Poi
       if (pointInPolygonWithHoles(point, outer, holes)) points.push(point);
     }
   }
+  const rings = [outer, ...holes];
   return points
-    .sort((left, right) => Math.hypot(left.x - centre.x, left.y - centre.y)
-      - Math.hypot(right.x - centre.x, right.y - centre.y))
+    .map((point) => ({ point, room: distanceToRings(point, rings) }))
+    .sort((left, right) => right.room - left.room)
+    .map((entry) => entry.point)
     .filter((point, index, all) => index === all.findIndex((other) => (
       Math.abs(other.x - point.x) < 1e-6 && Math.abs(other.y - point.y) < 1e-6
     )));
@@ -627,8 +650,10 @@ interface SectionRender {
   outlinePath?: SectionOutlinePath;
   holes: Point[][];
   centroid: Point;
-  /** Deterministic centre-first alternatives for concave/holed label fitting. */
+  /** Deterministic roomiest-first alternatives for concave/holed label fitting. */
   labelAnchors: Point[];
+  /** Net shell area — the de-collision tiebreak, so big stands keep their name. */
+  labelArea: number;
   zone?: string;
   /** Seats whose centre falls inside the outline (first-match, doc order). */
   memberIds: string[];
@@ -3787,7 +3812,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const outlineTint = obj.color ?? this.zoneColor.get(obj.zone ?? '') ?? '#3a4358';
     const outlinePoly = polygonWithHolesShape(obj.outline, obj.holes, {
       stroke: rgba(outlineTint, 0.5),
-      strokeWidth: 1.75,
+      strokeWidth: 1,
       fill: rgba(outlineTint, 0.08),
       listening: false,
     }, obj.outlinePath);
@@ -3851,6 +3876,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       holes: obj.holes ?? [],
       centroid,
       labelAnchors: polygonLabelCandidates(obj.outline, obj.holes ?? [], centroid),
+      labelArea: polygonNetArea(obj.outline, obj.holes),
       zone: obj.zone,
       memberIds,
       total: memberIds.length,
@@ -4175,12 +4201,20 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   }
 
   /**
-   * Keep transitional zone pills from covering section names. Section names
-   * are already proven inside disjoint shells, so they must not cull each other.
+   * Keep transitional zone pills from covering section names, and keep section
+   * names off each other.
+   *
+   * This used to assume section labels "do not collide by construction",
+   * because each is proven to fit inside its own shell. That holds only while
+   * shells are disjoint. Hand-traced and imported plans routinely produce
+   * shells that touch or overlap slightly along a shared edge, and a label
+   * fitted into one can then land under its neighbour's — which is exactly the
+   * unreadable smear a 36-section arena showed. Section labels now block each
+   * other too, largest shell first so the big stands keep their names.
    */
   private decollideRungLabels(sx: number): void {
     const GAP = 4;
-    interface Cand { node: Text; tier: number; section: boolean; box: { x: number; y: number; w: number; h: number } }
+    interface Cand { node: Text; tier: number; section: boolean; area?: number; box: { x: number; y: number; w: number; h: number } }
     const cands: Cand[] = [];
     const boxOf = (t: Text): { x: number; y: number; w: number; h: number } => {
       const p = this.worldToScreen({ x: t.x(), y: t.y() });
@@ -4203,24 +4237,56 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       }
     }
     for (const sec of this.sections) {
-      if (sec.nameLabel.opacity() > 0.05) cands.push({ node: sec.nameLabel, tier: 1, section: true, box: boxOf(sec.nameLabel) });
+      if (sec.nameLabel.opacity() > 0.05) {
+        cands.push({ node: sec.nameLabel, tier: 1, section: true, area: sec.labelArea, box: boxOf(sec.nameLabel) });
+      }
     }
     if (cands.length < 2) return;
-    cands.sort((a, b) => a.tier - b.tier || a.box.y - b.box.y || a.box.x - b.box.x);
+    // Zone pills first (they are the coarser tier), then sections by shell size
+    // so a slice never takes the slot from the stand beside it.
+    cands.sort((a, b) => a.tier - b.tier
+      || (b.area ?? 0) - (a.area ?? 0)
+      || a.box.y - b.box.y || a.box.x - b.box.x);
     const kept: Cand['box'][] = [];
     const collides = (b: Cand['box']): boolean =>
       kept.some((k) =>
         b.x < k.x + k.w + GAP && k.x < b.x + b.w + GAP &&
         b.y < k.y + k.h + GAP && k.y < b.y + b.h + GAP,
       );
+    // Shrink before hiding — the rule the Designer's own culler already follows.
+    //
+    // Dropping a colliding pill outright is defensible on an authoring canvas,
+    // where the author knows what they drew. On the BUYER map it is not: a
+    // section with no name is one the buyer cannot match to the section printed
+    // on their ticket, and on a traced arena that was most of the bowl at
+    // overview zoom. A smaller readable name beats a missing one.
+    //
+    // The floor is the same legibility floor the fitter uses, so nothing shrinks
+    // into unreadability; anything still colliding at that size is genuinely out
+    // of room and is hidden as before, returning as zoom spreads the sections.
     for (const c of cands) {
-      if (collides(c.box)) {
-        c.node.opacity(0);
-      } else if (!c.section) {
-        // Section shells do not collide by construction; only zone pills form
-        // blockers for later transitional labels.
+      if (!collides(c.box)) {
         kept.push(c.box);
+        continue;
       }
+      let placed = false;
+      if (c.section) {
+        const fontSize = c.node.fontSize();
+        const y = c.node.y();
+        for (const factor of SECTION_LABEL_SHRINK_STEPS) {
+          const candidate = fontSize * factor;
+          if (candidate * sx < MIN_SECTION_LABEL_PX) break;
+          this.sizeLabel(c.node, candidate, y);
+          const box = boxOf(c.node);
+          if (!collides(box)) {
+            kept.push(box);
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) this.sizeLabel(c.node, fontSize, y);
+      }
+      if (!placed) c.node.opacity(0);
     }
   }
 
@@ -5070,7 +5136,20 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         visible,
         renderedFontPx,
         fill: typeof fill === 'string' ? fill : '',
-        ink: typeof ink === 'string' ? ink : (this.theme.seatLabelColor ?? DEF_SEAT_LABEL),
+        // When no label node exists (the seat is unlabelled at this zoom), fall
+        // back to the ink this seat WOULD be painted with — the same expression
+        // the seat-level evidence below uses — not to the raw theme default.
+        //
+        // The old fallback reported `DEF_SEAT_LABEL` (#0b1220) regardless of the
+        // seat's paint, so a held seat with no label read as dark ink on
+        // HELD_FILL (#6b7280) = 3.87:1 and a booked one as 1.82:1 against
+        // TAKEN_FILL. That is a contrast violation the renderer never commits:
+        // `seatLabelInk` runs every real label through `stateAwareBookableLabelInk`,
+        // which returns #ffffff for both of those fills. A catalog visual audit
+        // read this fallback as though it were painted and reported a
+        // bookable-state contrast failure on 46 of 50 templates that does not
+        // exist on screen.
+        ink: typeof ink === 'string' ? ink : (shape ? this.seatLabelInk(seat, shape) : this.seatPreferredLabelInk(seat)),
         opacity: rounded(opacity),
         ...(accessGlyph ? {
           accessibilityMarker: {

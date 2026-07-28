@@ -16,7 +16,8 @@ import type { ChartDoc, ExpandedSeat } from '../core/types';
 import { GLContext } from './gl/context';
 import { OrbitCamera } from './camera/orbit';
 import { RenderLoop, type RenderLoopStats } from './loop';
-import { computeSeatLod } from './lod';
+import { computeSeatLod, CHAIR_GATHER_M, CHAIR_MAX_INSTANCES, CHAIR_REBUILD_M } from './lod';
+import { NearFieldIndex } from './scene/nearField';
 import { SEAT_DOT_RADIUS_M } from './scene/seatInstances';
 import { buildSceneModel, type SceneModel, type SceneZone, type SceneSection, type SceneFloor } from './scene/sceneModel';
 import { LabelOverlay } from './labelOverlay';
@@ -175,6 +176,45 @@ export function mountVenue3D(
     // rather than silently reverting the buyer to the whole venue.
     gpu.seatProgram.uniforms.uFocusFloor.value = focusedFloor;
     gpu.solidProgram.uniforms.uFocusFloor.value = focusedFloor;
+    gpu.chairProgram.uniforms.uFocusFloor.value = focusedFloor;
+    // A rebuilt scene has an empty chair set; force the next frame to re-gather
+    // instead of trusting the last camera position.
+    lastGatherX = Infinity;
+  };
+
+  // --- near field ------------------------------------------------------------
+  // The spatial index is constructed here but its grid is built lazily, on the
+  // first gather — a session that never leaves the overview never pays for it.
+  const nearIndex = new NearFieldIndex(model.seats.iPosition, model.seats.count);
+  const nearBuf = new Int32Array(CHAIR_MAX_INSTANCES);
+  let lastGatherX = Infinity;
+  let lastGatherZ = Infinity;
+
+  /**
+   * Re-gather the near set when the camera has moved far enough to invalidate
+   * it — not every frame.
+   *
+   * The cheap early-out is the venue bound: if the camera is further from the
+   * whole seat cloud than the gather radius, nothing can qualify and the grid is
+   * never even touched. That is the state the overview, the intro ease and every
+   * frame of a wide orbit are in, so the common case costs one distance test.
+   */
+  const updateNearField = (): void => {
+    if (!gpu) return;
+    const cam = orbit.camera.position;
+    const moved = Math.hypot(cam.x - lastGatherX, cam.z - lastGatherZ);
+    if (moved < CHAIR_REBUILD_M) return;
+    lastGatherX = cam.x;
+    lastGatherZ = cam.z;
+    const outside = Math.hypot(cam.x - model.bounds.center[0], cam.z - model.bounds.center[2])
+      - model.bounds.radius;
+    if (outside > CHAIR_GATHER_M) {
+      if (gpu.nearSeatCount()) gpu.setNearSeats(nearBuf, 0);
+      return;
+    }
+    const n = nearIndex.gather(cam.x, cam.z, CHAIR_GATHER_M, nearBuf);
+    if (n === 0 && gpu.nearSeatCount() === 0) return;
+    gpu.setNearSeats(nearBuf, n);
   };
 
   const glctx = new GLContext(container, {
@@ -235,7 +275,13 @@ export function mountVenue3D(
     const u = gpu.seatProgram.uniforms;
     u.uSeatScale.value = lod.scale;
     u.uSeatFade.value = lod.fade;
+    // Relax the dot's pixel floor as the venue recedes — see SeatLod.minPixels
+    // for why holding 2.5 px all the way out is what welds distant rows into one
+    // mass. The pick pass syncs this same value, so the hit mask never drifts
+    // off the drawn dot.
+    u.uMinPixels.value = lod.minPixels;
     u.uPixelToWorld.value = (2 * Math.tan((orbit.camera.fov * DEG) / 2)) / Math.max(1, glctx.pixelHeight);
+    updateNearField();
 
     glctx.renderer.render({ scene: gpu.background, clear: true });
     glctx.renderer.render({ scene: gpu.main, camera: orbit.camera, clear: false });
@@ -247,6 +293,9 @@ export function mountVenue3D(
       glctx.canvas.clientHeight || 1,
       orbit.currentDistance,
       model.bounds.radius,
+      // The dense label rungs rank by real distance from the eye, not by the
+      // orbit radius — at the arrival pose those are wildly different numbers.
+      [orbit.camera.position.x, orbit.camera.position.y, orbit.camera.position.z],
     );
     return moving;
   });
@@ -521,6 +570,7 @@ export function mountVenue3D(
       if (gpu) {
         gpu.seatProgram.uniforms.uFocusFloor.value = value;
         gpu.solidProgram.uniforms.uFocusFloor.value = value;
+        gpu.chairProgram.uniforms.uFocusFloor.value = value;
       }
       focusedFloor = value;
       if (index !== null) {

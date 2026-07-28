@@ -32,6 +32,7 @@ import { resolveSection, distanceToPolyline, type ResolvedRow } from '../../core
 import { CHART_UNITS_PER_METRE, METRES_PER_CHART_UNIT, SEATED_EYE_HEIGHT_M, sectionGeometry } from '../../core/units';
 import { outsetRing } from './geometry';
 import { SEAT_DOT_RADIUS_M } from './seatInstances';
+import { MIN_REACH_U, seatClusterPatch } from './deckBands';
 
 /** Top of the thin slab drawn for a section with no authored height/rake. Seats
  * on a flat chart rest on this, so it is part of the surface definition rather
@@ -122,7 +123,16 @@ export interface SectionSurface {
    * Empty for a flat section, and for a section with fewer than two rows (which
    * keeps the old smooth-cone path, since there is no row structure to build on).
    */
-  readonly rowLevels: readonly { readonly pts: readonly Point[]; readonly y: number; readonly depth: number; readonly blockId: number }[];
+  readonly rowLevels: readonly {
+    readonly pts: readonly Point[];
+    readonly y: number;
+    readonly depth: number;
+    readonly blockId: number;
+    /** Deck footprint for an entry that is a TABLE rather than a row — see
+     * `BandRow.patch` in deckBands.ts for why a ring of seats cannot be decked
+     * by offsetting a polyline. */
+    readonly patch?: readonly Point[];
+  }[];
   /** The landing height for the parts of the outline that hold no rows. */
   readonly landingY: number;
 }
@@ -167,6 +177,16 @@ function bboxOf(pts: Point[]): Bbox {
   return { minX, minY, maxX, maxY };
 }
 
+/** Even-odd point-in-ring test, for the closed table patches above. */
+function pointInRing(ring: readonly Point[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i], b = ring[j];
+    if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
 /** Hard ceiling on rake rise so a mis-authored or focal-wrapping section can
  * never produce a runaway spike (defect guard, carried over from buildTier). */
 const MAX_TIER_RISE_M = 25;
@@ -207,8 +227,20 @@ export function buildVenueSurfaces(units: SurfaceUnit[], seats: ExpandedSeat[]):
   }
   const acc = new Map<string, Acc>();
   const boxes: Array<{ id: string; box: Bbox; section: SectionObject; unit: SurfaceUnit; outline: Point[] }> = [];
+  /**
+   * Object ids that expand into a RING of seats rather than a run of them.
+   *
+   * `expandTable` stamps every chair with `rowId = table.id`, so the structure
+   * resolver — which only ever sees seats — groups a whole table into what it
+   * calls a row. Geometrically it is nothing of the kind, and the deck builder
+   * has to know the difference. Reading it off the authored objects is exact;
+   * inferring "these seats look like a ring" from the points would be a second
+   * opinion about a fact the chart already states.
+   */
+  const tableRowIds = new Set<string>();
   for (const unit of units) {
     for (const o of unit.objects) {
+      if (o.type === 'table') tableRowIds.add(o.id);
       if (o.type !== 'section' || !o.outline || o.outline.length < 3) continue;
       // Ownership is tested against the PADDED outline — the same ring the deck
       // is actually drawn with (see `buildTier`'s `outsetRing`). Testing the raw
@@ -287,8 +319,24 @@ export function buildVenueSurfaces(units: SurfaceUnit[], seats: ExpandedSeat[]):
         }
       }
     }
-    const flatTop = bottomY + FLAT_SLAB_TOP_M;
     const baseFloor = bottomY + FLAT_SLAB_TOP_M;
+    // A level deck sits at the section's AUTHORED height, not on the floor.
+    //
+    // This used to be `bottomY + FLAT_SLAB_TOP_M` outright, which meant asking
+    // for `surfaceKind: 'flat'` silently threw the authored `height` away: a
+    // 7.4 m loge box and a 2.6 m choir terrace both rendered with every seat at
+    // 0.20 m (slab top plus seat clearance). It made `flat` unusable for the
+    // exact things it exists for — boxes, suites and terraces, which are genuinely
+    // LEVEL platforms — so both curated venues had to fake a shallow rake instead.
+    //
+    // The datum is now taken from the same expression the raked path uses
+    // (`levelFor`/`levelForBlockDepth` below, at zero rise), so "flat" and
+    // "raked at 0°" agree by construction rather than by coincidence. A section
+    // with no authored height still lands on `baseFloor` exactly as before, which
+    // is why legacy height-less charts do not move: `inferredFlat` only fires when
+    // `geo.height <= bottomY + 0.001`, so this max can only bite when a height was
+    // explicitly authored alongside `surfaceKind: 'flat'`.
+    const flatTop = Math.max(baseFloor, geo.height);
 
     /** Height for a depth ordinate measured from the venue focal (fallback path). */
     const levelFor = (depthU: number): number => {
@@ -311,6 +359,13 @@ export function buildVenueSurfaces(units: SurfaceUnit[], seats: ExpandedSeat[]):
     // (which is what `rake.depthAt` does, and what this used to do) raised a
     // bowl's side wedges as though they were further back: sec-gall's six blocks
     // are one tier authored at 6.20 m and started at 6.35 to 10.65 m.
+    // A table's deck is its own footprint, grown past its outermost seat by the
+    // same clearance a ribbon carries past its end seat (MIN_REACH_U). The
+    // radius is taken from where the seats ACTUALLY are, not from the table's
+    // authored `radius`: `expandTable` seats a round table at `radius + 16`
+    // chart units, and per-chair `dx/dy` overrides move individual seats again,
+    // so the authored radius understates the ring it has to cover. On the
+    // nightclub that is 50 u of real reach against an authored 34.
     const rowLevels = flat
       ? []
       : structure.rows.map((r) => ({
@@ -318,19 +373,26 @@ export function buildVenueSurfaces(units: SurfaceUnit[], seats: ExpandedSeat[]):
         y: levelForBlockDepth(r.blockDepth),
         depth: r.blockDepth,
         blockId: r.blockId,
+        ...(tableRowIds.has(r.id)
+          ? { patch: seatClusterPatch(r.pts, MIN_REACH_U) }
+          : {}),
       }));
     const landingY = rowLevels.length ? rowLevels[0].y : flatTop;
 
     // Bounding circles over the rows, so the nearest-row lookup below prunes
     // instead of walking every polyline in the section. A 50k venue has sections
     // with thousands of rows and this is called per cap sample.
+    // Bounded over the entry's DRAWN extent — the patch when it has one, since
+    // that is the ground it actually covers and a bound taken from the seat ring
+    // alone would prune away the deck at the patch's rim.
     const rowBounds = rowLevels.map((r) => {
+      const ext = r.patch && r.patch.length >= 3 ? r.patch : r.pts;
       let cx = 0, cy = 0;
-      for (const p of r.pts) { cx += p.x; cy += p.y; }
-      const n = r.pts.length || 1;
+      for (const p of ext) { cx += p.x; cy += p.y; }
+      const n = ext.length || 1;
       cx /= n; cy /= n;
       let rad = 0;
-      for (const p of r.pts) {
+      for (const p of ext) {
         const d = Math.hypot(p.x - cx, p.y - cy);
         if (d > rad) rad = d;
       }
@@ -349,7 +411,15 @@ export function buildVenueSurfaces(units: SurfaceUnit[], seats: ExpandedSeat[]):
             const b = rowBounds[i];
             // Admissible lower bound — cannot discard a row that would have won.
             if (Math.hypot(x - b.cx, y - b.cy) - b.rad >= best) continue;
-            const d = distanceToPolyline(rowLevels[i].pts, x, y);
+            // Over a table, the deck is the table's patch — and a point inside
+            // the patch is ON it, at distance zero. Measuring to the seat ring's
+            // polyline instead would hand the middle of a table to whichever
+            // ROW happened to be nearest, so the deck height and the drawn patch
+            // would disagree by a whole step.
+            const patch = rowLevels[i].patch;
+            const d = patch && patch.length >= 3
+              ? (pointInRing(patch, x, y) ? 0 : distanceToPolyline(patch, x, y))
+              : distanceToPolyline(rowLevels[i].pts, x, y);
             if (d < best) { best = d; bestY = rowLevels[i].y; }
           }
           return bestY;

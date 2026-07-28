@@ -20,6 +20,7 @@ import {
 } from './geometry';
 import polygonClipping from 'polygon-clipping';
 import { buildSeatInstances, SEAT_DOT_RADIUS_M, type SeatInstanceData } from './seatInstances';
+import { computeSeatYaw } from './seatChair';
 import { buildVenueSurfaces, CAP_MAX_ERROR_M, type SectionSurface } from './surface';
 import { emitDeckBands, deckFootprints, rowNeighbourhoods } from './deckBands';
 
@@ -382,7 +383,10 @@ function buildTier(
   // artifact visible on the flat chart. Depth-biasing them apart would hide it
   // rather than fix it, and would break down as soon as a chart has many
   // sections. Removing the overlap means there is nothing to fight over.
-  for (const ring of claimed.subtract(outline)) {
+  // A flat section's deck is one constant height, so it can be tested for
+  // coplanarity; a raked fallback surface has no single height to offer.
+  const level = surface.flat ? surface.landingY : undefined;
+  for (const ring of claimed.subtract(outline, level)) {
     extrudePrism(builder, ring, section.holes, topY, bottomY, colTop, S.tierWall, AO, maxErr, topN);
   }
 }
@@ -392,19 +396,40 @@ function buildTier(
  * clipped to what is left. Only meaningful between COPLANAR surfaces, which is
  * why raked sections (each at its own height) never reach this.
  */
+/** Two claims fight for the same ground only if both are level and level TOGETHER.
+ * A claim with no single height (an unresolved raked surface) is treated as
+ * comparable with everything, which is what it did before heights existed. */
+function coplanarLevels(a: number | undefined, b: number | undefined): boolean {
+  if (a === undefined || b === undefined) return true;
+  return Math.abs(a - b) < 1e-3;
+}
+
 class ClaimedArea {
   private rings: Array<[number, number][][]> = [];
   private boxes: RingBox[] = [];
+  /** Constant deck height of each claim, or undefined when it is not level. */
+  private levels: Array<number | undefined> = [];
 
-  /** `ring` minus everything claimed so far; then claim what is returned. */
-  subtract(ring: Point[]): Point[][] {
+  /**
+   * `ring` minus everything claimed so far AT THE SAME HEIGHT; then claim it.
+   *
+   * `level` is the claim's constant deck height when it has one. Two decks only
+   * z-fight when they are coplanar, so only a coplanar claim may take ground
+   * away — an elevated box hanging over a ground-level section overlaps it in
+   * plan and must still draw its whole floor, or the box loses the part of its
+   * deck that shares a footprint with whatever is underneath it. Passing
+   * undefined (a surface with no single height) keeps the original
+   * clip-against-everything behaviour.
+   */
+  subtract(ring: Point[], level?: number): Point[][] {
     const closed: [number, number][] = ring.map((p) => [p.x, p.y]);
     if (closed.length < 3) return [];
     closed.push(closed[0]);
     const box = bboxOfRing(ring);
     // Same prune as `paddedFootprint`: a claim that cannot overlap cannot remove
     // anything, and without this the boolean work is quadratic in section count.
-    const overlapping = this.rings.filter((_, i) => boxesOverlap(box, this.boxes[i]));
+    const overlapping = this.rings.filter((_, i) => boxesOverlap(box, this.boxes[i])
+      && coplanarLevels(level, this.levels[i]));
     let pieces: Array<[number, number][][]> = [[closed]];
     if (overlapping.length) {
       try {
@@ -416,6 +441,7 @@ class ClaimedArea {
     }
     this.rings.push([closed]);
     this.boxes.push(box);
+    this.levels.push(level);
     const out: Point[][] = [];
     for (const poly of pieces) {
       if (!poly.length) continue;
@@ -1007,6 +1033,20 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
       });
     }
   }
+
+  // --- Seat facing -----------------------------------------------------------
+  // Resolved here rather than in `buildSeatInstances` because it needs the thing
+  // only this layer knows: which floor a seat belongs to, and therefore what it
+  // looks at. Runs after the floors block above, which is what fills `seatFloor`.
+  seatData.iYaw = computeSeatYaw(
+    seatData.iPosition,
+    seats.length,
+    (i) => seats[i].rowId,
+    (i) => {
+      const f = units[seatFloor[i]]?.focal ?? focal;
+      return [f.x * M, f.y * M];
+    },
+  );
 
   const cx = ((fp.minX + fp.maxX) / 2) * M;
   const cz = ((fp.minY + fp.maxY) / 2) * M;

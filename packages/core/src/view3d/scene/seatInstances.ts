@@ -9,6 +9,7 @@ import { accessibilityRingColor, type ExpandedSeat } from '../../core/types';
 import { hexToRgb } from '../palette';
 import { SEATED_EYE_HEIGHT_M } from '../../core/units';
 import { M } from './geometry';
+import { chairHalfWidth } from './seatChair';
 import { seatStateIndex, type SeatState3D } from '../palette';
 import type { VenueSurfaces } from './surface';
 
@@ -63,6 +64,29 @@ export interface SeatInstanceData {
   iRing: Float32Array;
   /** float per instance: owning floor index, for per-floor isolation. */
   iFloor: Float32Array;
+  /**
+   * float per instance: facing yaw in radians, for the near-field chair mesh.
+   *
+   * A billboard dot has no front, so nothing here ever needed a direction. A
+   * chair does, and getting it wrong is worse than drawing nothing — a row of
+   * seats with their backs to the stage reads as a mistake immediately.
+   *
+   * Left at zero by this builder and filled by `sceneModel`, which is the layer
+   * that knows what each seat FACES (its floor's focal point). Direct callers
+   * and tests that build instances without a scene get zeros, which is a
+   * well-defined "facing +Z" rather than an undefined attribute.
+   */
+  iYaw: Float32Array;
+  /**
+   * float per instance: half-width of this seat's near-field CHAIR, world metres.
+   *
+   * Deliberately not `iMaxRadius`. That value is the dot's ceiling — conservative
+   * by design so round dots stay visually apart, and clamped to
+   * SEAT_DOT_RADIUS_M on top of that. Sizing a chair from it gave 0.34 m chairs
+   * under 0.95 m backs: an aspect ratio near 3:1, which reads as a headstone.
+   * Real seats very nearly touch. See `chairHalfWidth`.
+   */
+  iChairWidth: Float32Array;
   /** seatId → instance index (drives targeted availability updates). */
   idToIndex: Map<string, number>;
 }
@@ -158,6 +182,7 @@ export function buildSeatInstances(
   const iPosition = new Float32Array(count * 3);
   const iState = new Float32Array(count);
   const iMaxRadius = new Float32Array(count);
+  const iChairWidth = new Float32Array(count);
   const iRing = new Float32Array(count * 3);
   const idToIndex = new Map<string, number>();
   const spacing = nearestNeighbourSpacing(seats);
@@ -178,6 +203,8 @@ export function buildSeatInstances(
     iMaxRadius[i] = Number.isFinite(pitchM)
       ? Math.max(0.06, Math.min(SEAT_DOT_RADIUS_M, pitchM * SEAT_PITCH_FRACTION))
       : SEAT_DOT_RADIUS_M;
+    // The chair reads the SAME pitch but through its own rule — see iChairWidth.
+    iChairWidth[i] = chairHalfWidth(Number.isFinite(pitchM) ? pitchM : undefined);
     iPosition[i * 3] = seat.x * M;
     // The venue surface wins when present: it is the same function the tier cap
     // is built from, which is what guarantees a seat can never sit inside it.
@@ -194,8 +221,9 @@ export function buildSeatInstances(
     idToIndex.set(seat.id, i);
   }
   return {
-    count, iPosition, iState, iMaxRadius, iRing, idToIndex,
+    count, iPosition, iState, iMaxRadius, iRing, idToIndex, iChairWidth,
     iFloor: seatFloor ?? new Float32Array(count),
+    iYaw: new Float32Array(count),
   };
 }
 

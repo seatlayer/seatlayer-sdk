@@ -3,12 +3,18 @@
  * the model so a context-loss restore can throw the old GpuScene away and call
  * `buildGpuScene(gl, model)` again — the model never changes.
  *
- * Draw calls: background (1) + merged solids (1) + instanced seats (1) = 3.
+ * Draw calls: background (1) + merged solids (1) + instanced seats (1) = 3, plus
+ * ONE more instanced draw for the near-field chairs whenever the camera is close
+ * enough that any seat qualifies. That mesh is attached and detached from the
+ * scene graph rather than drawn empty, so an overview frame still costs exactly
+ * the three calls it always did.
  */
 
 import { Geometry, Mesh, Program, Transform, type OGLRenderingContext } from 'ogl';
 import { SEAT_STATES, type RGB } from '../palette';
-import { createBackgroundProgram, createSeatProgram, createSolidProgram } from './materials';
+import { createBackgroundProgram, createChairProgram, createSeatProgram, createSolidProgram } from './materials';
+import { CHAIR_MAX_INSTANCES } from '../lod';
+import { buildChairMesh } from './seatChair';
 import type { SceneModel } from './sceneModel';
 import type { DirtyRun } from './seatInstances';
 
@@ -39,6 +45,8 @@ export interface GpuScene {
   background: Transform;
   seatProgram: Program;
   solidProgram: Program;
+  /** Near-field chair program (shares uFocusFloor / fade-band uniforms). */
+  chairProgram: Program;
   /** Shared instanced seat geometry (reused by the pick pass — no buffer copy). */
   seatGeometry: Geometry;
   /** Merged solid geometry (reused as the pick occluder). */
@@ -46,6 +54,16 @@ export interface GpuScene {
   drawCalls: number;
   /** Upload only the changed instance-state ranges (never the whole buffer). */
   uploadSeatStateRuns(runs: DirtyRun[]): void;
+  /**
+   * Hand the chair mesh the seat indices the near-field gather selected.
+   *
+   * `indices[0…count)` are instance indices into the seat cloud — the SAME
+   * indices the dots and the pick pass use, which is what guarantees a chair and
+   * its dot are always the same seat. Passing count 0 detaches the mesh.
+   */
+  setNearSeats(indices: Int32Array, count: number): void;
+  /** How many chairs are currently instanced (0 = the near field is off). */
+  nearSeatCount(): number;
   dispose(): void;
 }
 
@@ -98,16 +116,106 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
 
   const colorAttr = seatGeo.attributes.iColor;
 
-  return {
+  // --- Near-field chairs (one extra instanced draw, only when in range) ------
+  // Fixed-capacity instance buffers: the near set is bounded by
+  // CHAIR_MAX_INSTANCES whatever the venue holds, so these are allocated once at
+  // ~200 KB total and only ever refilled — never grown, never reallocated per
+  // frame. `instancedCount` is what varies.
+  const chairBase = buildChairMesh();
+  const chairProg = createChairProgram(gl);
+  const CAP = CHAIR_MAX_INSTANCES;
+  const cOffset = new Float32Array(CAP * 3);
+  const cColor = new Float32Array(CAP * 3);
+  const cRadius = new Float32Array(CAP);
+  const cYaw = new Float32Array(CAP);
+  const cRing = new Float32Array(CAP * 3);
+  const cFloor = new Float32Array(CAP);
+  const chairGeo = new Geometry(gl, {
+    position: { size: 3, data: chairBase.position },
+    normal: { size: 3, data: chairBase.normal },
+    part: { size: 1, data: chairBase.part },
+    index: { data: chairBase.index },
+    iOffset: { size: 3, data: cOffset, instanced: 1 },
+    iColor: { size: 3, data: cColor, instanced: 1 },
+    iRadius: { size: 1, data: cRadius, instanced: 1 },
+    iYaw: { size: 1, data: cYaw, instanced: 1 },
+    iRing: { size: 3, data: cRing, instanced: 1 },
+    iFloor: { size: 1, data: cFloor, instanced: 1 },
+  });
+  const chairMesh = new Mesh(gl, { geometry: chairGeo, program: chairProg });
+  chairMesh.frustumCulled = false;
+  let nearCount = 0;
+  /** The gathered set, kept so a state change can recolour it without a re-gather. */
+  let nearIndices: Int32Array = new Int32Array(0);
+
+  const writeChairColors = (): void => {
+    const src = model.seats;
+    for (let k = 0; k < nearCount; k++) {
+      const i = nearIndices[k];
+      const c = stateColors[src.iState[i]] ?? stateColors[0];
+      cColor[k * 3] = c[0];
+      cColor[k * 3 + 1] = c[1];
+      cColor[k * 3 + 2] = c[2];
+    }
+    chairGeo.attributes.iColor.needsUpdate = true;
+  };
+
+  const scene: GpuScene = {
     main,
     background,
     seatProgram: seatProg,
     solidProgram: solidProg,
+    chairProgram: chairProg,
     seatGeometry: seatGeo,
     solidGeometry: solidGeo,
     drawCalls: 3,
+    setNearSeats(indices: Int32Array, count: number): void {
+      const n = Math.min(count, CAP);
+      nearIndices = indices;
+      nearCount = n;
+      if (n === 0) {
+        // Detached rather than drawn with instancedCount 0: an overview frame
+        // must cost the same three draw calls it did before the near field
+        // existed, and a zero-instance draw is still a state change + a call.
+        if (chairMesh.parent) chairMesh.setParent(null);
+        chairGeo.instancedCount = 0;
+        scene.drawCalls = 3;
+        return;
+      }
+      const src = model.seats;
+      for (let k = 0; k < n; k++) {
+        const i = indices[k];
+        cOffset[k * 3] = src.iPosition[i * 3];
+        cOffset[k * 3 + 1] = src.iPosition[i * 3 + 1];
+        cOffset[k * 3 + 2] = src.iPosition[i * 3 + 2];
+        // The chair's OWN pitch rule, not the dot's ceiling — see iChairWidth.
+        cRadius[k] = src.iChairWidth[i];
+        cYaw[k] = src.iYaw[i];
+        cRing[k * 3] = src.iRing[i * 3];
+        cRing[k * 3 + 1] = src.iRing[i * 3 + 1];
+        cRing[k * 3 + 2] = src.iRing[i * 3 + 2];
+        cFloor[k] = src.iFloor[i];
+      }
+      writeChairColors();
+      chairGeo.attributes.iOffset.needsUpdate = true;
+      chairGeo.attributes.iRadius.needsUpdate = true;
+      chairGeo.attributes.iYaw.needsUpdate = true;
+      chairGeo.attributes.iRing.needsUpdate = true;
+      chairGeo.attributes.iFloor.needsUpdate = true;
+      chairGeo.instancedCount = n;
+      if (!chairMesh.parent) chairMesh.setParent(main);
+      scene.drawCalls = 4;
+    },
+    nearSeatCount(): number {
+      return nearCount;
+    },
     uploadSeatStateRuns(runs: DirtyRun[]): void {
       if (!runs.length) return;
+      // A selection or availability change has to reach the chairs too, or a
+      // seat picked at close range stays available-green under the buyer. The
+      // gathered set is small and bounded, so it is simply rewritten rather than
+      // diffed against the runs.
+      if (nearCount) writeChairColors();
       // Refresh only the changed instance colours from the (already-mutated)
       // iState, then upload just those contiguous ranges — never the whole buffer.
       for (const run of runs) writeSeatColors(iColor, model.seats.iState, run.start, run.length, stateColors);
@@ -135,6 +243,9 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
       solidProg.remove();
       seatGeo.remove();
       seatProg.remove();
+      chairGeo.remove();
+      chairProg.remove();
     },
   };
+  return scene;
 }

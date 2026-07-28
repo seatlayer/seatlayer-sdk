@@ -47,6 +47,8 @@ const FILES = [
   // SDK from the exact same dependency closure as the app.
   ['src/core/chartBackgrounds.ts', 'packages/core/src/core/chartBackgrounds.ts'],
   ['src/core/spatialIndex.ts', 'packages/core/src/core/spatialIndex.ts'],
+  // Imported by layout and SeatmapRenderer for polygon label anchoring.
+  ['src/core/polygonAnchor.ts', 'packages/core/src/core/polygonAnchor.ts'],
   ['src/core/perspectiveProjection.ts', 'packages/core/src/core/perspectiveProjection.ts'],
   ['src/core/rake.ts', 'packages/core/src/core/rake.ts'],
   ['src/core/shapeLineStyle.ts', 'packages/core/src/core/shapeLineStyle.ts'],
@@ -117,6 +119,12 @@ const FILES = [
   ['src/view3d/scene/rowSteps.ts', 'packages/core/src/view3d/scene/rowSteps.ts'],
   ['src/view3d/scene/sceneModel.ts', 'packages/core/src/view3d/scene/sceneModel.ts'],
   ['src/view3d/scene/seatInstances.ts', 'packages/core/src/view3d/scene/seatInstances.ts'],
+  // Near-field seat rendering (2026-07-28): at close range a seat is drawn as a
+  // chair with a back, not a dot. `build` and `materials` import the chair
+  // profile and `view3d/index` imports the near-field pass, so all three are
+  // part of the buildable dependency closure and must mirror.
+  ['src/view3d/scene/seatChair.ts', 'packages/core/src/view3d/scene/seatChair.ts'],
+  ['src/view3d/scene/nearField.ts', 'packages/core/src/view3d/scene/nearField.ts'],
   ['src/view3d/scene/surface.ts', 'packages/core/src/view3d/scene/surface.ts'],
 ];
 

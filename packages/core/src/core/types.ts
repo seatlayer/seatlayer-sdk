@@ -195,6 +195,44 @@ export interface SeatCommercialAttributes {
   note?: string;
 }
 
+/** The selling attributes that can be marked on a seat one at a time, the same
+ *  way an accommodation can. `note` is free text and belongs to one seat, so it
+ *  is deliberately not here. */
+export type SeatCommercialMark = 'obstructedView' | 'restrictedView' | 'premium';
+
+export interface SeatCommercialMeta {
+  key: SeatCommercialMark;
+  /** Full descriptive label (designer panel, tooltips). */
+  label: string;
+  /** Compact label for chips. */
+  short: string;
+  /** Single-glyph badge, matching the accessibility chips. */
+  icon: string;
+}
+
+/**
+ * Ordered taxonomy of sellable view attributes.
+ *
+ * Kept beside {@link ACCESSIBILITY_TYPES} and shaped identically because the
+ * designer paints them with the same tool: an author marking the back two rows
+ * of a stand as obstructed is doing the same gesture as marking a wheelchair
+ * space, and at a thousand seats it has to cost the same. They stay separate
+ * TYPES because they mean different things — an accommodation is a buyer's
+ * access need, a selling attribute is what the seat is worth.
+ */
+export const SEAT_COMMERCIAL_MARKS: SeatCommercialMeta[] = [
+  { key: 'obstructedView', label: 'Obstructed view', short: 'Obstructed', icon: '⛔' },
+  { key: 'restrictedView', label: 'Restricted view', short: 'Restricted', icon: '👁' },
+  { key: 'premium', label: 'Premium seat', short: 'Premium', icon: '★' },
+];
+
+const SEAT_COMMERCIAL_LABEL = new Map(SEAT_COMMERCIAL_MARKS.map((mark) => [mark.key, mark]));
+
+/** Metadata for one selling attribute (undefined for unknown keys). */
+export function seatCommercialMeta(key: SeatCommercialMark): SeatCommercialMeta | undefined {
+  return SEAT_COMMERCIAL_LABEL.get(key);
+}
+
 /**
  * Per-object label ink + size overrides layered on top of the chart-wide Theme
  * defaults (rowLabelColor / textColor for rows, the section-name ink for

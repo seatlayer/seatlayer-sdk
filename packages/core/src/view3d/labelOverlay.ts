@@ -16,7 +16,10 @@
  * Pointer events pass straight through: a label must never eat a seat tap.
  */
 
-import { cullOverlapping, projectToScreen, visibleLabelKinds, type SceneLabel } from './labels';
+import {
+  DENSE_LABEL_BUDGET, cullOverlapping, focusScore, pickDenseLabels, projectToScreen,
+  visibleLabelKinds, type SceneLabel,
+} from './labels';
 
 /**
  * Minimum gap before the farther label is dropped, CSS px — wide and short,
@@ -53,7 +56,11 @@ const DENSE_KINDS = new Set<SceneLabel['kind']>(['row', 'seat']);
  */
 const DENSE_SEPARATION: Record<'row' | 'seat', { x: number; y: number }> = {
   row: { x: 62, y: 16 },
-  seat: { x: 24, y: 13 },
+  // Widened from 24: at close range seat labels stopped overlapping at all, so
+  // the separation had no work left to do and the budget was carrying the whole
+  // load. A wider box means the few labels that ARE kept are spread across the
+  // seating instead of clustering into one stack.
+  seat: { x: 46, y: 18 },
 };
 
 export interface LabelOverlayOptions {
@@ -101,16 +108,33 @@ export class LabelOverlay {
     height: number,
     cameraDistance: number,
     venueRadius: number,
+    /**
+     * Camera world position, for ranking the dense rungs by real distance.
+     * Optional so callers that only need structure labels need not supply it;
+     * without it the dense rungs fall back to ranking by screen centre alone.
+     */
+    cameraWorld?: readonly [number, number, number],
   ): void {
     if (!this.labels.length) return;
     const kinds = visibleLabelKinds(cameraDistance, venueRadius);
 
-    const candidates: Array<{ label: SceneLabel; screen: ReturnType<typeof projectToScreen> }> = [];
+    const candidates: Array<{
+      label: SceneLabel;
+      screen: ReturnType<typeof projectToScreen>;
+      focus: number;
+    }> = [];
     for (const label of this.labels) {
       if (!kinds.has(label.kind)) continue;
       const screen = projectToScreen(viewProjection, label.anchor, width, height);
       if (!screen.visible) continue;
-      candidates.push({ label, screen });
+      const world = cameraWorld
+        ? Math.hypot(
+          label.anchor[0] - cameraWorld[0],
+          label.anchor[1] - cameraWorld[1],
+          label.anchor[2] - cameraWorld[2],
+        )
+        : 1;
+      candidates.push({ label, screen, focus: focusScore(screen, world, width, height) });
     }
 
     // Nearest-wins declutter, then paint. Everything not kept is hidden rather
@@ -120,10 +144,14 @@ export class LabelOverlay {
     const structure = candidates.filter((c) => !DENSE_KINDS.has(c.label.kind));
     const kept = [
       ...cullOverlapping(structure, SEPARATION_X_PX, SEPARATION_Y_PX),
-      ...(['row', 'seat'] as const).flatMap((kind) => cullOverlapping(
+      // The dense rungs are BUDGETED, not merely deduplicated — see
+      // DENSE_LABEL_BUDGET for why the overlap test alone gets worse the closer
+      // the camera gets.
+      ...(['row', 'seat'] as const).flatMap((kind) => pickDenseLabels(
         candidates.filter((c) => c.label.kind === kind),
         DENSE_SEPARATION[kind].x,
         DENSE_SEPARATION[kind].y,
+        DENSE_LABEL_BUDGET[kind],
       )),
     ];
     const keptIds = new Set(kept.map((k) => k.label.id));

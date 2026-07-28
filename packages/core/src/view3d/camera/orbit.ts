@@ -1,8 +1,16 @@
 /**
- * Orbit + dolly camera, damped, always centred on the venue focal point. Drag =
- * azimuth/polar; wheel/pinch = dolly. Touch: 1-finger orbit, 2-finger pinch
- * dolly (+ pan). No desktop pan for v1. Polar clamped [15°,80°]; distance clamped
- * to bounds-derived limits; initial framing = a 3/4 view fitted to bounds.
+ * Orbit + dolly + pan camera, damped. Drag = azimuth/polar; wheel/pinch = dolly;
+ * right-drag, middle-drag or shift-drag = pan, as does a two-finger drag on
+ * touch. Polar clamped [15°,80°]; distance clamped to bounds-derived limits; pan
+ * clamped to a bounds-derived box; initial framing = a 3/4 view fitted to bounds.
+ *
+ * Pan was deliberately omitted in v1 ("always centred on the venue focal point"),
+ * on the reasoning that a venue is a single object you orbit. That is true only
+ * while the whole venue is in frame. Dolly in far enough to read seat labels — the
+ * thing the low `minDist` exists to allow — and the pivot stays pinned to the
+ * venue centre, so the upper tiers sit off-screen with no way to bring them back
+ * except zooming out again. Reported from the marketing hero: "if I want to move
+ * this 3D down to see the upper part it is not possible."
  */
 
 import { Camera, Vec3 } from 'ogl';
@@ -44,15 +52,24 @@ export class OrbitCamera {
   private gestureFired = false;
 
   private dragging = false;
+  private panning = false;
   private lastX = 0;
   private lastY = 0;
   private activePointers = new Map<number, { x: number; y: number }>();
   private pinchDist = 0;
+  private pinchCx = 0;
+  private pinchCy = 0;
+  /** Damped pan pivot. `target` chases this the way azimuth chases `azT`. */
+  private targetT = new Vec3();
+  /** Venue centre + radius, so pan can be clamped to somewhere still useful. */
+  private panAnchor = new Vec3();
+  private panLimit = 0;
 
   private onPointerDown: (e: PointerEvent) => void;
   private onPointerMove: (e: PointerEvent) => void;
   private onPointerUp: (e: PointerEvent) => void;
   private onWheel: (e: WheelEvent) => void;
+  private onContextMenu: (e: Event) => void;
 
   constructor(gl: OGLRenderingContext, canvas: HTMLElement, requestRender: () => void, onGesture?: () => void) {
     this.camera = new Camera(gl, { fov: FOV, near: 0.1, far: 5000, aspect: 1 });
@@ -65,12 +82,19 @@ export class OrbitCamera {
       try { this.canvas.setPointerCapture?.(e.pointerId); } catch { /* no active pointer */ }
       this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (this.activePointers.size === 1) {
-        this.dragging = true;
+        // Secondary/middle button or shift = pan, matching every 3D viewer people
+        // already know. Left-drag stays orbit, which is the common case.
+        this.panning = e.button === 2 || e.button === 1 || e.shiftKey;
+        this.dragging = !this.panning;
         this.lastX = e.clientX;
         this.lastY = e.clientY;
       } else if (this.activePointers.size === 2) {
         this.dragging = false;
+        this.panning = false;
         this.pinchDist = this.currentPinchDistance();
+        const c = this.pinchCentroid();
+        this.pinchCx = c.x;
+        this.pinchCy = c.y;
       }
     };
     this.onPointerMove = (e) => {
@@ -81,11 +105,23 @@ export class OrbitCamera {
         // Fingers apart (d grows) → zoom in (distance shrinks).
         if (this.pinchDist > 0) { this.dollyBy(Math.exp((this.pinchDist - d) * 0.005)); this.fireGesture(); }
         this.pinchDist = d;
+        // Two fingers moving TOGETHER pan; the pinch term above already took the
+        // spreading component, so the centroid carries the translation.
+        const c = this.pinchCentroid();
+        this.panBy(c.x - this.pinchCx, c.y - this.pinchCy);
+        this.pinchCx = c.x;
+        this.pinchCy = c.y;
+        return;
+      }
+      const dx = e.clientX - this.lastX;
+      const dy = e.clientY - this.lastY;
+      if (this.panning) {
+        this.lastX = e.clientX;
+        this.lastY = e.clientY;
+        if (dx !== 0 || dy !== 0) { this.panBy(dx, dy); this.fireGesture(); }
         return;
       }
       if (!this.dragging) return;
-      const dx = e.clientX - this.lastX;
-      const dy = e.clientY - this.lastY;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
       if (dx !== 0 || dy !== 0) this.fireGesture();
@@ -97,8 +133,10 @@ export class OrbitCamera {
       this.activePointers.delete(e.pointerId);
       try { this.canvas.releasePointerCapture?.(e.pointerId); } catch { /* no active pointer */ }
       if (this.activePointers.size < 2) this.pinchDist = 0;
-      if (this.activePointers.size === 0) this.dragging = false;
+      if (this.activePointers.size === 0) { this.dragging = false; this.panning = false; }
     };
+    // Right-drag pans, so the context menu must not interrupt the gesture.
+    this.onContextMenu = (e) => { e.preventDefault(); };
     this.onWheel = (e) => {
       e.preventDefault();
       // Normalise wheel delta across px / line / page modes to ~±1 per notch,
@@ -114,6 +152,59 @@ export class OrbitCamera {
     canvas.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('pointercancel', this.onPointerUp);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
+    canvas.addEventListener('contextmenu', this.onContextMenu);
+  }
+
+  private pinchCentroid(): { x: number; y: number } {
+    const pts = [...this.activePointers.values()];
+    if (!pts.length) return { x: 0, y: 0 };
+    let x = 0;
+    let y = 0;
+    for (const p of pts) { x += p.x; y += p.y; }
+    return { x: x / pts.length, y: y / pts.length };
+  }
+
+  /**
+   * Slide the orbit pivot across the camera's own screen plane.
+   *
+   * Scaled by distance and FOV so a pixel of drag moves the same amount of VENUE
+   * under the cursor whatever the zoom: at the overview a drag sweeps the whole
+   * bowl, and pushed in among the seats it nudges. A fixed world-units-per-pixel
+   * would be unusable at one end or the other.
+   */
+  private panBy(dxPx: number, dyPx: number): void {
+    const h = (this.canvas as HTMLElement).clientHeight || 1;
+    // World units spanned by one pixel at the pivot's depth.
+    const perPx = (2 * this.distance * Math.tan((this.fovY * DEG) / 2)) / h;
+    // Camera basis on the ground-plane projection: right is perpendicular to the
+    // view azimuth; "up" on screen maps to the horizontal forward direction,
+    // damped by the tilt so a top-down view pans in the plane you can see.
+    const sinA = Math.sin(this.azimuth);
+    const cosA = Math.cos(this.azimuth);
+    const rightX = cosA;
+    const rightZ = -sinA;
+    const cp = Math.cos(this.polar);
+    const sp = Math.sin(this.polar);
+    const fwdX = -sinA * cp;
+    const fwdZ = -cosA * cp;
+    this.targetT.x += (-dxPx * rightX + dyPx * fwdX) * perPx;
+    this.targetT.z += (-dxPx * rightZ + dyPx * fwdZ) * perPx;
+    this.targetT.y += dyPx * sp * perPx;
+    this.clampPan();
+    this.requestRender();
+  }
+
+  /** Keep the pivot within a bounds-derived box so a stray drag cannot lose the
+   *  venue entirely — the Overview chip should never be the only way back. */
+  private clampPan(): void {
+    if (this.panLimit <= 0) return;
+    const lim = this.panLimit;
+    const cx = this.panAnchor.x;
+    const cy = this.panAnchor.y;
+    const cz = this.panAnchor.z;
+    this.targetT.x = Math.max(cx - lim, Math.min(cx + lim, this.targetT.x));
+    this.targetT.z = Math.max(cz - lim, Math.min(cz + lim, this.targetT.z));
+    this.targetT.y = Math.max(cy - lim * 0.5, Math.min(cy + lim, this.targetT.y));
   }
 
   /** One-shot: notify the first real user gesture (drives 3d_orbit_engaged). */
@@ -144,6 +235,9 @@ export class OrbitCamera {
    */
   frame(bounds: OrbitBounds, intro = false, stageAzimuth?: number): void {
     this.target.set(bounds.center[0], bounds.center[1], bounds.center[2]);
+    this.targetT.copy(this.target);
+    this.panAnchor.copy(this.target);
+    this.panLimit = Math.max(1, bounds.radius) * 1.5;
     const r = Math.max(1, bounds.radius);
     // Aspect-aware fit: the bounds sphere must clear BOTH the vertical and the
     // (aspect-narrowed) horizontal FOV, so a wide designer canvas frames the
@@ -187,6 +281,9 @@ export class OrbitCamera {
    */
   frameSoft(bounds: OrbitBounds, stageAzimuth?: number): void {
     this.target.set(bounds.center[0], bounds.center[1], bounds.center[2]);
+    this.targetT.copy(this.target);
+    this.panAnchor.copy(this.target);
+    this.panLimit = Math.max(1, bounds.radius) * 1.5;
     this.syncFromCamera(); // re-derive pose around the new pivot — no snap
     this.camera.perspective({ fov: this.fovY, aspect: this.camera.aspect });
     const r = Math.max(1, bounds.radius);
@@ -204,10 +301,21 @@ export class OrbitCamera {
     const da = this.azT - this.azimuth;
     const dp = this.polT - this.polar;
     const dd = this.distT - this.distance;
-    const moving = Math.abs(da) > 1e-4 || Math.abs(dp) > 1e-4 || Math.abs(dd) > 1e-4;
+    const tx = this.targetT.x - this.target.x;
+    const ty = this.targetT.y - this.target.y;
+    const tz = this.targetT.z - this.target.z;
+    // Pan is damped on the same curve as the rest of the pose, and its epsilon is
+    // scaled by distance: 1e-4 world units is imperceptible at the overview but
+    // would keep a pushed-in camera redrawing forever.
+    const panEps = Math.max(1e-4, this.distance * 1e-4);
+    const moving = Math.abs(da) > 1e-4 || Math.abs(dp) > 1e-4 || Math.abs(dd) > 1e-4
+      || Math.abs(tx) > panEps || Math.abs(ty) > panEps || Math.abs(tz) > panEps;
     this.azimuth += da * DAMP;
     this.polar += dp * DAMP;
     this.distance += dd * DAMP;
+    this.target.x += tx * DAMP;
+    this.target.y += ty * DAMP;
+    this.target.z += tz * DAMP;
     if (moving) this.applyPosition();
     return moving;
   }
@@ -239,6 +347,7 @@ export class OrbitCamera {
   /** Point the orbit pivot at a new world target without moving the camera. */
   setTarget(target: [number, number, number]): void {
     this.target.set(target[0], target[1], target[2]);
+    this.targetT.copy(this.target);
   }
 
   /** Restore the base FOV (a flight ends pushed-in) and re-sync orbit state. A
@@ -247,6 +356,7 @@ export class OrbitCamera {
   resumeAfterFlight(target?: [number, number, number]): void {
     this.camera.perspective({ fov: this.fovY, aspect: this.camera.aspect });
     if (target) this.target.set(target[0], target[1], target[2]);
+    this.targetT.copy(this.target);
     this.syncFromCamera();
   }
 
@@ -265,6 +375,7 @@ export class OrbitCamera {
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
     this.canvas.removeEventListener('pointercancel', this.onPointerUp);
     this.canvas.removeEventListener('wheel', this.onWheel);
+    this.canvas.removeEventListener('contextmenu', this.onContextMenu);
     this.activePointers.clear();
   }
 }

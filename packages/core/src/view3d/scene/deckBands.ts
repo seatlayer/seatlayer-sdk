@@ -63,6 +63,28 @@ export interface BandRow {
    * step down onto the wrong deck.
    */
   readonly blockId: number;
+  /**
+   * A ready-made deck FOOTPRINT for this entry, chart units, convex and closed —
+   * used instead of the row-ribbon path when the entry is not a row at all.
+   *
+   * A table is the case this exists for. Its seats ring a centre rather than
+   * running across the view, so "offset the polyline sideways" describes nothing:
+   * whichever way the ribbon is offset it covers an arc of the ring and leaves
+   * the rest of it hanging. Measured on the nightclub VIP terrace (14 six-seat
+   * round tables), authoring any rake at all left 5 seats off-deck at 1°, 18 at
+   * 5° and 24 at 10°. The count barely moves with the rake because the fault is
+   * in the deck's PLAN SHAPE, not in its height — a taller step just exposes the
+   * ground that was already missing.
+   *
+   * The patch is the convex hull of the entry's seats grown outward by the same
+   * clearance a ribbon carries ({@link MIN_REACH_U}), so a table's deck reaches
+   * past its outermost seat CENTRE by a full seat-dot allowance exactly as a
+   * ribbon does past its end seat. It is supplied by the surface builder, which
+   * is where the authored objects are known — deriving "is this a table" by
+   * guessing at seat geometry here would re-answer a question the chart already
+   * answers.
+   */
+  readonly patch?: readonly Point[];
 }
 
 /**
@@ -97,7 +119,7 @@ const MIN_RISER_M = 0.01;
  * margin here. Two orchestra seats were still failing on ribbon width alone
  * before this floor; row pitch happened to be barely over a dot diameter there.
  */
-const MIN_REACH_U = SEAT_DOT_RADIUS_M * 1.5 * CHART_UNITS_PER_METRE;
+export const MIN_REACH_U = SEAT_DOT_RADIUS_M * 1.5 * CHART_UNITS_PER_METRE;
 
 /** How far a ribbon reaches BACK, as a fraction of the gap to the row behind. */
 const BACK_REACH = 0.5;
@@ -177,6 +199,107 @@ function extendEnds(pts: readonly Point[], by: number): Point[] {
     y: out[out.length - 1].y + tail.y * by,
   });
   return out;
+}
+
+/**
+ * Angular step used when rounding a patch's corners, radians (~15°).
+ *
+ * The offset of a convex hull by a fixed distance is that hull swept by a DISC,
+ * so every corner is a circular arc. Sampling it is the only approximation in
+ * the patch, and it is taken on the OUTSIDE (see `CORNER_SEGMENTS` below) so the
+ * sampled polygon still contains the true offset rather than cutting inside it.
+ */
+const CORNER_STEP_RAD = Math.PI / 12;
+
+/**
+ * Convex hull of a point set (Andrew's monotone chain), counter-clockwise.
+ *
+ * Returns fewer than 3 points when the input is a point or a segment; callers
+ * fall back to a circle there, which is the correct offset of both.
+ */
+function convexHull(pts: readonly Point[]): Point[] {
+  if (pts.length < 3) return [...pts];
+  const s = [...pts].sort((a, b) => (a.x - b.x) || (a.y - b.y));
+  const cross = (o: Point, a: Point, b: Point): number =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const half = (src: readonly Point[]): Point[] => {
+    const out: Point[] = [];
+    for (const p of src) {
+      while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop();
+      out.push(p);
+    }
+    out.pop();
+    return out;
+  };
+  const hull = [...half(s), ...half([...s].reverse())];
+  return hull.length >= 3 ? hull : [...pts];
+}
+
+/**
+ * The deck footprint a cluster of seats needs: their convex hull grown outward
+ * by `pad` chart units, as a closed counter-clockwise ring.
+ *
+ * Exact rather than approximate, and that matters: the property the caller is
+ * buying is "every seat centre lies at least `pad` inside this ring", which is
+ * what makes a table's deck carry its own seat dots. A hull offset is the
+ * Minkowski sum of the hull with a disc of radius `pad`, and that sum contains
+ * every seat's own disc by construction. Sampling the corner arcs is the one
+ * place accuracy could leak, so the samples are placed on the CIRCUMSCRIBED
+ * radius — the sampled polygon then contains the true arc instead of chording
+ * across it, and the guarantee survives the discretisation.
+ */
+export function seatClusterPatch(pts: readonly Point[], pad: number): Point[] {
+  if (!pts.length || !(pad > 0)) return [];
+  const hull = convexHull(pts);
+  // Round a corner from one outward normal to the next, on the circumscribed
+  // radius so the chord between samples still clears `pad`.
+  const arc = (v: Point, from: number, to: number, out: Point[]): void => {
+    let sweep = to - from;
+    while (sweep < 0) sweep += Math.PI * 2;
+    while (sweep > Math.PI * 2) sweep -= Math.PI * 2;
+    const steps = Math.max(1, Math.ceil(sweep / CORNER_STEP_RAD));
+    const r = pad / Math.cos(sweep / steps / 2);
+    for (let k = 0; k <= steps; k++) {
+      const a = from + (sweep * k) / steps;
+      out.push({ x: v.x + Math.cos(a) * r, y: v.y + Math.sin(a) * r });
+    }
+  };
+
+  if (hull.length < 3) {
+    // A single seat, or two seats (a collinear "hull"). The bounding circle grown
+    // by `pad` covers the true offset in both cases — it over-covers a segment
+    // slightly, which is harmless at the scale of one or two chairs and avoids a
+    // second geometric path for a case a real table never hits.
+    let cx = 0, cy = 0;
+    for (const p of hull) { cx += p.x; cy += p.y; }
+    cx /= hull.length || 1; cy /= hull.length || 1;
+    let far = 0;
+    for (const p of hull) far = Math.max(far, Math.hypot(p.x - cx, p.y - cy));
+    const out: Point[] = [];
+    const steps = Math.max(3, Math.ceil((Math.PI * 2) / CORNER_STEP_RAD));
+    const r = (far + pad) / Math.cos(Math.PI / steps);
+    for (let k = 0; k < steps; k++) {
+      const a = (k / steps) * Math.PI * 2;
+      out.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+    }
+    return out;
+  }
+
+  const n = hull.length;
+  // Outward normal of the edge leaving vertex i, for a CCW hull.
+  const edgeAngle: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = hull[i], b = hull[(i + 1) % n];
+    edgeAngle.push(Math.atan2(-(b.x - a.x), b.y - a.y));
+  }
+  const out: Point[] = [];
+  for (let i = 0; i < n; i++) {
+    // At each vertex sweep from the previous edge's normal to this edge's, then
+    // walk this edge offset outward. Consecutive vertices' runs join along the
+    // shared edge, so the concatenation closes into one ring.
+    arc(hull[i], edgeAngle[(i + n - 1) % n], edgeAngle[i], out);
+  }
+  return dedupeAdjacent(out);
 }
 
 /** Perpendicular distance from a point to a row's polyline, chart units. */
@@ -440,7 +563,18 @@ export function deckFootprints(rows: readonly BandRow[], focal: Point, shared?: 
   }
 
   const out: DeckFootprint[] = [];
-  for (const [, indices] of byBlock) {
+  for (const [, allIndices] of byBlock) {
+    // A patch entry (a table) stands on its own base. It is not part of the
+    // ribbon stack — including it in the front-to-back trace would drag the
+    // block's outline through a ring of seats that has no front or back — and a
+    // pedestal per table is what a raked table terrace physically is.
+    const indices: number[] = [];
+    for (const i of allIndices) {
+      const patch = rows[i].patch;
+      if (patch && patch.length >= 3) out.push({ outline: [...patch], holes: [], topY: rows[i].y });
+      else indices.push(i);
+    }
+    if (!indices.length) continue;
     // Front to back, so the ring below traces the block's real outline.
     indices.sort((a, b) => rows[a].depth - rows[b].depth);
     const ribbons = indices.map((i) => ribbonOf(rows, i, nbrs, focal));
@@ -605,31 +739,38 @@ class ClipTest {
 }
 
 /**
- * Emit a horizontal quad clipped to `clipRing`, triangulated.
+ * Emit a horizontal CONVEX polygon clipped to `clipRing`, triangulated.
  *
  * Treads are horizontal, so every piece shades with the same up normal whatever
  * shape the clip leaves behind — which is what makes clipping cheap here.
+ *
+ * Convex is all the callers produce: a ribbon segment is a quad and a table
+ * patch is an offset convex hull, so the unclipped fast path can fan from one
+ * vertex instead of running a triangulator.
  */
-function emitClippedQuad(
+function emitClippedPoly(
   builder: MeshBuilder,
   clipRing: [number, number][][],
   clipTest: ClipTest,
-  quad: Point[],
+  poly: Point[],
   y: number,
   color: RGB,
 ): void {
-  // FAST PATH: a quad wholly inside the clip contributes nothing to clip, and
+  if (poly.length < 3) return;
+  // FAST PATH: a polygon wholly inside the clip contributes nothing to clip, and
   // the overwhelming majority are — only ribbons at a section's edge straddle it.
   // Running a polygon boolean per ribbon SEGMENT regardless cost ~100,000
   // intersections on a 99k-seat venue and dominated scene build (8.5 s of 11 s).
-  if (clipTest.containsAll(quad)) {
+  if (clipTest.containsAll(poly)) {
     const UPF = [0, 1, 0] as const;
-    const a = quad[0], b = quad[1], c = quad[2], d = quad[3];
-    builder.tri([a.x * M, y, a.y * M], [b.x * M, y, b.y * M], [c.x * M, y, c.y * M], UPF, color);
-    builder.tri([a.x * M, y, a.y * M], [c.x * M, y, c.y * M], [d.x * M, y, d.y * M], UPF, color);
+    const a = poly[0];
+    for (let i = 1; i + 1 < poly.length; i++) {
+      const b = poly[i], c = poly[i + 1];
+      builder.tri([a.x * M, y, a.y * M], [b.x * M, y, b.y * M], [c.x * M, y, c.y * M], UPF, color);
+    }
     return;
   }
-  const ring: [number, number][] = quad.map((p) => [p.x, p.y]);
+  const ring: [number, number][] = poly.map((p) => [p.x, p.y]);
   ring.push(ring[0]);
   let pieces: ReturnType<typeof polygonClipping.intersection>;
   try {
@@ -688,6 +829,47 @@ export function emitDeckBands(
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
+
+    // A table: draw its own footprint, not a ribbon. See `BandRow.patch`.
+    if (row.patch && row.patch.length >= 3) {
+      const patch = [...row.patch];
+      const belowY = nbrs[i].belowY ?? landingY;
+      if (clipRing && clipTest) emitClippedPoly(builder, clipRing, clipTest, patch, row.y, colors.tread);
+      else {
+        const a = patch[0];
+        for (let k = 1; k + 1 < patch.length; k++) {
+          const b = patch[k], c = patch[k + 1];
+          builder.tri([a.x * M, row.y, a.y * M], [b.x * M, row.y, b.y * M], [c.x * M, row.y, c.y * M], UP, colors.tread);
+        }
+      }
+      // A skirt all the way round, not just across the front. A patch is a
+      // free-standing pedestal rather than a step in a stack, so every side of
+      // it is exposed; leaving the sides open showed the void under the deck
+      // from any angle but dead ahead.
+      if (row.y > belowY + MIN_RISER_M) {
+        let cx = 0, cy = 0;
+        for (const p of patch) { cx += p.x; cy += p.y; }
+        cx /= patch.length; cy /= patch.length;
+        for (let k = 0; k < patch.length; k++) {
+          const p = patch[k], q = patch[(k + 1) % patch.length];
+          const dx = q.x - p.x, dy = q.y - p.y;
+          const len = Math.hypot(dx, dy);
+          if (len < 1e-6) continue;
+          // Outward = the side of the edge the patch centre is NOT on.
+          let nx = dy / len, ny = -dx / len;
+          if ((p.x - cx) * nx + (p.y - cy) * ny < 0) { nx = -nx; ny = -ny; }
+          const rn: readonly [number, number, number] = [nx, 0, ny];
+          const pt: [number, number, number] = [p.x * M, row.y, p.y * M];
+          const qt: [number, number, number] = [q.x * M, row.y, q.y * M];
+          const pb: [number, number, number] = [p.x * M, belowY, p.y * M];
+          const qb: [number, number, number] = [q.x * M, belowY, q.y * M];
+          builder.tri(pt, qt, qb, rn, colors.riser);
+          builder.tri(pt, qb, pb, rn, colors.riser);
+        }
+      }
+      continue;
+    }
+
     const rib = ribbonOf(rows, i, nbrs, focal);
     if (!rib) continue;
     const { pts, nrm, front, back } = rib;
@@ -719,7 +901,7 @@ export function emitDeckBands(
         // buried by 0.20 m under the terrace beside them, which is 0.60 m higher.
         // Clipping to the section's own padded outline keeps a deck inside the
         // section that drew it.
-        emitClippedQuad(builder, clipRing, clipTest!, [
+        emitClippedPoly(builder, clipRing, clipTest!, [
           { x: p.x - np[0] * front, y: p.y - np[1] * front },
           { x: q.x - nq[0] * front, y: q.y - nq[1] * front },
           { x: q.x + nq[0] * back, y: q.y + nq[1] * back },

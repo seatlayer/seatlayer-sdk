@@ -151,6 +151,72 @@ export function cullOverlapping<T extends { screen: Projected }>(
   return kept;
 }
 
+/**
+ * How many of the dense per-place labels may be painted at once.
+ *
+ * The overlap cull above is necessary and NOT sufficient, and the gap between
+ * those two is a real defect: it only removes labels that collide, so the closer
+ * the camera gets the FEWER collisions there are and the MORE labels survive.
+ * Flown to a seat in a 3,605-seat amphitheatre, every row and seat name in the
+ * frustum passed the test and the frame became a wall of tiled text with the
+ * seating unreadable behind it — the labels stopped describing the venue and
+ * became the thing obscuring it.
+ *
+ * A budget is the missing rung. A buyer arriving at their seat wants the handful
+ * of names around them, not an index of the building; past a dozen or so the set
+ * has no informational value left, only cost.
+ */
+export const DENSE_LABEL_BUDGET: Record<'row' | 'seat', number> = { row: 8, seat: 14 };
+
+/**
+ * Order dense labels by how much the buyer is likely to care: near the camera
+ * and near the middle of the frame first.
+ *
+ * Both terms are needed. Distance alone keeps labels for seats behind the
+ * camera's shoulder that happen to be metres away; screen-centre alone keeps a
+ * label for a seat on the far side of the venue purely for being dead ahead. The
+ * product ranks "what I am looking at, close to me" top, which is the seat a
+ * buyer just flew to.
+ */
+export function focusScore(
+  screen: Projected,
+  worldDistance: number,
+  width: number,
+  height: number,
+): number {
+  const half = Math.max(1, Math.min(width, height) * 0.5);
+  const off = Math.min(2, Math.hypot(screen.x - width / 2, screen.y - height / 2) / half);
+  return worldDistance * (1 + 1.5 * off);
+}
+
+/**
+ * Pick the dense labels to paint: rank by focus, drop overlaps in that order,
+ * then take at most `budget`.
+ *
+ * Order matters. Culling overlaps FIRST and then truncating would let an
+ * arbitrary far-corner label win a slot over the seat the buyer is sitting in,
+ * because the overlap pass keeps whatever it happens to reach first.
+ */
+export function pickDenseLabels<T extends { screen: Projected; focus: number }>(
+  items: T[],
+  separationX: number,
+  separationY: number,
+  budget: number,
+): T[] {
+  const ordered = [...items].sort((a, b) => a.focus - b.focus);
+  const kept: T[] = [];
+  for (const item of ordered) {
+    if (kept.length >= budget) break;
+    let clash = false;
+    for (const k of kept) {
+      if (Math.abs(item.screen.x - k.screen.x) < separationX
+        && Math.abs(item.screen.y - k.screen.y) < separationY) { clash = true; break; }
+    }
+    if (!clash) kept.push(item);
+  }
+  return kept;
+}
+
 /** Mean of a point set, or null when empty. */
 export function centroidOf(points: readonly Point[]): Point | null {
   if (!points.length) return null;

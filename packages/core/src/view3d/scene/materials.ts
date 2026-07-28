@@ -8,7 +8,19 @@
 
 import { Program } from 'ogl';
 import { SEAT_DOT_RADIUS_M } from './seatInstances';
+import { CHAIR_FULL_M, CHAIR_NONE_M, SEAT_MIN_PIXELS_NEAR } from '../lod';
+import { BACK_BASE_M, BACK_RAKE_SLOPE } from './seatChair';
 import type { OGLRenderingContext } from 'ogl';
+
+/**
+ * The near-field weight, shared verbatim by the chair and the dot so the two
+ * always sum to one at every depth and no seat can be drawn twice or not at all.
+ * Mirrors `chairWeight()` in lod.ts.
+ */
+const CHAIR_WEIGHT_GLSL = /* glsl */ `
+float chairWeight(float depth) {
+  return 1.0 - smoothstep(uChairFull, uChairNone, depth);
+}`;
 
 const SOLID_VERT = /* glsl */ `#version 300 es
 precision highp float;
@@ -83,14 +95,23 @@ uniform float uSeatScale;
 uniform float uMinPixels;
 uniform float uPixelToWorld;   // (2*tan(fovY/2)) / viewportHeightPx
 uniform float uFocusFloor;     // -1 = show every floor
+uniform float uChairFull;      // view depth at which the chair mesh is full size
+uniform float uChairNone;      // ...and at which it has scaled away entirely
 out vec2 vUv;
 out vec3 vColor;
 out float vBudget;     // 1 = dot holds its minimum pixel size, <1 = it cannot
 out vec3 vRing;
 out float vDim;
+out float vDotWeight;  // 1 = the dot IS this seat, 0 = the chair has taken over
+${CHAIR_WEIGHT_GLSL}
 void main() {
   vec4 mv = modelViewMatrix * vec4(iOffset, 1.0);
   float depth = max(-mv.z, 0.001);
+  // Hand the seat over to the chair mesh as it comes into range. Derived from
+  // this instance's OWN depth rather than from a global uniform, so a row two
+  // metres away and the far side of the bowl resolve differently in the same
+  // frame — which is the entire point of a ladder over a switch.
+  vDotWeight = 1.0 - chairWeight(depth);
   float minR = uMinPixels * depth * uPixelToWorld;      // screen-space floor
   // Grow to hold the pixel floor, but never past this seat's own pitch ceiling:
   // unbounded growth is what merges neighbouring rows into one mass at range.
@@ -122,6 +143,7 @@ in vec3 vColor;
 in float vBudget;
 in vec3 vRing;
 in float vDim;
+in float vDotWeight;
 uniform float uSeatFade;      // fade toward tier colour with distance (LOD)
 uniform vec3 uFadeColor;
 out vec4 fragColor;
@@ -146,7 +168,129 @@ void main() {
   // Seats on an unfocused floor recede with their structure.
   c = mix(c, uFadeColor, vDim * 0.75);
   alpha *= mix(1.0, 0.30, vDim);
+  // Yield to the chair. The chair grows out of this exact point, so through the
+  // band the dot is always at least as big as the chair inside it and the seat
+  // never thins out to nothing in between.
+  alpha *= vDotWeight;
+  if (alpha <= 0.0) discard;
   fragColor = vec4(c, alpha);
+}`;
+
+// --- Near-field seat chairs ------------------------------------------------
+// One instanced draw over the 72-vertex base mesh in ./seatChair.ts, carrying
+// only the seats the CPU gathered as near (see ./nearField.ts). Lit by the same
+// rig as the solids so a chair reads as part of the room and not as a decal.
+const CHAIR_VERT = /* glsl */ `#version 300 es
+precision highp float;
+in vec3 position;      // local: x/z in units of the seat radius, y in METRES
+in vec3 normal;
+in float part;         // 0 = pedestal, 1 = pad, 2 = back
+in vec3 iOffset;       // per-instance world deck point (identical to the dot's)
+in vec3 iColor;        // per-instance state colour
+in float iRadius;      // per-instance horizontal half-width, world metres
+in float iYaw;         // per-instance facing, radians (local +Z -> facing dir)
+in vec3 iRing;         // accommodation ring colour; (0,0,0) = not accessible
+in float iFloor;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform float uChairFull;
+uniform float uChairNone;
+uniform float uFocusFloor;
+uniform float uBackRake;   // metres of z per metre of rise, above uBackBase
+uniform float uBackBase;   // local height at which the back starts
+out vec3 vColor;
+out vec3 vNormalWorld;
+out vec3 vNormalView;
+out vec3 vPosView;
+out float vPart;
+out float vHeight;   // local height in metres, for the vertical occlusion ramp
+out vec3 vRing;
+out float vDim;
+${CHAIR_WEIGHT_GLSL}
+void main() {
+  vec4 anchor = modelViewMatrix * vec4(iOffset, 1.0);
+  float w = chairWeight(max(-anchor.z, 0.001));
+  // 1. Local units -> world metres. Only x/z scale: narrow rows get narrow
+  //    chairs, but nobody gets a short one (people are the same height at every
+  //    seat pitch).
+  vec3 p = position;
+  p.xz *= iRadius;
+  // 2. Lean the back. Done here rather than in the base mesh so the lean is a
+  //    real angle in METRES — baked into the mesh it would scale with the seat's
+  //    width and the same chair would lean 20 degrees on a wide stadium row and
+  //    6 on a tight theatre one.
+  float rake = (part > 1.5) ? max(p.y - uBackBase, 0.0) * uBackRake : 0.0;
+  p.z -= rake;
+  // 3. Scale-in. At w=0 the chair is a point at the seat, under a dot at full
+  //    opacity — which is what makes the handover invisible. sqrt front-loads
+  //    the growth so the chair is already near full size while the dot is still
+  //    half there; see chairScale() in lod.ts.
+  p *= sqrt(w);
+  float c = cos(iYaw), s = sin(iYaw);
+  vec3 rp = vec3(p.x * c + p.z * s, p.y, -p.x * s + p.z * c);
+  // Normals under the same two transforms, in reverse and inverted-transposed.
+  // The xz scale is non-uniform, so an axis-aligned normal does NOT survive it
+  // unchanged; and the rake is a shear, whose normal transform adds a y term.
+  // Skipping either lights the raked back as though it were still vertical.
+  vec3 n = vec3(normal.x / iRadius, normal.y, normal.z / iRadius);
+  if (part > 1.5) n.y += uBackRake * n.z;
+  n = normalize(n);
+  vec3 rn = vec3(n.x * c + n.z * s, n.y, -n.x * s + n.z * c);
+  vec4 mv = modelViewMatrix * vec4(iOffset + rp, 1.0);
+  vPosView = mv.xyz;
+  vNormalWorld = rn;
+  vNormalView = normalize(mat3(modelViewMatrix) * rn);
+  vColor = iColor;
+  vPart = part;
+  vHeight = position.y;
+  vRing = iRing;
+  vDim = (uFocusFloor < -0.5 || abs(iFloor - uFocusFloor) < 0.5) ? 0.0 : 1.0;
+  gl_Position = projectionMatrix * mv;
+}`;
+
+const CHAIR_FRAG = /* glsl */ `#version 300 es
+precision highp float;
+in vec3 vColor;
+in vec3 vNormalWorld;
+in vec3 vNormalView;
+in vec3 vPosView;
+in float vPart;
+in float vHeight;
+in vec3 vRing;
+in float vDim;
+uniform vec3 uKeyDir;
+uniform vec3 uFadeColor;
+out vec4 fragColor;
+void main() {
+  vec3 N = normalize(vNormalWorld);
+  vec3 V = normalize(-vPosView);
+  // The solids' rig, unchanged, so the chairs sit in the venue's light.
+  float hemi = 0.5 + 0.5 * N.y;
+  float key = max(dot(N, uKeyDir), 0.0);
+  vec3 fillDir = normalize(vec3(-uKeyDir.x, 0.25, -uKeyDir.z));
+  float fill = max(dot(N, fillDir), 0.0);
+  vec3 tint = vColor;
+  // The accommodation ring, kept legible once the dot (which drew it) is gone:
+  // an accessible seat's PEDESTAL is painted in the ring colour, so the marker
+  // survives to close range instead of vanishing exactly when the buyer arrives.
+  float ringMask = step(0.001, dot(vRing, vRing));
+  if (vPart < 0.5 && ringMask > 0.5) tint = vRing;
+  // Pad brightest, back a step below it, pedestal darkest. Three untextured
+  // boxes only read as one object if they are separated tonally — with a single
+  // flat colour the chair silhouettes as a crate.
+  float partShade = vPart < 0.5 ? 0.50 : (vPart < 1.5 ? 1.10 : 0.80);
+  // Cheap vertical occlusion: a chair is in a dense row, so the closer a surface
+  // sits to the deck the less sky it can actually see. This is the depth cue —
+  // without it the pad top, the back and the deck all resolve to the same flat
+  // value and the row loses its form entirely.
+  float ao = mix(0.58, 1.0, clamp(vHeight / 0.92, 0.0, 1.0));
+  vec3 base = tint * partShade * ao * (0.52 + 0.40 * hemi) + tint * key * 0.38 + tint * fill * 0.10;
+  float fres = pow(1.0 - max(dot(normalize(vNormalView), V), 0.0), 3.0);
+  // A brighter rim than the solids get: it picks out every chair's own edge,
+  // which is what stops a block of them merging into one mass up close.
+  base += vec3(0.26, 0.31, 0.38) * fres * 0.55;
+  base = mix(base, uFadeColor, vDim * 0.75);
+  fragColor = vec4(base, 1.0);
 }`;
 
 const BG_VERT = /* glsl */ `#version 300 es
@@ -237,7 +381,7 @@ export function createSeatPickProgram(gl: OGLRenderingContext): Program {
     uniforms: {
       uSeatRadius: { value: SEAT_DOT_RADIUS_M },
       uSeatScale: { value: 1 },
-      uMinPixels: { value: 2.5 },
+      uMinPixels: { value: SEAT_MIN_PIXELS_NEAR },
       uPixelToWorld: { value: 0.002 },
     },
   });
@@ -286,11 +430,47 @@ export function createSeatProgram(gl: OGLRenderingContext): Program {
     uniforms: {
       uSeatRadius: { value: SEAT_DOT_RADIUS_M },
       uSeatScale: { value: 1 },
-      uMinPixels: { value: 2.5 },
+      uMinPixels: { value: SEAT_MIN_PIXELS_NEAR },
       uPixelToWorld: { value: 0.002 },
       uSeatFade: { value: 0 },
       uFocusFloor: { value: -1 },
       uFadeColor: { value: new Float32Array([0.32, 0.37, 0.43]) },
+      uChairFull: { value: CHAIR_FULL_M },
+      uChairNone: { value: CHAIR_NONE_M },
+    },
+  });
+}
+
+/**
+ * The near-field chair program.
+ *
+ * OPAQUE and depth-writing, unlike the dots. That is the reason the transition
+ * is a scale-in and not a cross-fade: a translucent chair either writes depth
+ * and punches its own silhouette through the chairs behind it, or does not and
+ * shows its own back panel through its own seat pad. Growing an opaque chair out
+ * of the seat point avoids both, and it composes correctly with the dot, which
+ * still draws afterwards in the transparent pass.
+ *
+ * `cullFace` stays off to match the rest of the renderer — the meshes are closed
+ * opaque boxes, so the depth test already suppresses the back faces' cost, and a
+ * winding mistake here would silently blank the chairs rather than fail loudly.
+ */
+export function createChairProgram(gl: OGLRenderingContext): Program {
+  return new Program(gl, {
+    vertex: CHAIR_VERT,
+    fragment: CHAIR_FRAG,
+    transparent: false,
+    depthTest: true,
+    depthWrite: true,
+    cullFace: false,
+    uniforms: {
+      uKeyDir: { value: new Float32Array([0.38, 0.86, 0.34]) },
+      uFadeColor: { value: new Float32Array([0.32, 0.37, 0.43]) },
+      uChairFull: { value: CHAIR_FULL_M },
+      uChairNone: { value: CHAIR_NONE_M },
+      uBackRake: { value: BACK_RAKE_SLOPE },
+      uBackBase: { value: BACK_BASE_M },
+      uFocusFloor: { value: -1 },
     },
   });
 }
