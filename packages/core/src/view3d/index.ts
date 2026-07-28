@@ -28,6 +28,7 @@ import { pickPixelCoords } from './pick/encode';
 import { diffSelection, mergeAvailabilityIntoSelection } from './pick/selection';
 import { Cinematic, buildWaypoints, lookAtQuat, FLIGHT_DURATION_MS, FOV_END, type Vec3Arr } from './camera/cinematic';
 import { mountPanorama, type PanoramaHandle, type SeatView } from './crossfade/panorama';
+import { mountPanoramaSphere } from './crossfade/panoramaSphere';
 import { Analytics3D, type Analytics3DCallback } from './analytics';
 import type { SeatState3D } from './palette';
 
@@ -402,7 +403,10 @@ export function mountVenue3D(
     font: '600 12.5px/1 inherit', cursor: 'pointer', zIndex: '4',
   } as Partial<CSSStyleDeclaration>);
   overviewChip.addEventListener('click', () => {
-    if (disposed || frozen) return; // panorama owns the screen while frozen
+    // The panorama owns the screen whenever it is up. Guarding on `frozen`
+    // alone was equivalent only while every panorama froze the loop; the
+    // in-scene sphere deliberately does not, so ask about the panorama itself.
+    if (disposed || frozen || panorama) return;
     cancelFlight();
     removeArriveChip();
     orbit.frameSoft(model.bounds, stageAzimuth);
@@ -429,19 +433,63 @@ export function mountVenue3D(
     // mounting this stale seat's panorama would be wrong.
     if (disposed || gen !== flightGen) return;
     removeArriveChip();
-    panorama = mountPanorama(container, view, {
-      fadeMs,
-      seatLabel: seatId,
-      onClose: () => {
-        panorama = null;
-        frozen = false;
-        analytics.panoramaClosed();
-        orbit.resumeAfterFlight(model.focalWorld);
-        loop.requestRender();
-        // Back in the live scene at the seat — offer the 360 again.
-        showArriveChip(seatId, flightGen);
-      },
-    });
+    const onClose = (): void => {
+      panorama = null;
+      labelOverlay.setVisible(true);
+      frozen = false;
+      analytics.panoramaClosed();
+      orbit.resumeAfterFlight(model.focalWorld);
+      loop.requestRender();
+      // Back in the live scene at the seat — offer the 360 again.
+      showArriveChip(seatId, flightGen);
+    };
+    // Prefer the in-scene sphere: it keeps the loop running, so the arrival is a
+    // cross-fade between two views of the same place from the same camera
+    // rather than a bitmap dropped over a frozen frame. It needs the image to
+    // decode and a GL context that still exists, so it can decline — and the
+    // DOM viewer stays as the fallback because a 360 that fails to mount must
+    // never leave the buyer worse off than no 360 at all.
+    // A GENERATED panorama is a 2048×1024 picture of the very scene already on
+    // screen. Through a 106° window on a 3072-device-pixel viewport that is a
+    // 5× magnification of ~600 source pixels, and it reads soft next to the
+    // arrival frame the buyer was just looking at. So it is not drawn: the
+    // camera looks around the real geometry instead, which is sharp at any
+    // field of view and gets better every time the scene does. Real photographs
+    // still go on the sphere, where their 5760–8192 px capture has detail worth
+    // showing.
+    const sceneMode = view.generated === true;
+    const spherical = gpu && !contextLost
+      ? await mountPanoramaSphere(container, sceneMode ? null : view, {
+        gl: glctx.gl,
+        scene: gpu.main,
+        camera: orbit.camera,
+        requestRender: () => loop.requestRender(),
+        focalWorld: model.focalWorld,
+      }, { fadeMs, seatLabel: seatId, onClose })
+      : null;
+    // Superseded while the image was decoding — the newer flight owns the state.
+    if (disposed || gen !== flightGen) { spherical?.dispose(); return; }
+    if (spherical) {
+      // The venue keeps rendering behind the sphere, so the freeze that the DOM
+      // path depends on must be lifted or the cross-fade has nothing to fade
+      // from. The sphere itself pins the camera.
+      //
+      // Sync orbit to where the flight actually parked the camera FIRST. Its
+      // damped pose is still whatever it was before the flight, so the next
+      // `orbit.update()` would read that as movement, call `applyPosition()`
+      // and yank the camera off the seat mid-fade. Syncing equalises pose and
+      // target so `update()` reports "not moving" and leaves the camera alone —
+      // which is what makes it safe to run the loop at all here.
+      orbit.syncFromCamera();
+      // Labels are DOM and the sphere is GL, so every row and seat label would
+      // otherwise float on top of the panorama.
+      labelOverlay.setVisible(false);
+      frozen = false;
+      loop.requestRender();
+      panorama = spherical;
+    } else {
+      panorama = mountPanorama(container, view, { fadeMs, seatLabel: seatId, onClose });
+    }
     analytics.panoramaOpened();
   };
 

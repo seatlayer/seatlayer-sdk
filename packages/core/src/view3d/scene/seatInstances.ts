@@ -10,7 +10,7 @@ import { hexToRgb } from '../palette';
 import { SEATED_EYE_HEIGHT_M } from '../../core/units';
 import { M } from './geometry';
 import { chairHalfWidth } from './seatChair';
-import { seatStateIndex, type SeatState3D } from '../palette';
+import { seatStateIndex, SEAT_STATES, type SeatState3D } from '../palette';
 import type { VenueSurfaces } from './surface';
 
 /**
@@ -20,6 +20,35 @@ import type { VenueSurfaces } from './surface';
  * near-field base.)
  */
 export const SEAT_DOT_RADIUS_M = 0.22;
+
+/**
+ * Whether a seat has somebody in it, and who.
+ *
+ * Occupancy is not invented — it is the inventory. A seat that is SOLD has been
+ * bought by a person, and a HELD one is being bought right now, so those are the
+ * seats that get an occupant. Available and dimmed seats stay empty, and a
+ * SELECTED seat stays empty too: that is the buyer's own seat, and drawing a
+ * stranger in it while they choose it would be worse than an empty hall.
+ *
+ * This means the crowd tells the truth about the event. A nearly-sold show looks
+ * full from the seat you are considering, and a quiet one looks quiet — which is
+ * information a buyer actually wants, arrived at without inventing anything.
+ *
+ * Returns a negative value for an empty seat; otherwise a stable per-seat hash
+ * in [0,1) that varies the occupant's build and tone. Stable so a person does
+ * not change shape as the near-field set is re-gathered around a moving camera.
+ */
+export function seatOccupantSeed(stateIndex: number, seatIndex: number): number {
+  const state = SEAT_STATES[stateIndex];
+  if (state !== 'sold' && state !== 'held') return -1;
+  // Cheap integer hash — deterministic, no Math.random, and well distributed
+  // across neighbouring indices so adjacent seats do not come out matching.
+  let h = (seatIndex + 1) * 2654435761;
+  h ^= h >>> 15;
+  h = Math.imul(h, 2246822519);
+  h ^= h >>> 13;
+  return ((h >>> 0) % 100000) / 100000;
+}
 
 /**
  * Fraction of a seat's nearest-neighbour spacing that its dot may occupy.
@@ -36,6 +65,15 @@ export interface SeatInstanceData {
   iPosition: Float32Array;
   /** float per instance: index into the seat-state colour LUT. */
   iState: Float32Array;
+  /**
+   * vec3 per instance: the seat's CATEGORY colour, used while it is available.
+   *
+   * 2D fills a free seat with its category colour and only overrides it once the
+   * seat is held/sold/selected. 3D used one flat green for every available seat,
+   * which threw away the price-tier read on switching views and made a full
+   * house look like a status map instead of a venue.
+   */
+  iCategory: Float32Array;
   /**
    * float per instance: the largest world radius this dot may take, metres.
    *
@@ -177,10 +215,14 @@ export function buildSeatInstances(
   initial?: (seat: ExpandedSeat) => SeatState3D,
   surfaces?: VenueSurfaces,
   seatFloor?: Float32Array,
+  /** categoryKey -> display colour, for the AVAILABLE tint. Omitted by direct
+   *  callers and tests, which then get the flat state green as before. */
+  categoryColor?: Map<string, string>,
 ): SeatInstanceData {
   const count = seats.length;
   const iPosition = new Float32Array(count * 3);
   const iState = new Float32Array(count);
+  const iCategory = new Float32Array(count * 3);
   const iMaxRadius = new Float32Array(count);
   const iChairWidth = new Float32Array(count);
   const iRing = new Float32Array(count * 3);
@@ -211,6 +253,16 @@ export function buildSeatInstances(
     iPosition[i * 3 + 1] = surfaces ? surfaces.seatDeckY(i) : seatSurfaceY(seat);
     iPosition[i * 3 + 2] = seat.y * M;
     iState[i] = seatStateIndex(initial ? initial(seat) : 'available');
+    // The seat's CATEGORY colour, which is what 2D paints a free seat with
+    // (`SeatmapRenderer.paintSeat` -> `seatBaseColor(categoryKey)`). 3D painted
+    // every available seat one flat green instead, so a venue lost its price
+    // tiers the moment a buyer switched view — and at seat level a hall of
+    // identical green read as a diagram rather than a room. Falls back to the
+    // same #6e7bff 2D uses when a category has no colour.
+    const cat = hexToRgb(categoryColor?.get(seat.categoryKey) ?? '#6e7bff') ?? [0.43, 0.48, 1.0];
+    iCategory[i * 3] = cat[0];
+    iCategory[i * 3 + 1] = cat[1];
+    iCategory[i * 3 + 2] = cat[2];
     // Same source of truth as 2D: the ring colour is derived from the seat's
     // accessibility types, so the two views cannot disagree about which seat is
     // an accessible one.
@@ -221,7 +273,7 @@ export function buildSeatInstances(
     idToIndex.set(seat.id, i);
   }
   return {
-    count, iPosition, iState, iMaxRadius, iRing, idToIndex, iChairWidth,
+    count, iPosition, iState, iCategory, iMaxRadius, iRing, idToIndex, iChairWidth,
     iFloor: seatFloor ?? new Float32Array(count),
     iYaw: new Float32Array(count),
   };

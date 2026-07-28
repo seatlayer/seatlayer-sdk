@@ -16,7 +16,16 @@
  */
 
 /** Local-space part id, so the fragment stage can treat the three boxes apart. */
-export const CHAIR_PART = { pedestal: 0, pad: 1, back: 2 } as const;
+export const CHAIR_PART = { pedestal: 0, pad: 1, back: 2, body: 3, head: 4 } as const;
+
+/**
+ * Parts at or above this index belong to the OCCUPANT, not the chair.
+ *
+ * They are collapsed to nothing on an empty seat (see the chair vertex shader),
+ * which is how one instanced mesh draws both a bare seat and a taken one without
+ * a second draw call or a second geometry.
+ */
+export const CHAIR_PART_OCCUPANT_MIN = CHAIR_PART.body;
 
 export interface ChairMesh {
   /**
@@ -139,6 +148,37 @@ const BOXES: Array<{
     part: CHAIR_PART.back,
     min: [-1.00, BACK_BASE_M, -1.00],
     max: [1.00, 0.92, -0.72],
+  },
+  // --- the occupant ---------------------------------------------------------
+  //
+  // A hall with every seat empty reads as an architectural model, not a venue.
+  // The 2048-px panorama this replaced drew a crowd; losing it was the price of
+  // sharpness, and this is how it is bought back — in geometry, where there is
+  // no resolution ceiling.
+  //
+  // Deliberately two blocks and no limbs. At the range these are visible a
+  // person is a torso and a head, and every extra part multiplies by the number
+  // of occupied seats in view. The silhouette is what carries it, exactly as it
+  // does in the generated panorama's head-and-shoulder figures.
+  //
+  // Sized as a seated adult against the 0.92 m chair back: hips at the pad top,
+  // shoulders just above the back panel, head clear of it. Torso is narrower
+  // than the chair so neighbours never interpenetrate at any pitch, and it sits
+  // forward of the back panel rather than inside it.
+  {
+    part: CHAIR_PART.body,
+    min: [-0.66, PAD_TOP_M, -0.58],
+    max: [0.66, 1.00, 0.26],
+  },
+  // The head is deliberately SMALL. Sized by eye against the chair it came out
+  // near-cubic and read as Lego; a real head is about 0.16 m across and 0.22 m
+  // tall, which against a 0.24 m chair half-width is roughly a third of the
+  // chair's width and clearly taller than it is wide. Getting this ratio wrong
+  // is what makes a crowd look like toys rather than people.
+  {
+    part: CHAIR_PART.head,
+    min: [-0.34, 1.03, -0.40],
+    max: [0.34, 1.27, 0.02],
   },
 ];
 

@@ -22,6 +22,15 @@ import polygonClipping from 'polygon-clipping';
 import { buildSeatInstances, SEAT_DOT_RADIUS_M, type SeatInstanceData } from './seatInstances';
 import { computeSeatYaw } from './seatChair';
 import { buildVenueSurfaces, CAP_MAX_ERROR_M, type SectionSurface } from './surface';
+
+/** Axis-aligned stage footprint in world metres. */
+export interface StageBounds {
+  cx: number;
+  cz: number;
+  y: number;
+  halfX: number;
+  halfZ: number;
+}
 import { emitDeckBands, deckFootprints, rowNeighbourhoods } from './deckBands';
 
 /** One resolved plane of geometry — a single-floor chart is one of these. */
@@ -105,6 +114,16 @@ export interface SceneModel {
   focalWorld: [number, number, number];
   /** The venue's zones, in authored order. Empty when the chart has none. */
   zones: SceneZone[];
+  /**
+   * Stage footprints in world metres.
+   *
+   * Collected for stage lighting, which is not shipped: additive cones were
+   * built, placed correctly and still could not be read from a seat (see
+   * `git log` for `stageLight.ts`). The bounds stay because they are cheap,
+   * correct, and exactly what a second attempt needs — the geometry was never
+   * the hard part, the technique was.
+   */
+  stages: StageBounds[];
   /** Seated sections, in authored order — the navigable middle rung. */
   sections: SceneSection[];
   /**
@@ -572,11 +591,35 @@ function shapePolygon(shape: Extract<ChartObject, { type: 'shape' }>): Point[] |
   return null; // line / polyline are stroke-only
 }
 
-function buildShape(builder: MeshBuilder, shape: Extract<ChartObject, { type: 'shape' }>, base: number, S: typeof STRUCTURE): void {
+function buildShape(
+  builder: MeshBuilder,
+  shape: Extract<ChartObject, { type: 'shape' }>,
+  base: number,
+  S: typeof STRUCTURE,
+  /** Collects the footprint of each STAGE, for the lighting rig above it. */
+  stages?: StageBounds[],
+): void {
   const poly = shapePolygon(shape);
   if (!poly) return;
   const isStage = shape.role === 'stage';
   const height = isStage ? base + 1.0 : base + 0.25;
+  if (isStage && stages) {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const pt of poly) {
+      if (pt.x < minX) minX = pt.x;
+      if (pt.x > maxX) maxX = pt.x;
+      if (pt.y < minZ) minZ = pt.y;
+      if (pt.y > maxZ) maxZ = pt.y;
+    }
+    // Chart units -> world metres, matching every other position in the scene.
+    stages.push({
+      cx: ((minX + maxX) / 2) * M,
+      cz: ((minZ + maxZ) / 2) * M,
+      y: height,
+      halfX: Math.max(((maxX - minX) / 2) * M, 0.5),
+      halfZ: Math.max(((maxZ - minZ) / 2) * M, 0.5),
+    });
+  }
   // An authored `fill` is what the 2D renderer paints this shape (see
   // `renderShape`), and 3D used to discard it for a fixed grey — so an organizer
   // who coloured their stage, dance floor or pitch saw it in the map and lost it
@@ -737,6 +780,7 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
   const sectionFills = resolveSectionFills(doc, seats);
   const catColor = new Map<string, string>();
   for (const c of doc.categories ?? []) catColor.set(c.key, c.color);
+  const stageBounds: StageBounds[] = [];
 
   // ONE seating surface per section, resolved from the same model layout.ts uses
   // for eye heights. Consumed below by the tier caps and by the seat instances.
@@ -753,7 +797,7 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
     const siblings = unit.objects.filter((o): o is SectionObject => o.type === 'section' && !!o.outline && o.outline.length >= 3);
     for (const o of unit.objects) {
       if (o.type === 'section') buildTier(builder, o, unit, sectionFill(o, sectionFills), surfaces.bySection.get(o.id), claimed, siblings, S);
-      else if (o.type === 'shape') buildShape(builder, o, unit.baseHeightM, S);
+      else if (o.type === 'shape') buildShape(builder, o, unit.baseHeightM, S, stageBounds);
       else if (o.type === 'gaArea') buildGa(builder, o, unit.baseHeightM, hexToRgb(catColor.get(o.categoryKey)), S);
       else if (o.type === 'booth') buildBooth(builder, o, unit.baseHeightM, hexToRgb(catColor.get(o.categoryKey)), S);
       else if (o.type === 'table') buildTable(builder, o, unit.baseHeightM, hexToRgb(catColor.get(o.categoryKey)), S);
@@ -775,7 +819,7 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
   // that rework; re-enabling it as-is is not the intended path.
 
   const solids = mergeMeshData([builder.build()]);
-  const seatData: SeatInstanceData = buildSeatInstances(seats, input.initialState, surfaces, seatFloor);
+  const seatData: SeatInstanceData = buildSeatInstances(seats, input.initialState, surfaces, seatFloor, catColor);
 
   // --- Zones -----------------------------------------------------------------
   // Resolved from the SEATS, not the section outlines: a zone's meaning to a
@@ -1062,6 +1106,7 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
     // Look-at target ~1.5 m up so a seated camera aims slightly down at the stage.
     focalWorld: [focal.x * M, 1.5, focal.y * M],
     zones,
+    stages: stageBounds,
     sections,
     labels,
     floors,

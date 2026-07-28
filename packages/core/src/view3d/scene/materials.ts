@@ -184,13 +184,14 @@ const CHAIR_VERT = /* glsl */ `#version 300 es
 precision highp float;
 in vec3 position;      // local: x/z in units of the seat radius, y in METRES
 in vec3 normal;
-in float part;         // 0 = pedestal, 1 = pad, 2 = back
+in float part;         // 0 = pedestal, 1 = pad, 2 = back, 3 = body, 4 = head
 in vec3 iOffset;       // per-instance world deck point (identical to the dot's)
 in vec3 iColor;        // per-instance state colour
 in float iRadius;      // per-instance horizontal half-width, world metres
 in float iYaw;         // per-instance facing, radians (local +Z -> facing dir)
 in vec3 iRing;         // accommodation ring colour; (0,0,0) = not accessible
 in float iFloor;
+in float iSeed;        // <0 = seat is empty; else per-person hash in [0,1)
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
 uniform float uChairFull;
@@ -206,6 +207,8 @@ out float vPart;
 out float vHeight;   // local height in metres, for the vertical occlusion ramp
 out vec3 vRing;
 out float vDim;
+out float vOccupant; // 1 = this vertex belongs to a person, not to the chair
+out vec3 vOccupantTint;
 ${CHAIR_WEIGHT_GLSL}
 void main() {
   vec4 anchor = modelViewMatrix * vec4(iOffset, 1.0);
@@ -214,12 +217,35 @@ void main() {
   //    chairs, but nobody gets a short one (people are the same height at every
   //    seat pitch).
   vec3 p = position;
+  // The occupant. Parts 3 and 4 are a person; everything below is furniture.
+  //
+  // One instanced mesh draws both an empty seat and a taken one, because the
+  // alternative — a second geometry and a second draw call gathered per frame —
+  // would double the near-field cost to show what is already known per instance.
+  // An unoccupied seat collapses its person to a point at the seat, which the
+  // rasteriser discards, exactly as the chair itself collapses at w=0.
+  float occupant = step(2.5, part);
+  float taken = step(0.0, iSeed);
+  vOccupant = occupant;
+  if (occupant > 0.5) {
+    if (taken < 0.5) {
+      p = vec3(0.0);          // empty seat: no person
+    } else {
+      // Vary the build so a sold-out row is people rather than a rank of
+      // identical mannequins: +/-6% height and +/-8% width off the hash.
+      p.y *= 0.94 + 0.12 * iSeed;
+      p.xz *= 0.92 + 0.16 * fract(iSeed * 7.13);
+    }
+  }
   p.xz *= iRadius;
   // 2. Lean the back. Done here rather than in the base mesh so the lean is a
   //    real angle in METRES — baked into the mesh it would scale with the seat's
   //    width and the same chair would lean 20 degrees on a wide stadium row and
   //    6 on a tight theatre one.
-  float rake = (part > 1.5) ? max(p.y - uBackBase, 0.0) * uBackRake : 0.0;
+  // Only the BACK panel rakes. The old test (part > 1.5) meant "the back", and
+  // now also catches the occupant — leaning a person by the panel's rule would
+  // translate their head backwards by a rake measured from the panel's base.
+  float rake = (part > 1.5 && part < 2.5) ? max(p.y - uBackBase, 0.0) * uBackRake : 0.0;
   p.z -= rake;
   // 3. Scale-in. At w=0 the chair is a point at the seat, under a dot at full
   //    opacity — which is what makes the handover invisible. sqrt front-loads
@@ -233,7 +259,7 @@ void main() {
   // unchanged; and the rake is a shear, whose normal transform adds a y term.
   // Skipping either lights the raked back as though it were still vertical.
   vec3 n = vec3(normal.x / iRadius, normal.y, normal.z / iRadius);
-  if (part > 1.5) n.y += uBackRake * n.z;
+  if (part > 1.5 && part < 2.5) n.y += uBackRake * n.z;
   n = normalize(n);
   vec3 rn = vec3(n.x * c + n.z * s, n.y, -n.x * s + n.z * c);
   vec4 mv = modelViewMatrix * vec4(iOffset + rp, 1.0);
@@ -241,6 +267,15 @@ void main() {
   vNormalWorld = rn;
   vNormalView = normalize(mat3(modelViewMatrix) * rn);
   vColor = iColor;
+  // Occupant colour, resolved here so the fragment stage needs no extra
+  // varyings beyond this one. A person is NOT painted in the seat's state
+  // colour: a sold seat is red, and a hall of red people reads as a warning,
+  // not an audience. Hair/clothing for the body, a warm tone for the head,
+  // both varied by the same per-person hash.
+  float t = fract(iSeed * 3.71);
+  vec3 clothes = mix(vec3(0.13, 0.15, 0.20), vec3(0.34, 0.30, 0.36), t);
+  vec3 skin = mix(vec3(0.52, 0.38, 0.29), vec3(0.86, 0.70, 0.58), fract(iSeed * 11.3));
+  vOccupantTint = (part > 3.5) ? skin : clothes;
   vPart = part;
   vHeight = position.y;
   vRing = iRing;
@@ -258,6 +293,8 @@ in float vPart;
 in float vHeight;
 in vec3 vRing;
 in float vDim;
+in float vOccupant;
+in vec3 vOccupantTint;
 uniform vec3 uKeyDir;
 uniform vec3 uFadeColor;
 out vec4 fragColor;
@@ -270,6 +307,7 @@ void main() {
   vec3 fillDir = normalize(vec3(-uKeyDir.x, 0.25, -uKeyDir.z));
   float fill = max(dot(N, fillDir), 0.0);
   vec3 tint = vColor;
+  if (vOccupant > 0.5) tint = vOccupantTint;
   // The accommodation ring, kept legible once the dot (which drew it) is gone:
   // an accessible seat's PEDESTAL is painted in the ring colour, so the marker
   // survives to close range instead of vanishing exactly when the buyer arrives.
@@ -278,12 +316,16 @@ void main() {
   // Pad brightest, back a step below it, pedestal darkest. Three untextured
   // boxes only read as one object if they are separated tonally — with a single
   // flat colour the chair silhouettes as a crate.
-  float partShade = vPart < 0.5 ? 0.50 : (vPart < 1.5 ? 1.10 : 0.80);
+  // A person is lit as a person, not as upholstery: no part shading, and less
+  // of the pad's sheen, so a head does not read as a polished box.
+  float partShade = vOccupant > 0.5 ? 0.95 : (vPart < 0.5 ? 0.50 : (vPart < 1.5 ? 1.10 : 0.80));
   // Cheap vertical occlusion: a chair is in a dense row, so the closer a surface
   // sits to the deck the less sky it can actually see. This is the depth cue —
   // without it the pad top, the back and the deck all resolve to the same flat
   // value and the row loses its form entirely.
-  float ao = mix(0.58, 1.0, clamp(vHeight / 0.92, 0.0, 1.0));
+  // Occupants rise above the 0.92 m chair back, so their ramp uses their own
+  // height or every head would clamp to full brightness and float.
+  float ao = mix(0.58, 1.0, clamp(vHeight / (vOccupant > 0.5 ? 1.30 : 0.92), 0.0, 1.0));
   vec3 base = tint * partShade * ao * (0.52 + 0.40 * hemi) + tint * key * 0.38 + tint * fill * 0.10;
   float fres = pow(1.0 - max(dot(normalize(vNormalView), V), 0.0), 3.0);
   // A brighter rim than the solids get: it picks out every chair's own edge,

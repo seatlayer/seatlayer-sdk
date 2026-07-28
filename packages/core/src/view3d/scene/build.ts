@@ -11,12 +11,12 @@
  */
 
 import { Geometry, Mesh, Program, Transform, type OGLRenderingContext } from 'ogl';
-import { SEAT_STATES, type RGB } from '../palette';
+import { SEAT_STATES, upholsteryTone, type RGB } from '../palette';
 import { createBackgroundProgram, createChairProgram, createSeatProgram, createSolidProgram } from './materials';
 import { CHAIR_MAX_INSTANCES } from '../lod';
 import { buildChairMesh } from './seatChair';
 import type { SceneModel } from './sceneModel';
-import type { DirtyRun } from './seatInstances';
+import { seatOccupantSeed, type DirtyRun } from './seatInstances';
 
 /**
  * Fill an iColor buffer range from the current iState values (state → colour).
@@ -24,12 +24,26 @@ import type { DirtyRun } from './seatInstances';
  * Reads the THEME's colours, not the module palette, so an organizer's brand
  * selection colour applies to the 3D seats as it already does in the picker.
  */
-function writeSeatColors(iColor: Float32Array, iState: Float32Array, start: number, count: number, states: readonly RGB[]): void {
+function writeSeatColors(
+  iColor: Float32Array,
+  iState: Float32Array,
+  start: number,
+  count: number,
+  states: readonly RGB[],
+  /** Per-instance category colours; an AVAILABLE seat wears its own. */
+  iCategory?: Float32Array,
+): void {
   for (let i = start; i < start + count; i++) {
-    const c = states[iState[i]] ?? states[0];
-    iColor[i * 3] = c[0];
-    iColor[i * 3 + 1] = c[1];
-    iColor[i * 3 + 2] = c[2];
+    // State index 0 is 'available'. It is the only state that defers to the
+    // category, exactly as 2D does: `paintSeat` fills a free seat with
+    // `seatBaseColor(categoryKey)` and only overrides once it is held, sold or
+    // selected. Those overrides carry information the category cannot, so they
+    // must keep winning.
+    const useCategory = iCategory && iState[i] === 0;
+    const c = useCategory ? null : (states[iState[i]] ?? states[0]);
+    iColor[i * 3] = c ? c[0] : iCategory![i * 3];
+    iColor[i * 3 + 1] = c ? c[1] : iCategory![i * 3 + 1];
+    iColor[i * 3 + 2] = c ? c[2] : iCategory![i * 3 + 2];
   }
 }
 
@@ -98,7 +112,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
   const seatProg = createSeatProgram(gl);
   const iColor = new Float32Array(model.seats.count * 3);
   const stateColors: RGB[] = SEAT_STATES.map((st) => model.theme.seatStates[st]);
-  writeSeatColors(iColor, model.seats.iState, 0, model.seats.count, stateColors);
+  writeSeatColors(iColor, model.seats.iState, 0, model.seats.count, stateColors, model.seats.iCategory);
   const seatGeo = new Geometry(gl, {
     position: { size: 2, data: SEAT_QUAD },
     iOffset: { size: 3, data: model.seats.iPosition, instanced: 1 },
@@ -130,6 +144,13 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
   const cYaw = new Float32Array(CAP);
   const cRing = new Float32Array(CAP * 3);
   const cFloor = new Float32Array(CAP);
+  // Occupancy + a stable per-person variation, in one attribute.
+  //
+  // Negative means the seat is EMPTY and the occupant geometry collapses. A
+  // non-negative value is a per-seat hash in [0,1) that varies build and skin
+  // tone, so a full row is not a rank of identical mannequins — the same trick
+  // the generated panorama used on its silhouettes.
+  const cSeed = new Float32Array(CAP);
   const chairGeo = new Geometry(gl, {
     position: { size: 3, data: chairBase.position },
     normal: { size: 3, data: chairBase.normal },
@@ -141,6 +162,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
     iYaw: { size: 1, data: cYaw, instanced: 1 },
     iRing: { size: 3, data: cRing, instanced: 1 },
     iFloor: { size: 1, data: cFloor, instanced: 1 },
+    iSeed: { size: 1, data: cSeed, instanced: 1 },
   });
   const chairMesh = new Mesh(gl, { geometry: chairGeo, program: chairProg });
   chairMesh.frustumCulled = false;
@@ -152,10 +174,22 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
     const src = model.seats;
     for (let k = 0; k < nearCount; k++) {
       const i = nearIndices[k];
-      const c = stateColors[src.iState[i]] ?? stateColors[0];
-      cColor[k * 3] = c[0];
-      cColor[k * 3 + 1] = c[1];
-      cColor[k * 3 + 2] = c[2];
+      // An available chair wears its category as UPHOLSTERY, not as the map's
+      // full-strength tier colour. Only the category case is muted: held, sold
+      // and selected are saying something the buyer needs to see from where they
+      // are sitting, and quietening those would lose real information.
+      const useCategory = src.iCategory && src.iState[i] === 0;
+      const c = useCategory ? null : (stateColors[src.iState[i]] ?? stateColors[0]);
+      if (c) {
+        cColor[k * 3] = c[0];
+        cColor[k * 3 + 1] = c[1];
+        cColor[k * 3 + 2] = c[2];
+      } else {
+        const u = upholsteryTone([src.iCategory[i * 3], src.iCategory[i * 3 + 1], src.iCategory[i * 3 + 2]]);
+        cColor[k * 3] = u[0];
+        cColor[k * 3 + 1] = u[1];
+        cColor[k * 3 + 2] = u[2];
+      }
     }
     chairGeo.attributes.iColor.needsUpdate = true;
   };
@@ -195,6 +229,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
         cRing[k * 3 + 1] = src.iRing[i * 3 + 1];
         cRing[k * 3 + 2] = src.iRing[i * 3 + 2];
         cFloor[k] = src.iFloor[i];
+        cSeed[k] = seatOccupantSeed(src.iState[i], i);
       }
       writeChairColors();
       chairGeo.attributes.iOffset.needsUpdate = true;
@@ -202,6 +237,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
       chairGeo.attributes.iYaw.needsUpdate = true;
       chairGeo.attributes.iRing.needsUpdate = true;
       chairGeo.attributes.iFloor.needsUpdate = true;
+      chairGeo.attributes.iSeed.needsUpdate = true;
       chairGeo.instancedCount = n;
       if (!chairMesh.parent) chairMesh.setParent(main);
       scene.drawCalls = 4;
@@ -218,7 +254,13 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
       if (nearCount) writeChairColors();
       // Refresh only the changed instance colours from the (already-mutated)
       // iState, then upload just those contiguous ranges — never the whole buffer.
-      for (const run of runs) writeSeatColors(iColor, model.seats.iState, run.start, run.length, stateColors);
+      // iCategory must be passed HERE too, not just on the initial fill: a seat
+      // whose hold expires goes back to 'available', and without it that seat
+      // would repaint flat green while every untouched neighbour kept its
+      // category colour.
+      for (const run of runs) {
+        writeSeatColors(iColor, model.seats.iState, run.start, run.length, stateColors, model.seats.iCategory);
+      }
       const buffer = colorAttr.buffer;
       if (!buffer) {
         // Not uploaded yet (no draw has happened) — full upload on next draw.

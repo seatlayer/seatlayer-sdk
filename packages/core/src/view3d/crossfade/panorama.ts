@@ -12,6 +12,21 @@
 
 export interface SeatView {
   url: string;
+  /**
+   * True when `url` is a SYNTHESISED panorama rather than a real photograph.
+   *
+   * It decides which of two very different things the buyer gets, so the caller
+   * must say rather than the renderer guess. A generated equirect is a picture
+   * of a 3D scene the renderer already has: at 2048×1024 it covers 106° of
+   * horizontal view in ~600 source pixels, which a 3072-device-pixel viewport
+   * magnifies FIVE times, and no amount of art survives that. So a generated
+   * view is not drawn as an image at all — the camera simply looks around the
+   * real scene, which has no resolution ceiling.
+   *
+   * A real photo has no such substitute and goes on the sphere, where a 5760 or
+   * 8192-wide capture has three to four times the detail to give.
+   */
+  generated?: boolean;
   /** Bearing (deg, 0 = facing the focal/stage) the panorama should open centred
    * on, to match the camera's final yaw. Default 0 (both face the stage). */
   initialBearingDeg?: number;

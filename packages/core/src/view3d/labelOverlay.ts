@@ -90,6 +90,21 @@ export class LabelOverlay {
     container.appendChild(this.root);
   }
 
+  /**
+   * Hide or show the whole overlay without disturbing which labels exist.
+   *
+   * The in-scene panorama sphere is GL, so it draws BEHIND every DOM label —
+   * row and seat labels floated on top of a 360 photo until this existed. The
+   * old DOM panorama never needed it because its opaque div covered them.
+   *
+   * Deliberately not `setLabels([])`: that destroys the nodes and the declutter
+   * state, so closing the panorama would rebuild and re-rank the whole overlay
+   * and flash. Visibility is a view concern, not a data one.
+   */
+  setVisible(visible: boolean): void {
+    this.root.style.visibility = visible ? '' : 'hidden';
+  }
+
   setLabels(labels: SceneLabel[]): void {
     this.labels = labels;
     for (const [id, node] of this.nodes) {

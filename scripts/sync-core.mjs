@@ -108,6 +108,12 @@ const FILES = [
   ['src/view3d/camera/cinematicMath.ts', 'packages/core/src/view3d/camera/cinematicMath.ts'],
   ['src/view3d/camera/orbit.ts', 'packages/core/src/view3d/camera/orbit.ts'],
   ['src/view3d/crossfade/panorama.ts', 'packages/core/src/view3d/crossfade/panorama.ts'],
+  // The 360 sphere (2026-07-28). `panoramaSphere` mounts an equirect on real
+  // geometry inside the venue scene instead of fading a bitmap over a frozen
+  // frame, and `panoSphere` is the mesh it draws. `view3d/index` imports the
+  // mount, so both are part of the buildable dependency closure.
+  ['src/view3d/crossfade/panoramaSphere.ts', 'packages/core/src/view3d/crossfade/panoramaSphere.ts'],
+  ['src/view3d/scene/panoSphere.ts', 'packages/core/src/view3d/scene/panoSphere.ts'],
   ['src/view3d/gl/context.ts', 'packages/core/src/view3d/gl/context.ts'],
   ['src/view3d/pick/encode.ts', 'packages/core/src/view3d/pick/encode.ts'],
   ['src/view3d/pick/pickPipeline.ts', 'packages/core/src/view3d/pick/pickPipeline.ts'],

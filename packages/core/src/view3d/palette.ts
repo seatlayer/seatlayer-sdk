@@ -29,6 +29,33 @@ export const SEAT_STATE_COLORS: Record<SeatState3D, RGB> = {
   dimmed: [0.28, 0.32, 0.37],
 };
 
+/**
+ * A category colour as UPHOLSTERY — what that seat looks like from inside the
+ * room rather than from above it.
+ *
+ * The same colour has two jobs at two ranges. On the map it is a price tier and
+ * must be legible at a glance across a whole venue, so it is saturated. At eye
+ * level it is a fabric-covered chair a metre away, and the saturated version
+ * reads as moulded plastic: an amphitheatre whose tiers are pink, gold and blue
+ * arrives at the seat looking like a toy.
+ *
+ * So the near-field chair wears a muted version — desaturated toward its own
+ * luminance and darkened. Hue survives, which is the point: a buyer sitting in
+ * the Terrace can still see where the Orchestra ends, they just are not sitting
+ * in a bag of sweets. The DOT keeps the full colour, so nothing changes about
+ * reading the map.
+ */
+export function upholsteryTone(rgb: RGB): RGB {
+  const luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+  const SAT = 0.42;   // how much original hue survives
+  const VALUE = 0.62; // and how much of its brightness
+  return [
+    (luma + (rgb[0] - luma) * SAT) * VALUE,
+    (luma + (rgb[1] - luma) * SAT) * VALUE,
+    (luma + (rgb[2] - luma) * SAT) * VALUE,
+  ];
+}
+
 /** Flat LUT (5 × vec3) for the seat fragment shader uniform. */
 export function seatStateColorLUT(): number[] {
   const out: number[] = [];
@@ -48,8 +75,22 @@ export const STRUCTURE = {
   ground: [0.07, 0.085, 0.11] as RGB,
   tierTop: [0.24, 0.28, 0.34] as RGB,
   tierWall: [0.17, 0.20, 0.25] as RGB,
-  stageTop: [0.42, 0.36, 0.26] as RGB, // warm, slightly emissive read
-  stageWall: [0.26, 0.22, 0.16] as RGB,
+  /**
+   * The lit performance surface.
+   *
+   * This was [0.42, 0.36, 0.26] and commented "slightly emissive read", which it
+   * was not — under the scene's rig it resolved to a mid-brown slab, and from a
+   * seat the stage was the DIMMEST large surface in a dark hall. That is exactly
+   * backwards: the stage is the one place in a venue with light pointed at it,
+   * and it is what a buyer's eye should land on when they arrive at their seat.
+   *
+   * Bright and warm enough to hold that role against the surrounding structure,
+   * which sits around 0.24. An authored `fill` still tints it (see `buildShape`),
+   * so an organizer's own stage colour survives — it is just no longer lit like
+   * a basement.
+   */
+  stageTop: [0.86, 0.64, 0.36] as RGB,
+  stageWall: [0.34, 0.26, 0.18] as RGB,
   decorTop: [0.22, 0.25, 0.29] as RGB,
   decorWall: [0.15, 0.17, 0.20] as RGB,
   gaTop: [0.24, 0.28, 0.33] as RGB,
