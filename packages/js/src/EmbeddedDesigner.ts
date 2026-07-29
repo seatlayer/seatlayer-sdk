@@ -20,6 +20,17 @@ export interface EmbeddedDesignerMessage {
   code?: string;
   message?: string;
   meta?: unknown;
+  /**
+   * Set by the Designer on an error it raised while the editor was already
+   * running (a failed autosave, thumbnail upload, reload…). Such an error is
+   * about ONE operation, not about the session, so the SDK reports it to the
+   * host and leaves the live editor mounted instead of replacing it with the
+   * dead-end card. Absent on older Designer builds — see
+   * {@link EmbeddedDesigner} for the phase-based fallback.
+   */
+  fatal?: boolean;
+  /** The operation that failed, when `fatal` is `false` (e.g. `'save'`). */
+  action?: string;
 }
 
 export interface EmbeddedDesignerOptions {
@@ -872,7 +883,18 @@ export class EmbeddedDesigner {
           this.options.onRequestRelaunch!();
           return;
         }
-        this.showError(cause);
+        // Only a dead session justifies tearing the editor down. An operation
+        // that failed inside a running editor (autosave hitting a transient 5xx,
+        // a thumbnail upload) leaves the session and the user's work intact, so
+        // it is reported to the host and surfaced by the Designer's own in-editor
+        // banner — replacing the canvas with "We couldn't load the designer"
+        // would be both wrong and destructive. `fatal` is authoritative when the
+        // Designer sends it; otherwise we fall back to the phase, which is the
+        // same signal (we already had a `ready`).
+        const fatal = typeof message.fatal === 'boolean'
+          ? message.fatal
+          : (cause !== 'load' || this.phase !== 'ready');
+        if (fatal) this.showError(cause);
         this.options.onError?.(message);
         break;
       }

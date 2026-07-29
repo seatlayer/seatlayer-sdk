@@ -70,6 +70,42 @@ describe('EmbeddedDesigner loading state machine', () => {
     expect(onError).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps a live editor mounted when an operation fails after ready', () => {
+    const onError = vi.fn();
+    const designer = mountDesigner({ onError });
+    postFromFrame(designer, { type: 'seatlayer.designer.ready', chartId: 'ch_1' });
+    // A transient 5xx on autosave: the session is fine and the canvas holds the
+    // user's work, so the host must not swap it for the "couldn't load" card.
+    postFromFrame(designer, {
+      type: 'seatlayer.designer.error', code: 'save_failed', action: 'save', fatal: false,
+    });
+    expect(overlay()).toBeNull();
+    expect(container.querySelector('iframe')).not.toBeNull();
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the phase when an older Designer omits `fatal`', () => {
+    const designer = mountDesigner();
+    postFromFrame(designer, { type: 'seatlayer.designer.ready' });
+    postFromFrame(designer, { type: 'seatlayer.designer.error', code: 'save_failed' });
+    expect(overlay()).toBeNull();
+  });
+
+  it('still shows the error card when an operation fails before ready', () => {
+    const designer = mountDesigner();
+    postFromFrame(designer, { type: 'seatlayer.designer.error', code: 'load_failed' });
+    expect(overlayPhase()).toBe('error');
+  });
+
+  it('shows the error card for a fatal error after ready', () => {
+    const designer = mountDesigner();
+    postFromFrame(designer, { type: 'seatlayer.designer.ready' });
+    postFromFrame(designer, {
+      type: 'seatlayer.designer.error', code: 'designer_session_expired', fatal: true,
+    });
+    expect(overlayPhase()).toBe('error');
+  });
+
   it('transitions to the error card on loading timeout', () => {
     vi.useFakeTimers();
     mountDesigner({ loadingTimeoutMs: 5000 });
