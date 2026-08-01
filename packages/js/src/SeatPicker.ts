@@ -42,6 +42,17 @@ import {
 } from '@seatlayer/core';
 import type { Venue3DHandle, SeatView as View3DSeatView } from '@seatlayer/core/view3d';
 import { PubApi, type HoldLineItem, type HoldResult } from './api';
+import {
+  createBuyerAccessContext,
+  type BuyerAccessContext,
+  type BuyerAccessExpiredEvent,
+  type BuyerAccessToken,
+  type BuyerAccessTokenProvider,
+  type BuyerAccessUnavailableEvent,
+  type BuyerAccessUnavailableReason,
+  type SelectedObjectUnavailableEvent,
+} from './buyerAccess';
+import { BuyerRealtimeClient, createControllerSink } from './buyerRealtime';
 import { SEATLAYER_ATTRIBUTION_MARK_SVG } from './seatLayerBrand';
 
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
@@ -175,8 +186,37 @@ export interface SeatPickerOptions {
    * SeatLayer dashboard's own transport) or a fully local mock (demos).
    */
   transport?: PickerTransport;
-  /** Reserved for future authenticated rendering. */
+  /** Reserved for future authenticated rendering. NOT the channel-access
+   *  credential — a buyer access session is a different thing with different
+   *  authority, and uses the two options below. */
   publicKey?: string;
+  /**
+   * Buyer access session provider — the recommended way to show private channel
+   * inventory (Sales Channels guide §6).
+   *
+   * Called with a `reason` whenever the widget needs a bearer: first
+   * acquisition, a near/actual expiry, a 401 `buyer_access_expired`, a realtime
+   * reconnect, or `refreshAccess()`. It should POST to YOUR backend, which
+   * mints the session with your secret key and returns `{ token, expiresAt }`.
+   *
+   * The token lives in memory for the widget's lifetime and nowhere else: never
+   * in storage, never in a URL, never in a log or an error message. Refresh
+   * returns the same or a narrower scope; the widget never widens to Public
+   * sale on its own, and a failed refresh stops the scoped operation rather
+   * than retrying it anonymously. Any held seats stay held — a hold is
+   * relinquished by its own opaque capability, not by channel access, so
+   * losing access never strands inventory (guide §9).
+   *
+   * Ignored when a custom `transport` is supplied: that host owns its own
+   * credentials.
+   */
+  buyerAccessTokenProvider?: BuyerAccessTokenProvider;
+  /**
+   * One-shot escape hatch for hosts that already own the session lifecycle.
+   * Cannot be renewed — when it lapses the widget reports `onAccessExpired`
+   * and then `onAccessUnavailable`. Prefer `buyerAccessTokenProvider`.
+   */
+  buyerAccessToken?: string | BuyerAccessToken;
   /** Max seats selectable at once (default 10). */
   maxSelection?: number;
   /** BCP 47 language for the widget UI. Built-in: en, es, de, fr. */
@@ -289,6 +329,26 @@ export interface SeatPickerOptions {
   onHoldRestored?: (hold: HoldResult, seats: PickerSeat[], handoff: CheckoutHandoff) => void;
   /** Modal only: the buyer closed the picker (ESC / scrim / ✕). */
   onClose?: () => void;
+  /**
+   * The buyer access session lapsed. `refreshed` says whether the provider
+   * already recovered it — false means private inventory is now unavailable and
+   * `onAccessUnavailable` follows. Never collapsed into `onError`: an expiry is
+   * a recoverable, buyer-explainable state, not a network failure (guide §10).
+   */
+  onAccessExpired?: (event: BuyerAccessExpiredEvent) => void;
+  /**
+   * Private inventory is unavailable and refreshing will not fix it — revoked,
+   * paused, wrong origin/event/mode, or the provider failed. Carries a reason,
+   * never a channel name, id, colour or count. The widget shows its own
+   * explanatory panel; return nothing to keep it, or handle the state yourself.
+   */
+  onAccessUnavailable?: (event: BuyerAccessUnavailableEvent) => void;
+  /**
+   * Selected-but-unheld units stopped being selectable — someone else took
+   * them, or an allocation change moved them out of this buyer's scope. The
+   * widget has already dropped them from the tray.
+   */
+  onSelectedObjectUnavailable?: (event: SelectedObjectUnavailableEvent) => void;
   onError?: (err: unknown) => void;
 }
 
@@ -388,7 +448,12 @@ const STYLE_ID = 'seatlayer-picker-style';
 const CSS = `
 .sl-picker{position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-height:420px;overflow:hidden;
   background:var(--sl-bg);color:var(--sl-text);font-family:var(--sl-font);border-radius:var(--sl-radius);
-  --sl-r-sm:calc(var(--sl-radius) * .55)}
+  --sl-r-sm:calc(var(--sl-radius) * .55);
+  /* Motion tokens, defined ON the widget root so an embed is self-contained and
+     never inherits (or fights) the host page's own timing. Values mirror
+     docs/motion-system-2026-08-01.md §2. */
+  --slm-mo-instant:80ms;--slm-mo-quick:140ms;--slm-mo-base:200ms;--slm-mo-slow:320ms;
+  --slm-mo-out:cubic-bezier(0.2,0.8,0.2,1);--slm-mo-exit:cubic-bezier(0.4,0,1,1)}
 .sl-picker *{box-sizing:border-box;margin:0;padding:0}
 .sl-picker button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 
@@ -1092,9 +1157,24 @@ const CSS = `
 @keyframes slConfirmBelowIn{from{opacity:0;transform:translate(-50%,8px) scale(.96)}to{opacity:1;transform:translate(-50%,16px) scale(1)}}
 @keyframes slConfirmMobileIn{from{opacity:0;transform:translate(-50%,10px) scale(.97)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
 
+/* Access state (channels): the panel fades AND rises at --slm-mo-base. It never
+   covers the map — inventory is cross-faded to neutral by the canvas in one
+   batched pass, so nothing blinks away underneath it. */
+.sl-access{position:absolute;left:50%;bottom:18px;z-index:9;transform:translateX(-50%);
+  max-width:min(420px,calc(100% - 24px));display:flex;gap:12px;align-items:flex-start;
+  padding:12px 14px;border-radius:var(--sl-r-sm);background:var(--sl-panel,#151b2c);color:var(--sl-text);
+  border:1px solid var(--sl-line);box-shadow:0 18px 44px -18px rgba(0,0,0,.6);
+  animation:slAccessIn var(--slm-mo-base) var(--slm-mo-out) both}
+.sl-access-title{font-weight:700;font-size:13px}
+.sl-access-body{font-size:12px;line-height:1.5;opacity:.82;margin-top:2px}
+.sl-access-act{margin-top:8px;padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;
+  background:var(--sl-accent);color:var(--sl-accent-ink)}
+@keyframes slAccessIn{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
+
 @media(prefers-reduced-motion:reduce){
   .sl-picker *,.sl-modal-scrim *{animation-duration:.001ms!important;animation-iteration-count:1!important;
     transition-duration:.001ms!important;scroll-behavior:auto!important}
+  .sl-access{animation:none;opacity:1;transform:translate(-50%,0)}
 }
 .sl-ba [data-ba-zone]{grid-column:1/-1;width:100%}
 
@@ -1155,6 +1235,12 @@ function writeStoredColorblind(on: boolean): void {
 export class SeatPicker {
   private readonly opts: SeatPickerOptions;
   private readonly api: PickerTransport;
+  /** Our own public client, or null when the host injected a transport. */
+  private readonly pubApi: PubApi | null;
+  /** Null for the ordinary public picker — the tokenless path is untouched. */
+  private readonly access: BuyerAccessContext | null;
+  private realtime: BuyerRealtimeClient | null = null;
+  private accessEl: HTMLDivElement | null = null;
   private readonly apiBase: string;
   private readonly controller: PickerController;
   private readonly maxTickets: number;
@@ -1613,7 +1699,27 @@ export class SeatPicker {
     if (!options.container) throw new Error('seatmap: `container` is required (or use SeatPicker.open())');
     this.opts = { ...options, confirmSelection: options.confirmSelection ?? true };
     this.apiBase = (options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
-    this.api = options.transport ?? new PubApi(this.apiBase);
+    // A host-supplied transport owns its own credentials, so the access context
+    // is only built for our own PubApi.
+    this.access = options.transport
+      ? null
+      : createBuyerAccessContext(options, {
+        onExpired: (event) => {
+          this.opts.onAccessExpired?.(event);
+          if (!event.refreshed) this.showAccessPanel({ reason: 'no_token', retryable: false });
+        },
+        onUnavailable: (event) => {
+          this.opts.onAccessUnavailable?.(event);
+          this.showAccessPanel(event);
+        },
+      });
+    this.pubApi = options.transport
+      ? null
+      : new PubApi(this.apiBase, {
+        access: this.access ?? undefined,
+        onObjectUnavailable: (event) => this.opts.onSelectedObjectUnavailable?.(event),
+      });
+    this.api = options.transport ?? this.pubApi!;
     this.maxTickets = Math.max(1, Math.floor(options.maxSelection ?? DEFAULT_MAX_SELECTION));
     // Colorblind preference: the stored (cross-surface) value wins over the
     // option; the option is only the initial default when nothing is stored.
@@ -1920,6 +2026,7 @@ export class SeatPicker {
       return this;
     }
     this.els.boot.remove();
+    this.startRealtime();
     // Read-only load state: the chart() payload carries salesClosed.
     this.salesClosed = !!info.salesClosed;
     this.controller.setViewMode(this.normalizeInitialView(this.opts.initialView));
@@ -4962,8 +5069,166 @@ export class SeatPicker {
     this.emitHoldChange();
   }
 
+  // ---- buyer access (Sales Channels) ---------------------------------------
+
+  /**
+   * Realtime for an access-scoped picker.
+   *
+   * A tokenless picker never gets here: `access` is null, `PubApi.socketUrl()`
+   * returns the URL it always has, and PickerController keeps its own socket
+   * and its own legacy frames. Nothing about the public path changes.
+   */
+  private startRealtime(): void {
+    if (!this.access?.configured || !this.pubApi || this.realtime) return;
+    const event = this.opts.event;
+    this.realtime = new BuyerRealtimeClient({
+      url: this.pubApi.subscribeUrl(event),
+      mintTicket: () => this.pubApi!.subscribeTicket(event),
+      onAccessUnavailable: (state) => {
+        this.opts.onAccessUnavailable?.(state);
+        this.showAccessPanel(state);
+      },
+      sink: createControllerSink(this.controller, {
+        flashOnLiveChange: true,
+        onStatusChange: () => {
+          this.syncPrices();
+          this.detectBooked();
+          this.refreshMinimap();
+          this.pushAvailabilityTo3d();
+        },
+        onSelectedObjectUnavailable: (labels, reason) => {
+          this.opts.onSelectedObjectUnavailable?.({ labels, reason });
+          this.syncTray();
+          this.toast(
+            reason === 'ineligible'
+              ? this.tf(
+                'picker.seatNoLongerYours',
+                'Some seats are no longer available to you. They have been removed from your order.',
+              )
+              : this.tf(
+                'picker.seatTaken',
+                'Someone else took a seat you had picked. It has been removed from your order.',
+              ),
+            'warning',
+          );
+        },
+      }),
+    });
+    this.realtime.start();
+  }
+
+  /**
+   * Re-acquire the buyer access session — call after your app has re-authorized
+   * the buyer. A revoked session cannot recover any other way. Resolves true
+   * when a fresh bearer is held; the map and the realtime feed resume with it.
+   */
+  async refreshAccess(): Promise<boolean> {
+    if (!this.access?.configured) return false;
+    const ok = await this.access.refresh('manual');
+    if (!ok) return false;
+    this.dismissAccessPanel();
+    await this.controller.refresh();
+    if (this.realtime) this.realtime.restart();
+    else this.startRealtime();
+    return true;
+  }
+
+  /**
+   * The buyer-facing access state. Plain language, no internal vocabulary, and
+   * never a channel name, id or count — the buyer is told what happened and
+   * what to do, not which allocation they missed (guide §7, §10).
+   *
+   * Held seats are deliberately left alone: a hold is relinquished by its own
+   * opaque capability, not by channel access, so losing access never strands
+   * inventory and never silently drops a buyer's cart (guide §9).
+   */
+  private showAccessPanel(state: { reason: BuyerAccessUnavailableReason; retryable: boolean }): void {
+    if (this.destroyed || !this.root) return;
+    const copy = this.accessCopy(state.reason);
+    this.dismissAccessPanel();
+    const panel = document.createElement('div');
+    panel.className = 'sl-access';
+    panel.setAttribute('role', 'status');
+    panel.setAttribute('aria-live', 'polite');
+    const text = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'sl-access-title';
+    title.textContent = copy.title;
+    const body = document.createElement('div');
+    body.className = 'sl-access-body';
+    body.textContent = copy.body;
+    text.appendChild(title);
+    text.appendChild(body);
+    if (copy.action) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'sl-access-act';
+      button.textContent = copy.action;
+      button.addEventListener('click', () => {
+        void this.refreshAccess();
+      });
+      text.appendChild(button);
+    }
+    panel.appendChild(text);
+    (this.regions?.['bottom-center'] ?? this.root).appendChild(panel);
+    this.accessEl = panel;
+  }
+
+  private dismissAccessPanel(): void {
+    this.accessEl?.remove();
+    this.accessEl = null;
+  }
+
+  private accessCopy(reason: BuyerAccessUnavailableReason): {
+    title: string;
+    body: string;
+    action?: string;
+  } {
+    switch (reason) {
+      case 'paused':
+        return {
+          title: this.tf('picker.accessPausedTitle', 'These seats are on hold right now'),
+          body: this.tf(
+            'picker.accessPausedBody',
+            'The organizer has paused this selection. Try again in a few minutes.',
+          ),
+          action: this.tf('picker.accessRetry', 'Try again'),
+        };
+      case 'revoked':
+        return {
+          title: this.tf('picker.accessRevokedTitle', 'This access link is no longer active'),
+          body: this.tf(
+            'picker.accessRevokedBody',
+            'Ask whoever sent you here for a new link to keep booking these seats.',
+          ),
+        };
+      case 'no_token':
+      case 'provider_failed':
+        return {
+          title: this.tf('picker.accessExpiredTitle', 'Your access session has ended'),
+          body: this.tf(
+            'picker.accessExpiredBody',
+            'Sign in again, or reload the page, to keep browsing these seats. Anything you are already holding stays yours.',
+          ),
+          action: this.tf('picker.accessRetry', 'Try again'),
+        };
+      default:
+        return {
+          title: this.tf('picker.accessInvalidTitle', 'We couldn’t verify your access'),
+          body: this.tf(
+            'picker.accessInvalidBody',
+            'You can still book anything shown as available. Contact whoever sent you here for access to the rest.',
+          ),
+        };
+    }
+  }
+
   destroy(): void {
     this.destroyed = true;
+    this.realtime?.stop();
+    this.realtime = null;
+    this.dismissAccessPanel();
+    this.access?.clear();
     // Closing/tearing down before checkout means the buyer abandoned any
     // best-available hold. Release it server-side; a handed-off checkout keeps
     // its hold alive across the host's route transition.

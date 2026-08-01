@@ -7,7 +7,26 @@
 export { SeatingChart } from './SeatingChart';
 export type { SeatingChartOptions, SelectedSeat, GAAreaAvailability } from './SeatingChart';
 export { ApiError } from './api';
-export type { HoldResult, ResumedHoldResult, HoldConflict, HoldLineItem, BestAvailableResult } from './api';
+export type { HoldResult, ResumedHoldResult, HoldConflict, HoldLineItem, BestAvailableResult, PubApiOptions } from './api';
+// Sales Channels — buyer access sessions (private channel inventory).
+export { BuyerAccessContext, BuyerAccessUnavailableError, createBuyerAccessContext } from './buyerAccess';
+export type {
+  BuyerAccessToken,
+  BuyerAccessTokenProvider,
+  BuyerAccessRefreshReason,
+  BuyerAccessUnavailableReason,
+  BuyerAccessExpiredEvent,
+  BuyerAccessUnavailableEvent,
+  SelectedObjectUnavailableEvent,
+} from './buyerAccess';
+export { BuyerRealtimeClient, createControllerSink } from './buyerRealtime';
+export type {
+  RealtimeSink,
+  StatusChange,
+  Projection,
+  SubscribeTicket,
+  BuyerRealtimeOptions,
+} from './buyerRealtime';
 export { EmbeddedDesigner } from './EmbeddedDesigner';
 export type {
   EmbeddedDesignerOptions,

@@ -17,6 +17,16 @@ import {
   type SeatHoverDetails,
 } from '@seatlayer/core';
 import { PubApi, type BestAvailableResult, type HoldResult } from './api';
+import {
+  createBuyerAccessContext,
+  type BuyerAccessContext,
+  type BuyerAccessExpiredEvent,
+  type BuyerAccessToken,
+  type BuyerAccessTokenProvider,
+  type BuyerAccessUnavailableEvent,
+  type SelectedObjectUnavailableEvent,
+} from './buyerAccess';
+import { BuyerRealtimeClient, createControllerSink } from './buyerRealtime';
 import { SEATLAYER_ATTRIBUTION_MARK_SVG } from './seatLayerBrand';
 
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
@@ -39,8 +49,32 @@ export interface SeatingChartOptions {
   event: string;
   /** API origin. Defaults to https://api.seatlayer.io. */
   apiBase?: string;
-  /** Reserved for future authenticated rendering — accepted + stored, not yet sent. */
+  /** Reserved for future authenticated rendering — accepted + stored, not yet sent.
+   *  NOT the channel-access credential: a buyer access session is a different
+   *  thing with different authority, and uses the two options below. */
   publicKey?: string;
+  /**
+   * Buyer access session provider — the recommended way to render private
+   * channel inventory (Sales Channels guide §6).
+   *
+   * Called with a `reason` whenever the SDK needs a bearer: first acquisition,
+   * a near/actual expiry, a 401 `buyer_access_expired`, a realtime reconnect,
+   * or `refreshAccess()`. It should POST to YOUR backend, which mints the
+   * session with your secret key and returns `{ token, expiresAt }`.
+   *
+   * The token lives in memory for the widget's lifetime and nowhere else: never
+   * in storage, never in a URL, never in a log or an error message. Refresh
+   * returns the same or a narrower scope — the SDK never widens to Public sale
+   * on its own, and a failed refresh stops the scoped operation rather than
+   * retrying it anonymously.
+   */
+  buyerAccessTokenProvider?: BuyerAccessTokenProvider;
+  /**
+   * One-shot escape hatch for hosts that already own the session lifecycle.
+   * Cannot be renewed — when it lapses the widget reports `onAccessExpired`
+   * and then `onAccessUnavailable`. Prefer `buyerAccessTokenProvider`.
+   */
+  buyerAccessToken?: string | BuyerAccessToken;
   /** Max seats selectable at once (default 10). */
   maxSelection?: number;
   /**
@@ -85,6 +119,25 @@ export interface SeatingChartOptions {
   onHoldRestored?: (result: HoldResult) => void;
   onHoldExpired?: () => void;
   onGAClick?: (area: GAAreaAvailability) => void;
+  /**
+   * The buyer access session lapsed. `refreshed` says whether the provider
+   * already recovered it — false means private inventory is now unavailable and
+   * `onAccessUnavailable` follows. Distinct from `onError` on purpose: this is
+   * never a network failure (guide §10).
+   */
+  onAccessExpired?: (event: BuyerAccessExpiredEvent) => void;
+  /**
+   * Private inventory is unavailable and refreshing will not fix it — revoked,
+   * paused, wrong origin/event/mode, or the provider failed. Carries a reason,
+   * never a channel name, id, colour or count.
+   */
+  onAccessUnavailable?: (event: BuyerAccessUnavailableEvent) => void;
+  /**
+   * Selected-but-unheld units stopped being selectable — someone else took
+   * them, or an allocation change moved them out of this buyer's scope. The
+   * widget has already dropped them from the selection.
+   */
+  onSelectedObjectUnavailable?: (event: SelectedObjectUnavailableEvent) => void;
   onError?: (err: unknown) => void;
   /**
    * Multi-floor charts only: fires when the buyer taps a deck in the stacked
@@ -125,6 +178,10 @@ export class SeatingChart {
   private tipEl: HTMLDivElement | null = null;
   private tipPos = { x: 0, y: 0 };
   private onTipMove: ((e: MouseEvent) => void) | null = null;
+  /** Null for the ordinary public chart — the tokenless path is untouched. */
+  private readonly access: BuyerAccessContext | null;
+  private readonly api: PubApi;
+  private realtime: BuyerRealtimeClient | null = null;
 
   constructor(options: SeatingChartOptions) {
     if (!options || typeof options !== 'object') throw new Error('seatmap: options object is required');
@@ -133,7 +190,15 @@ export class SeatingChart {
 
     this.opts = options;
     this.publicKey = options.publicKey;
-    const api = new PubApi((options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, ''));
+    this.access = createBuyerAccessContext(options, {
+      onExpired: (event) => this.opts.onAccessExpired?.(event),
+      onUnavailable: (event) => this.opts.onAccessUnavailable?.(event),
+    });
+    const api = new PubApi((options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, ''), {
+      access: this.access ?? undefined,
+      onObjectUnavailable: (event) => this.opts.onSelectedObjectUnavailable?.(event),
+    });
+    this.api = api;
     this.controller = new PickerController({
       transport: api,
       eventKey: options.event,
@@ -188,6 +253,7 @@ export class SeatingChart {
       return this;
     }
     this.controller.setViewMode(this.opts.initialView ?? 'flat');
+    this.startRealtime();
     // The served event's mode. Anything the API does not explicitly mark as a
     // test event is a live one — the same rule the test-mode ribbon below uses.
     this.mode_ = info.mode === 'test' ? 'test' : 'live';
@@ -524,7 +590,48 @@ export class SeatingChart {
   }
 
   /** Tear everything down: close the socket, stop timers, drop the canvas. */
+  /**
+   * Realtime for an access-scoped chart.
+   *
+   * A tokenless chart never gets here: `access` is null, `PubApi.socketUrl()`
+   * returns the URL it always has, and PickerController keeps its own socket
+   * and its own legacy frames. Nothing about the public path changes.
+   */
+  private startRealtime(): void {
+    if (!this.access?.configured || this.realtime) return;
+    this.realtime = new BuyerRealtimeClient({
+      url: this.api.subscribeUrl(this.opts.event),
+      mintTicket: () => this.api.subscribeTicket(this.opts.event),
+      onAccessUnavailable: (event) => this.opts.onAccessUnavailable?.(event),
+      sink: createControllerSink(this.controller, {
+        flashOnLiveChange: true,
+        onSelectedObjectUnavailable: (labels, reason) =>
+          this.opts.onSelectedObjectUnavailable?.({ labels, reason }),
+      }),
+    });
+    this.realtime.start();
+  }
+
+  /**
+   * Re-acquire the buyer access session — call after your app has re-authorized
+   * the buyer (a revoked session cannot be recovered any other way). Resolves
+   * true when a fresh bearer is held; the realtime feed restarts with it.
+   */
+  async refreshAccess(): Promise<boolean> {
+    if (!this.access?.configured) return false;
+    const ok = await this.access.refresh('manual');
+    if (ok) {
+      await this.controller.refresh();
+      this.realtime?.restart();
+      if (!this.realtime) this.startRealtime();
+    }
+    return ok;
+  }
+
   destroy(): void {
+    this.realtime?.stop();
+    this.realtime = null;
+    this.access?.clear();
     if (this.hostEl && this.onTipMove) this.hostEl.removeEventListener('mousemove', this.onTipMove);
     this.tipEl = null;
     this.onTipMove = null;

@@ -29,6 +29,11 @@ export interface SeatPickerHandle {
   removeHeldTicket(label: string): Promise<boolean>;
   /** Release the current hold (if any) and reset the tray. */
   release(): Promise<void>;
+  /**
+   * Re-acquire the buyer access session after your app re-authorizes the buyer
+   * (Sales Channels). Resolves false when the picker is not access-scoped.
+   */
+  refreshAccess(): Promise<boolean>;
 }
 
 export interface SeatPickerProps extends Omit<SeatPickerOptions, 'container'> {
@@ -75,6 +80,15 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         onHoldExpired: () => callbacks.current.onHoldExpired?.(),
         onHoldRestored: (hold, seats, handoff) => callbacks.current.onHoldRestored?.(hold, seats, handoff),
         onError: (err) => callbacks.current.onError?.(err),
+        // Sales Channels. The provider is read through the ref for the same
+        // reason as every other callback: a host may pass an inline arrow.
+        buyerAccessTokenProvider: options.buyerAccessTokenProvider
+          ? (context) => callbacks.current.buyerAccessTokenProvider!(context)
+          : undefined,
+        onAccessExpired: (state) => callbacks.current.onAccessExpired?.(state),
+        onAccessUnavailable: (state) => callbacks.current.onAccessUnavailable?.(state),
+        onSelectedObjectUnavailable: (state) =>
+          callbacks.current.onSelectedObjectUnavailable?.(state),
       });
       pickerRef.current = picker;
       void picker.render();
@@ -99,6 +113,7 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         resumeHold: (holdId) => pickerRef.current?.resumeHold(holdId) ?? Promise.resolve(null),
         removeHeldTicket: (label) => pickerRef.current?.removeHeldTicket(label) ?? Promise.resolve(false),
         release: () => pickerRef.current?.release() ?? Promise.resolve(),
+        refreshAccess: () => pickerRef.current?.refreshAccess() ?? Promise.resolve(false),
       }),
       [],
     );

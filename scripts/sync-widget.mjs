@@ -40,6 +40,13 @@ const FILES = [
   // which left this script about to overwrite the app's own branding. It is
   // widget chrome, so it belongs on this side of the boundary like the widgets.
   ['packages/js/src/seatLayerBrand.ts', 'src/picker/widget/seatLayerBrand.ts'],
+  // Sales Channels buyer access (M6a). Both are widget chrome, not engine: they
+  // deal in tokens, HTTP status codes and the realtime wire format and import
+  // nothing from @seatlayer/core — so they vendor across untouched by the
+  // rewrites below, and the app's hand-written `core.ts` barrel needs no new
+  // export to keep the vendored widget compiling.
+  ['packages/js/src/buyerAccess.ts', 'src/picker/widget/buyerAccess.ts'],
+  ['packages/js/src/buyerRealtime.ts', 'src/picker/widget/buyerRealtime.ts'],
 ];
 
 // Two deterministic import rewrites for the app's vendored copy:

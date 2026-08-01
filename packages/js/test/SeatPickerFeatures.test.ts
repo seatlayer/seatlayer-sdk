@@ -107,3 +107,49 @@ describe('localized fallback helper (tf)', () => {
     expect(tf(picker(), 'picker.__nope__', 'Sold out')).toBe('Sold out');
   });
 });
+
+describe('buyer access wiring (M6a)', () => {
+  const accessOf = (p: SeatPicker): any => (p as any).access;
+  const apiOf = (p: SeatPicker): any => (p as any).api;
+  const realtimeOf = (p: SeatPicker): any => (p as any).realtime;
+
+  it('the tokenless picker builds no access context and keeps the original socket URL', () => {
+    const p = picker();
+    expect(accessOf(p)).toBeNull();
+    expect(realtimeOf(p)).toBeNull();
+    // PickerController still opens its own legacy socket from this URL.
+    expect(apiOf(p).socketUrl('ev_test')).toMatch(/\/pub\/events\/ev_test\/subscribe\?/);
+    expect(apiOf(p).accessScoped).toBe(false);
+  });
+
+  it('an access-scoped picker binds the transport and hands the socket to the realtime client', () => {
+    const p = picker({ buyerAccessToken: 'bse_secret_value' });
+    expect(accessOf(p).configured).toBe(true);
+    expect(apiOf(p).accessScoped).toBe(true);
+    // Empty on purpose: the controller must not race our subprotocol socket.
+    expect(apiOf(p).socketUrl('ev_test')).toBe('');
+    expect(apiOf(p).subscribeUrl('ev_test')).not.toContain('bse_');
+  });
+
+  it('never persists the bearer to storage or cookies', () => {
+    picker({ buyerAccessToken: 'bse_secret_value' });
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i)!;
+      expect(key).not.toContain('bse_');
+      expect(window.localStorage.getItem(key)).not.toContain('bse_');
+    }
+    expect(window.sessionStorage.length).toBe(0);
+    expect(document.cookie).not.toContain('bse_');
+  });
+
+  it('leaves a host-supplied transport in charge of its own credentials', () => {
+    const transport = { socketUrl: () => 'wss://host.example' } as any;
+    const p = picker({ transport, buyerAccessToken: 'bse_secret_value' });
+    expect(accessOf(p)).toBeNull();
+    expect(apiOf(p)).toBe(transport);
+  });
+
+  it('refreshAccess() resolves false on a picker with no access context', async () => {
+    await expect(picker().refreshAccess()).resolves.toBe(false);
+  });
+});

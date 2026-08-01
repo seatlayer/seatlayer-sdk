@@ -125,6 +125,35 @@ describe('SeatingChart prop forwarding', () => {
     expect(onHint).toHaveBeenCalledWith(null);
   });
 
+  it('forwards the buyer access options and emits the access events', async () => {
+    const buyerAccessTokenProvider = vi.fn(async () => ({ token: 'bse_x' }));
+    const onAccessExpired = vi.fn();
+    const onAccessUnavailable = vi.fn();
+    const onSelectedObjectUnavailable = vi.fn();
+    mount(
+      { event: 'summer-gala', buyerAccessTokenProvider, buyerAccessToken: 'bse_seed' },
+      { onAccessExpired, onAccessUnavailable, onSelectedObjectUnavailable },
+    );
+    await nextTick();
+
+    expect(constructorCalls[0]).toMatchObject({
+      buyerAccessTokenProvider,
+      buyerAccessToken: 'bse_seed',
+    });
+
+    const options = constructorCalls[0] as Record<string, (arg: unknown) => void>;
+    options.onAccessExpired({ reason: 'unauthorized', refreshed: false });
+    options.onAccessUnavailable({ reason: 'revoked', retryable: false });
+    options.onSelectedObjectUnavailable({ labels: ['A-1'], reason: 'ineligible' });
+
+    expect(onAccessExpired).toHaveBeenCalledWith({ reason: 'unauthorized', refreshed: false });
+    expect(onAccessUnavailable).toHaveBeenCalledWith({ reason: 'revoked', retryable: false });
+    expect(onSelectedObjectUnavailable).toHaveBeenCalledWith({
+      labels: ['A-1'],
+      reason: 'ineligible',
+    });
+  });
+
   it('rebuilds only when an identity prop changes', async () => {
     const eventKey = ref('gala-one');
     const maxSelection = ref(2);

@@ -16,6 +16,17 @@ export type {
   SeatHoverDetails,
 } from '@seatlayer/js';
 
+// Sales Channels — buyer access sessions for private channel inventory.
+export type {
+  BuyerAccessToken,
+  BuyerAccessTokenProvider,
+  BuyerAccessRefreshReason,
+  BuyerAccessUnavailableReason,
+  BuyerAccessExpiredEvent,
+  BuyerAccessUnavailableEvent,
+  SelectedObjectUnavailableEvent,
+} from '@seatlayer/js';
+
 // The framework-agnostic widget class — for the one-call modal (SeatPickerWidget.open()).
 export { SeatPicker as SeatPickerWidget } from '@seatlayer/js';
 

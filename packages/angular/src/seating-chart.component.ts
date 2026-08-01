@@ -20,6 +20,11 @@ import {
   type BestAvailableResult,
   type GAAreaAvailability,
   type SeatHoverDetails,
+  type BuyerAccessToken,
+  type BuyerAccessTokenProvider,
+  type BuyerAccessExpiredEvent,
+  type BuyerAccessUnavailableEvent,
+  type SelectedObjectUnavailableEvent,
 } from '@seatlayer/js';
 
 /**
@@ -78,6 +83,16 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
   /** Copy overrides, read once per rebuild. */
   @Input() messages?: SeatingChartOptions['messages'];
 
+  /**
+   * Sales Channels: mint a buyer access session on demand. Called with a
+   * `reason`; returns `{ token, expiresAt }` from YOUR backend. The token is
+   * held in memory only — never storage, never a URL, never a log.
+   */
+  @Input() buyerAccessTokenProvider?: BuyerAccessTokenProvider;
+
+  /** One-shot session for hosts that own the lifecycle. Cannot be renewed. */
+  @Input() buyerAccessToken?: string | BuyerAccessToken;
+
   /** The buyer's selection changed. */
   @Output() readonly selectionChange: EventEmitter<SelectedSeat[]> = new EventEmitter<SelectedSeat[]>();
 
@@ -104,6 +119,18 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
 
   /** The pointer moved onto a seat, or off one (`null`). */
   @Output() readonly seatHover: EventEmitter<SeatHoverDetails | null> = new EventEmitter<SeatHoverDetails | null>();
+
+  /** The buyer access session lapsed; `refreshed` says whether it recovered. */
+  @Output() readonly accessExpired: EventEmitter<BuyerAccessExpiredEvent> =
+    new EventEmitter<BuyerAccessExpiredEvent>();
+
+  /** Private inventory is unavailable and refreshing will not fix it. */
+  @Output() readonly accessUnavailable: EventEmitter<BuyerAccessUnavailableEvent> =
+    new EventEmitter<BuyerAccessUnavailableEvent>();
+
+  /** Selected-but-unheld units stopped being selectable. */
+  @Output() readonly selectedObjectUnavailable: EventEmitter<SelectedObjectUnavailableEvent> =
+    new EventEmitter<SelectedObjectUnavailableEvent>();
 
   @ViewChild('container', { static: true })
   private readonly container!: ElementRef<HTMLDivElement>;
@@ -213,6 +240,14 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
     this.chart?.zoomToFit();
   }
 
+  /**
+   * Re-acquire the buyer access session after your app re-authorizes the buyer
+   * (Sales Channels). Resolves false when the chart is not access-scoped.
+   */
+  refreshAccess(): Promise<boolean> {
+    return this.chart?.refreshAccess() ?? Promise.resolve(false);
+  }
+
   // ---------- internals ----------
 
   private build(): void {
@@ -249,6 +284,11 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
         onDeckTap: (floorId) => emit(this.deckTap, floorId),
         onHint: (message) => emit(this.hint, message),
         onSeatHover: (details) => emit(this.seatHover, details),
+        buyerAccessTokenProvider: this.buyerAccessTokenProvider,
+        buyerAccessToken: this.buyerAccessToken,
+        onAccessExpired: (state) => emit(this.accessExpired, state),
+        onAccessUnavailable: (state) => emit(this.accessUnavailable, state),
+        onSelectedObjectUnavailable: (state) => emit(this.selectedObjectUnavailable, state),
       });
 
       this.chart = instance;

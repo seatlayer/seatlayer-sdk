@@ -16,6 +16,11 @@ import {
   type BestAvailableResult,
   type GAAreaAvailability,
   type SeatHoverDetails,
+  type BuyerAccessToken,
+  type BuyerAccessTokenProvider,
+  type BuyerAccessExpiredEvent,
+  type BuyerAccessUnavailableEvent,
+  type SelectedObjectUnavailableEvent,
 } from '@seatlayer/js';
 
 /**
@@ -57,6 +62,11 @@ export interface SeatingChartExposed {
   zoomOut(): void;
   /** Reset the camera so the whole chart fits the container. */
   zoomToFit(): void;
+  /**
+   * Re-acquire the buyer access session after your app re-authorizes the buyer
+   * (Sales Channels). Resolves false when the chart is not access-scoped.
+   */
+  refreshAccess(): Promise<boolean>;
 }
 
 /**
@@ -116,6 +126,20 @@ export const SeatingChart = defineComponent({
      * the `seat-hover` event.
      */
     seatTooltip: { type: Boolean, default: undefined },
+    /**
+     * Sales Channels: mint a buyer access session on demand. Called with a
+     * `reason`; returns `{ token, expiresAt }` from YOUR backend. The token is
+     * held in memory only — never storage, never a URL, never a log.
+     */
+    buyerAccessTokenProvider: {
+      type: Function as PropType<BuyerAccessTokenProvider>,
+      default: undefined,
+    },
+    /** One-shot session for hosts that own the lifecycle. Cannot be renewed. */
+    buyerAccessToken: {
+      type: [String, Object] as PropType<string | BuyerAccessToken>,
+      default: undefined,
+    },
   },
 
   emits: {
@@ -137,6 +161,12 @@ export const SeatingChart = defineComponent({
     hint: (_message: string | null) => true,
     /** The pointer moved onto a seat, or off one (`null`). */
     'seat-hover': (_details: SeatHoverDetails | null) => true,
+    /** The buyer access session lapsed; `refreshed` says whether it recovered. */
+    'access-expired': (_event: BuyerAccessExpiredEvent) => true,
+    /** Private inventory is unavailable and refreshing will not fix it. */
+    'access-unavailable': (_event: BuyerAccessUnavailableEvent) => true,
+    /** Selected-but-unheld units stopped being selectable. */
+    'selected-object-unavailable': (_event: SelectedObjectUnavailableEvent) => true,
   },
 
   setup(props, { emit, expose }) {
@@ -170,6 +200,11 @@ export const SeatingChart = defineComponent({
       const onDeckTap = (floorId: string) => emit('deck-tap', floorId);
       const onHint = (message: string | null) => emit('hint', message);
       const onSeatHover = (details: SeatHoverDetails | null) => emit('seat-hover', details);
+      const onAccessExpired = (state: BuyerAccessExpiredEvent) => emit('access-expired', state);
+      const onAccessUnavailable = (state: BuyerAccessUnavailableEvent) =>
+        emit('access-unavailable', state);
+      const onSelectedObjectUnavailable = (state: SelectedObjectUnavailableEvent) =>
+        emit('selected-object-unavailable', state);
 
       const instance = new CoreSeatingChart({
         container: element,
@@ -182,6 +217,11 @@ export const SeatingChart = defineComponent({
         colorblindSafe: props.colorblindSafe,
         messages: props.messages,
         seatTooltip: props.seatTooltip,
+        buyerAccessTokenProvider: props.buyerAccessTokenProvider,
+        buyerAccessToken: props.buyerAccessToken,
+        onAccessExpired,
+        onAccessUnavailable,
+        onSelectedObjectUnavailable,
         onSelectionChange,
         onHold,
         onHoldRestored,
@@ -234,6 +274,7 @@ export const SeatingChart = defineComponent({
       zoomIn: () => chart.value?.zoomIn(),
       zoomOut: () => chart.value?.zoomOut(),
       zoomToFit: () => chart.value?.zoomToFit(),
+      refreshAccess: () => chart.value?.refreshAccess() ?? Promise.resolve(false),
     };
     expose(exposed);
 
