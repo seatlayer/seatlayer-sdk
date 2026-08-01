@@ -49,12 +49,53 @@ export { SeatManager } from './SeatManager';
 export type {
   SeatManagerOptions,
   SeatManagerMode,
+  SeatManagerCapability,
   SeatManagerTallies,
   SeatManagerActivity,
   SeatManagerActionResult,
 } from './SeatManager';
+// Sales channels — the cockpit's Channels mode and its pure planning helpers.
+// Exported so a host can reuse the review-bucket renderer (Apply results AND
+// the chart-update `channel_assignment_would_drop` refusal share it).
+export { ChannelsMode, bucketRowsHtml } from './channelsMode';
+export type { ChannelsCapabilities, ChannelsClient, ChannelsModeHost, ChannelsSeatView } from './channelsMode';
+export {
+  PUBLIC_CHANNEL_ID,
+  PUBLIC_CHANNEL_NAME,
+  accessIntentLabel,
+  accessLine,
+  bucketRows,
+  dropReviewRows,
+  markerOf,
+  mutationCount,
+  needsMoveConfirmation,
+  planAssignment,
+  retryAfterCopy,
+  selectionSources,
+  stateBadge,
+  suggestMarker,
+} from './channelPlan';
+export type {
+  ArchiveBlockedDetails,
+  AssignmentBuckets,
+  AssignmentDropDetails,
+  AssignmentResult,
+  BucketRow,
+  ChannelAccessIntent,
+  ChannelAccessSummary,
+  ChannelCounts,
+  ChannelListResult,
+  ChannelRecord,
+  ChannelSeatStatus,
+  ChannelState,
+  SelectionSourceRow,
+} from './channelPlan';
 export { ManageApi, ManageApiError } from './manageApi';
 export type {
+  ChannelAllocationPage,
+  ChannelAuditEntry,
+  ChannelAuditPage,
+  ChannelPreviewProjection,
   ReportResult,
   ReportByStatus,
   ReportCategoryRow,

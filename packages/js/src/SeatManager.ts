@@ -31,6 +31,8 @@ import {
   type SeatStatus,
   type SectionNode,
 } from '@seatlayer/core';
+import { CHANNELS_CSS, ChannelsMode, type ChannelsCapabilities } from './channelsMode';
+import type { ChannelSeatStatus } from './channelPlan';
 import {
   ManageApi,
   ManageApiError,
@@ -40,7 +42,17 @@ import {
   type ReportResult,
 } from './manageApi';
 
-export type SeatManagerMode = 'view' | 'inspect' | 'block' | 'sections';
+export type SeatManagerMode = 'view' | 'inspect' | 'block' | 'sections' | 'channels';
+
+/**
+ * Capabilities the cockpit's token was minted with. Channels mode is gated on
+ * these and fails CLOSED: no `event:channels:view` ⇒ no Channels pill at all;
+ * view without `event:channels:manage` ⇒ read-only inspection with every
+ * mutation control absent, not merely disabled.
+ */
+export type SeatManagerCapability =
+  | 'event:view' | 'event:block' | 'event:cancel' | 'event:reports'
+  | 'event:channels:view' | 'event:channels:manage';
 
 /** The select-state of a Sections-mode availability row. An absent rule is
  *  `open` (on sale); otherwise the rule's own mode. */
@@ -158,6 +170,14 @@ export interface SeatManagerOptions {
   tokenExpiresAt?: number;
   /** Initial mode. Default 'view'. */
   mode?: SeatManagerMode;
+  /**
+   * The capability set this token was minted with. Supply it whenever you mint
+   * an `mse_…` grant — it is the only way the widget can know a delegated token
+   * carries `event:channels:manage`, and without it Channels mode stays
+   * read-only (fail-closed). A tenant secret (`sk_…`) is org authority and is
+   * never narrowed server-side, so it is treated as fully capable.
+   */
+  capabilities?: SeatManagerCapability[] | string[];
   /** ISO-4217 fallback currency for revenue (chart/event currency wins). */
   currency?: string;
   /** Chart theme override for the chrome (rails/bar). Chart colors come from the doc. */
@@ -433,7 +453,7 @@ const CSS = `
   .slm.live .slm-live-dot,.slm-feedrow,.slm-kpi.changed b,.slm-kpidelta{animation:none!important}
   .slm-liveevent,.slm-sectionrow{transition:none!important}
 }
-`;
+${CHANNELS_CSS}`;
 
 function injectStyle(): void {
   if (typeof document === 'undefined' || document.getElementById(STYLE_ID)) return;
@@ -551,6 +571,11 @@ export class SeatManager {
   private blockedResultLimit = 100;
   private unblockAllConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Sales channels (M6b). The mode object is built only once the token is known
+  // to carry `event:channels:view`; until then there is no pill and no rail.
+  private channels: ChannelsMode | null = null;
+  private channelCaps: ChannelsCapabilities = { view: false, manage: false };
+
   private readonly onFullscreenChange = (): void => {
     this.paintFullscreenButton();
     this.updateContainerLayout();
@@ -566,7 +591,9 @@ export class SeatManager {
     else if (key === 'i') this.setMode('inspect');
     else if (key === 'b') this.setMode('block');
     else if (key === 's') this.setMode('sections');
+    else if (key === 'c') { if (!this.channels) return; this.setMode('channels'); }
     else if (key === 'f') this.toggleFullscreen();
+    else if (key === 'escape') { if (!this.channels?.handleBack()) return; }
     else return;
     event.preventDefault();
   };
@@ -623,6 +650,10 @@ export class SeatManager {
       this.connect();
       this.startFeedClock();
       this.ready = true;
+      // Resolve channel authority BEFORE the first rail paint so the pill either
+      // exists from the start or never appears — a pill that pops in later reads
+      // as a permission change that did not happen.
+      await this.resolveChannelCapabilities();
       this.setMode(this.mode); // paint the right rail
       this.scheduleTokenRefresh();
       this.opts.onReady?.();
@@ -635,15 +666,119 @@ export class SeatManager {
   // ---- public API -----------------------------------------------------------
 
   setMode(mode: SeatManagerMode): void {
+    // Fail closed: a host asking for a mode this token cannot use gets the
+    // read-only board, never a half-rendered management surface.
+    if (mode === 'channels' && !this.channels) mode = 'view';
     const changed = mode !== this.mode;
+    const wasChannels = this.mode === 'channels';
     this.mode = mode;
     if (!this.renderer && this.doc) this.buildRenderer();
     else this.updateRendererInteraction();
     if (changed) this.renderer?.clearSelection();
+    if (wasChannels && mode !== 'channels') this.channels?.leave();
     this.paintModeTabs();
     this.paintRail();
     this.applySectionCanvasTreatment();
+    if (mode === 'channels') this.channels?.enter();
     if (changed) this.opts.onModeChange?.(mode);
+  }
+
+  /**
+   * Decide what this token may do with sales channels.
+   *
+   * Declared capabilities win — a host that mints an `mse_…` grant knows exactly
+   * what it asked for. Otherwise a tenant secret (`sk_…`) is org authority the
+   * worker never narrows, so it is fully capable; and a delegated token with no
+   * declaration is probed for read access and then treated as READ-ONLY, because
+   * "we could not tell" must never render mutation controls.
+   */
+  private async resolveChannelCapabilities(): Promise<void> {
+    const declared = this.opts.capabilities;
+    if (declared) {
+      const set = new Set(declared as string[]);
+      this.channelCaps = {
+        view: set.has('event:channels:view'),
+        manage: set.has('event:channels:view') && set.has('event:channels:manage'),
+      };
+    } else if (/^sk_/.test(this.opts.token)) {
+      this.channelCaps = { view: true, manage: true };
+    } else {
+      this.channelCaps = { view: false, manage: false };
+    }
+    if (!this.channelCaps.view && !declared && !/^sk_/.test(this.opts.token)) {
+      // Undeclared delegated token: probe read access once. Read-only either way.
+      try {
+        await this.api.channels(this.key);
+        this.channelCaps = { view: true, manage: false };
+      } catch {
+        this.channelCaps = { view: false, manage: false };
+      }
+    }
+    if (!this.channelCaps.view) {
+      this.channels?.destroy();
+      this.channels = null;
+      this.paintModeTabs();
+      return;
+    }
+    if (this.channels) {
+      this.channels.setCapabilities(this.channelCaps);
+    } else {
+      this.channels = new ChannelsMode(this.buildChannelsHost(), this.channelCaps);
+      // Entering/leaving buyer preview flips the canvas between selectable and
+      // strictly read-only, so re-arm the renderer when the view changes.
+      this.channels.onInteractionChange = () => this.updateRendererInteraction();
+    }
+    this.paintModeTabs();
+  }
+
+  /** The adapter between the cockpit's internals and Channels mode. */
+  private buildChannelsHost() {
+    return {
+      eventKey: this.key,
+      api: this.api,
+      rail: this.els.rail,
+      mapLayer: this.root.querySelector('.slm-map') as HTMLElement,
+      root: this.root,
+      seats: () => [...this.labelToSeat.values()].map((seat) => ({
+        id: seat.id, label: seat.label, x: seat.x, y: seat.y,
+      })),
+      statusOf: (label: string): ChannelSeatStatus | undefined => this.status.get(label)
+        ?? (this.labelToSeat.has(label) ? 'free' : undefined),
+      selectionLabels: () => this.selectionLabels(),
+      selectByLabels: (labels: string[]) => { this.selectByLabels(labels); },
+      clearSelection: () => this.clearSelection(),
+      selectSection: (sectionId: string) => { this.selectSection(sectionId); },
+      sections: () => this.sectionOptions,
+      categories: () => (this.doc?.categories ?? []).map((category) => ({
+        key: category.key, label: category.label ?? category.key, color: category.color,
+      })),
+      labelsInCategory: (key: string) => [...this.labelToSeat.entries()]
+        .filter(([, seat]) => seat.categoryKey === key).map(([label]) => label),
+      sectionOfLabel: (label: string) => {
+        const seat = this.labelToSeat.get(label);
+        if (!seat) return null;
+        const id = this.sectionByObject.get(seat.rowId) ?? UNGROUPED_ID;
+        return { id, label: this.sectionLabelById.get(id) ?? 'Other seats' };
+      },
+      worldToScreen: (point: { x: number; y: number }) => this.renderer?.worldToScreen(point) ?? null,
+      seatPixelSize: () => this.seatPixelSize(),
+      isCompact: () => !!this.root?.classList.contains('compact'),
+      setMapInert: (inert: boolean) => {
+        this.mapHost.toggleAttribute('inert', inert);
+        this.mapHost.setAttribute('aria-hidden', String(inert));
+      },
+      toast: (message: string, kind: 'ok' | 'err') => this.toast(message, kind),
+      onError: (err: unknown) => this.opts.onError?.(err),
+    };
+  }
+
+  /** Approximate on-screen seat size, for the channel overlay's marks. Derived
+   *  from the live camera so the overlay tracks zoom without a renderer hook. */
+  private seatPixelSize(): number {
+    const rect = this.renderer?.getVisibleWorldRect?.();
+    const width = this.mapHost?.clientWidth ?? 0;
+    if (!rect?.width || !width) return 6;
+    return Math.max(3, Math.min(24, (width / rect.width) * 14));
   }
 
   /** Toggle the normalized sales-velocity outline overlay without changing seat colors. */
@@ -700,6 +835,7 @@ export class SeatManager {
     this.api.setToken(token);
     this.tokenExpiresAt = expiresAt ?? null;
     this.scheduleTokenRefresh();
+    if (this.ready) void this.resolveChannelCapabilities();
   }
 
   private scheduleTokenRefresh(): void {
@@ -881,6 +1017,8 @@ export class SeatManager {
     if (this.followSeatTimer) clearTimeout(this.followSeatTimer);
     if (this.unblockAllConfirmTimer) clearTimeout(this.unblockAllConfirmTimer);
     if (this.revenueRefreshTimer) clearTimeout(this.revenueRefreshTimer);
+    this.channels?.destroy();
+    this.channels = null;
     if (this.tokenRefreshTimer) clearTimeout(this.tokenRefreshTimer);
     this.layoutObserver?.disconnect();
     this.layoutObserver = null;
@@ -897,20 +1035,17 @@ export class SeatManager {
 
   private buildRenderer(): void {
     if (!this.doc) return;
-    const block = this.mode === 'block';
-    const inspect = this.mode === 'inspect';
+    const bulk = this.isBulkSelectMode();
     this.renderer = new SeatmapRenderer(this.mapHost, {
       manageMode: true,
-      marqueeSelect: block,
+      marqueeSelect: bulk,
       maxSelection: 1_000_000,
-      selectableStatuses: block
-        ? ['free', 'not_for_sale']
-        : inspect ? ['free', 'held', 'booked', 'not_for_sale'] : [],
+      selectableStatuses: this.selectableStatuses(),
       currency: this.currency,
       onSelect: (seat) => this.handleSeatSelect(seat),
       onDeselect: () => this.syncSelection(),
       onMarquee: () => this.syncSelection(),
-      onViewChange: () => this.updateZoomHint(),
+      onViewChange: () => { this.updateZoomHint(); this.channels?.handleViewChange(); },
     });
     this.renderer.setChart(this.doc);
     this.repaintAll();
@@ -918,16 +1053,33 @@ export class SeatManager {
     this.updateZoomHint();
   }
 
+  /** Block and Channels are both bulk-selection tools: marquee, ⌘A, category,
+   *  section. The two differ only in WHICH statuses they may act on. */
+  private isBulkSelectMode(): boolean {
+    return this.mode === 'block' || (this.mode === 'channels' && this.channels?.canSelect() === true);
+  }
+
+  /**
+   * Block never touches held or booked inventory, so it cannot select it.
+   * Channels must be able to select it — the Review sheet's honesty depends on
+   * counting the held and sold units inside a marquee and saying they will not
+   * move, rather than silently omitting them from the selection.
+   */
+  private selectableStatuses(): SeatStatus[] {
+    if (this.mode === 'block') return ['free', 'not_for_sale'];
+    if (this.mode === 'inspect' || this.isBulkSelectMode()) {
+      return ['free', 'held', 'booked', 'not_for_sale'];
+    }
+    return [];
+  }
+
   private updateRendererInteraction(): void {
-    const block = this.mode === 'block';
-    const inspect = this.mode === 'inspect';
+    const bulk = this.isBulkSelectMode();
     this.renderer?.setManageInteraction({
       manageMode: true,
-      marqueeSelect: block,
+      marqueeSelect: bulk,
       maxSelection: 1_000_000,
-      selectableStatuses: block
-        ? ['free', 'not_for_sale']
-        : inspect ? ['free', 'held', 'booked', 'not_for_sale'] : [],
+      selectableStatuses: this.selectableStatuses(),
     });
     this.updateZoomHint();
   }
@@ -1291,6 +1443,7 @@ export class SeatManager {
       this.paintMonitorInsights();
     } else if (this.mode === 'inspect') this.renderInspectRail(this.getSelection());
     else if (this.mode === 'block') this.paintSelBar(this.getSelection());
+    else if (this.mode === 'channels') this.channels?.handleSelectionChange();
     this.opts.onTallies?.(t);
   }
 
@@ -1375,6 +1528,7 @@ export class SeatManager {
     const seats = this.getSelection();
     if (this.mode === 'block') this.paintSelBar(seats);
     else if (this.mode === 'inspect') this.renderInspectRail(seats);
+    else if (this.mode === 'channels') this.channels?.handleSelectionChange();
     this.opts.onSelectionChange?.(seats);
   }
 
@@ -1395,7 +1549,9 @@ export class SeatManager {
           <button class="slm-mode" role="tab" data-mode="inspect" title="Inspect (I)" aria-keyshortcuts="I">Inspect</button>
           <button class="slm-mode" role="tab" data-mode="block" title="Block (B)" aria-keyshortcuts="B">Block</button>
           <button class="slm-mode" role="tab" data-mode="sections" title="Sections (S)" aria-keyshortcuts="S">Sections</button>
+          <button class="slm-mode" role="tab" data-mode="channels" title="Channels (C)" aria-keyshortcuts="C" hidden>Channels</button>
         </div>
+        <select class="slm-tools" data-ref="tools" aria-label="Manager tools"></select>
         <span class="slm-live"><span class="slm-live-dot"></span><span data-ref="livetext">CONNECTING</span></span>
         <div class="slm-bar-actions">
           <button class="slm-barbtn follow" data-ref="follow" aria-pressed="false"
@@ -1428,12 +1584,16 @@ export class SeatManager {
     const ref = (n: string) => root.querySelector(`[data-ref="${n}"]`) as HTMLElement;
     this.mapHost = ref('maphost') as HTMLDivElement;
     this.els = {
-      modes: ref('modes'), livetext: ref('livetext'), kpis: ref('kpis'),
+      modes: ref('modes'), tools: ref('tools'), livetext: ref('livetext'), kpis: ref('kpis'),
       follow: ref('follow'), heat: ref('heat'), fullscreen: ref('fullscreen'),
       zoomhint: ref('zoomhint'), liveevent: ref('liveevent'), rail: ref('rail'), toast: ref('toast'), zfit: ref('zfit'),
     };
     this.els.modes.querySelectorAll('[data-mode]').forEach((b) =>
       b.addEventListener('click', () => this.setMode((b as HTMLElement).dataset.mode as SeatManagerMode)));
+    // Below the compact breakpoint the pills collapse into ONE accessible Tools
+    // picker (§13) — never a tab strip plus a second scrolling mechanism.
+    this.els.tools.addEventListener('change', () =>
+      this.setMode((this.els.tools as HTMLSelectElement).value as SeatManagerMode));
     this.els.zfit.addEventListener('click', () => this.zoomToFit());
     this.els.follow.addEventListener('click', () => this.setFollowLive(!this.followLive));
     this.els.heat.addEventListener('click', () => this.setHeatOverlay(!this.heatEnabled));
@@ -1450,6 +1610,7 @@ export class SeatManager {
   private updateContainerLayout(): void {
     const width = this.root?.getBoundingClientRect().width || this.host.clientWidth;
     this.root?.classList.toggle('compact', width > 0 && width < 800);
+    this.channels?.handleLayoutChange();
   }
 
   private sectionOptions: { id: string; label: string }[] = [];
@@ -1474,13 +1635,27 @@ export class SeatManager {
   }
 
   private paintModeTabs(): void {
+    const available: Array<{ mode: SeatManagerMode; label: string }> = [];
     this.els.modes?.querySelectorAll('[data-mode]').forEach((b) => {
       const el = b as HTMLElement;
-      const active = el.dataset.mode === this.mode;
+      const mode = el.dataset.mode as SeatManagerMode;
+      // No channel-view capability ⇒ the pill is not rendered at all. A hidden
+      // control is honest about authority; a disabled one advertises it.
+      const permitted = mode !== 'channels' || !!this.channels;
+      el.hidden = !permitted;
+      if (!permitted) return;
+      available.push({ mode, label: el.textContent ?? mode });
+      const active = mode === this.mode;
       el.classList.toggle('on', active);
       el.setAttribute('aria-selected', String(active));
       el.tabIndex = active ? 0 : -1;
     });
+    const tools = this.els.tools as HTMLSelectElement | undefined;
+    if (tools) {
+      tools.innerHTML = available.map((entry) =>
+        `<option value="${entry.mode}"${entry.mode === this.mode ? ' selected' : ''}>${esc(entry.label)}</option>`).join('');
+      tools.value = this.mode;
+    }
     this.root?.classList.toggle('block-mode', this.mode === 'block');
   }
 
@@ -1603,6 +1778,7 @@ export class SeatManager {
     if (this.mode === 'view') this.renderViewRail();
     else if (this.mode === 'inspect') this.renderInspectRail(this.getSelection());
     else if (this.mode === 'sections') this.renderSectionsRail();
+    else if (this.mode === 'channels') this.channels?.paintRail();
     else this.renderBlockRail();
     this.updateZoomHint();
   }
