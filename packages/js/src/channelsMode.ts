@@ -33,6 +33,8 @@ import {
   accessIntentLabel,
   accessLine,
   bucketRows,
+  isPublicChannelId,
+  markerLetter,
   markerOf,
   mutationCount,
   needsMoveConfirmation,
@@ -513,7 +515,9 @@ export class ChannelsMode {
         afterLabel, limit: 1000,
       });
       for (const row of res.allocations) {
-        if (row.channelId && row.channelId !== PUBLIC_CHANNEL_ID) next.set(row.label, row.channelId);
+        // The server names public sale explicitly on every row, so the map holds
+        // PRIVATE ids only — absence is what "on public sale" means downstream.
+        if (!isPublicChannelId(row.channelId)) next.set(row.label, row.channelId);
       }
       this.assignmentVersion = res.assignmentVersion;
       if (!res.nextAfterLabel) break;
@@ -525,8 +529,13 @@ export class ChannelsMode {
   // ---- lookups --------------------------------------------------------------
 
   private channelById(id: string): { id: string; name: string; marker: string | null; color: string | null } | null {
-    if (id === PUBLIC_CHANNEL_ID) {
-      return { id, name: this.list?.publicSale.name ?? PUBLIC_CHANNEL_NAME, marker: 'P', color: null };
+    if (isPublicChannelId(id)) {
+      return {
+        id: PUBLIC_CHANNEL_ID,
+        name: this.list?.publicSale?.name ?? PUBLIC_CHANNEL_NAME,
+        marker: 'P',
+        color: null,
+      };
     }
     const found = this.list?.channels.find((channel) => channel.id === id);
     return found ? { id, name: found.name, marker: found.marker, color: found.color } : null;
@@ -768,7 +777,10 @@ export class ChannelsMode {
     this.setBanner(true, names);
     try {
       this.previewProjection = await this.host.api.channelPreview(this.host.eventKey, audience, {
-        includePublic: this.previewIncludePublic,
+        // Naming Public sale as the audience IS asking for public inventory; the
+        // route filters the 'public' sentinel out of `channelIds`, so without
+        // this the request would resolve to an empty scope and 422.
+        includePublic: this.previewIncludePublic || audience.some(isPublicChannelId),
       });
       this.previewSupported = true;
     } catch (err) {
@@ -1023,7 +1035,7 @@ export class ChannelsMode {
           through this access.${this.previewProjection?.includePublic === false
             ? ' Public sale seats are <b>not</b> included in this grant.' : ''}</span></div>`
       : '';
-    const includePublic = current === PUBLIC_CHANNEL_ID ? '' : `
+    const includePublic = isPublicChannelId(current) ? '' : `
       <label class="slm-note" style="display:flex;gap:8px;align-items:center;margin:10px 0">
         <input type="checkbox" data-ch-includepublic ${this.previewIncludePublic ? 'checked' : ''} />
         Also include Public sale seats in this grant
@@ -1221,7 +1233,9 @@ export class ChannelsMode {
   }
 
   private renderCreateDialog(state: DialogState): void {
-    const taken = (this.list?.channels ?? []).map((channel) => channel.marker ?? channel.name[0] ?? '');
+    // Markers are compared as the single letter each one RENDERS as, so a stored
+    // "star" occupies 'S' and the next channel is offered a free letter instead.
+    const taken = (this.list?.channels ?? []).map((channel) => markerLetter(channel.marker || channel.name, ''));
     const suggestion = suggestMarker('', taken);
     this.renderScrim(`
       <h3 id="slm-ch-dlg-title">Create channel</h3>
@@ -1286,7 +1300,8 @@ export class ChannelsMode {
     try {
       const res = await this.host.api.createChannel(this.host.eventKey, {
         name: trimmed,
-        marker: letter || null,
+        // The column is free text; we only ever store what the chip can draw.
+        marker: markerLetter(letter, '') || null,
         color: color || null,
         externalRef: externalRef.trim() || null,
       });
@@ -1374,7 +1389,9 @@ export class ChannelsMode {
     this.renderDialog();
     try {
       const result = await this.host.api.applyChannelAssignment(this.host.eventKey, {
-        targetChannelId: this.targetChannelId || null,
+        // `null` is the wire spelling of "back to public sale" every worker
+        // accepts, including ones that predate the 'public' sentinel.
+        targetChannelId: isPublicChannelId(this.targetChannelId) ? null : this.targetChannelId,
         labels,
         assignmentVersion: this.assignmentVersion,
       });

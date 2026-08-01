@@ -14,9 +14,26 @@
  * Spec: sales-channels-product-ux-spec §8.4–8.5.
  */
 
-/** Public sale is a built-in pseudo-channel; the server uses '' as its id. */
-export const PUBLIC_CHANNEL_ID = '';
+/**
+ * Public sale is a built-in pseudo-channel. The server's sentinel for it is the
+ * literal string `'public'` — it is what `GET /channels` returns as
+ * `publicSale.id`, what `GET /channels/allocation` reports for an unallocated
+ * unit, and what `POST /channels/assignments` accepts (alongside `null`) as the
+ * target meaning "send these back to public sale".
+ *
+ * This constant was `''` until 2026-08-02, which silently made every public unit
+ * look like an unknown PRIVATE channel to `planAssignment` and `markerOf` — the
+ * cause of the Review sheet's phantom "moved out of another channel" line and
+ * the rail's "?" marker. Keep it byte-identical to the server's
+ * `eventChannels.PUBLIC_CHANNEL_ID`.
+ */
+export const PUBLIC_CHANNEL_ID = 'public';
 export const PUBLIC_CHANNEL_NAME = 'Public sale';
+
+/** True for every spelling of "public sale" a worker may hand us. */
+export function isPublicChannelId(id: string | null | undefined): boolean {
+  return id == null || id === '' || id === PUBLIC_CHANNEL_ID;
+}
 
 export type ChannelState = 'active' | 'paused' | 'archived';
 
@@ -64,7 +81,9 @@ export interface ChannelRecord {
 }
 
 export interface PublicSaleChannel {
-  id: typeof PUBLIC_CHANNEL_ID;
+  /** `'public'` on every shipped worker; typed loosely so an older build that
+   *  still answers `''` is normalised rather than rejected. */
+  id: string;
   name: string;
   state: 'active';
   counts: ChannelCounts;
@@ -129,6 +148,21 @@ export const PUBLIC_CHANNEL_COLOR = '#f4b740';
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I/O — they read as 1/0
 
 /**
+ * Clamp any marker text down to the ONE uppercase character every surface draws.
+ *
+ * The server stores `marker` as free text (it only length-caps it), so a channel
+ * created outside this widget can carry "star" or "VIP". The comp's marker chip
+ * is a single glyph: taking two characters ("ST") overflows the 22px chip and
+ * stops reading as a letter. Non-letter leading characters (an emoji, a digit,
+ * punctuation) are skipped in favour of the first real letter.
+ */
+export function markerLetter(raw: string | null | undefined, fallback: string): string {
+  const text = (raw ?? '').trim();
+  const letter = /\p{L}/u.exec(text)?.[0] ?? text[0] ?? '';
+  return (letter || fallback).toUpperCase().slice(0, 1);
+}
+
+/**
  * Suggest a marker for a new channel: the first letter of its name when that
  * letter is still free, otherwise the next unused letter. Deterministic so the
  * Create dialog's preview matches what actually gets stored.
@@ -137,8 +171,8 @@ export function suggestMarker(
   name: string,
   taken: Iterable<string>,
 ): { letter: string; color: string } {
-  const used = new Set([...taken].map((m) => m.trim().toUpperCase()).filter(Boolean));
-  const first = (name.trim()[0] ?? '').toUpperCase();
+  const used = new Set([...taken].map((m) => markerLetter(m, '')).filter(Boolean));
+  const first = markerLetter(name, '');
   const letter = LETTERS.includes(first) && !used.has(first)
     ? first
     : ([...LETTERS].find((candidate) => !used.has(candidate)) ?? (first || 'X'));
@@ -150,10 +184,13 @@ export function markerOf(
   channel: { id: string; name: string; marker?: string | null; color?: string | null },
   index = 0,
 ): { letter: string; color: string } {
-  if (channel.id === PUBLIC_CHANNEL_ID) {
-    return { letter: (channel.marker || 'P').slice(0, 2).toUpperCase(), color: channel.color || PUBLIC_CHANNEL_COLOR };
+  if (isPublicChannelId(channel.id)) {
+    return {
+      letter: markerLetter(channel.marker, 'P'),
+      color: channel.color || PUBLIC_CHANNEL_COLOR,
+    };
   }
-  const letter = (channel.marker || channel.name.trim()[0] || '?').slice(0, 2).toUpperCase();
+  const letter = markerLetter(channel.marker || channel.name, '?');
   return { letter, color: channel.color || CHANNEL_COLORS[index % CHANNEL_COLORS.length] };
 }
 
@@ -176,11 +213,11 @@ export function selectionSources(
 ): SelectionSourceRow[] {
   const counts = new Map<string, number>();
   for (const label of labels) {
-    const channelId = allocation.get(label) ?? PUBLIC_CHANNEL_ID;
+    const channelId = normalizeChannelId(allocation.get(label));
     counts.set(channelId, (counts.get(channelId) ?? 0) + 1);
   }
   const order: Array<{ id: string; name: string }> = [
-    { id: PUBLIC_CHANNEL_ID, name: list?.publicSale.name ?? PUBLIC_CHANNEL_NAME },
+    { id: PUBLIC_CHANNEL_ID, name: list?.publicSale?.name ?? PUBLIC_CHANNEL_NAME },
     ...(list?.channels ?? []).map((channel) => ({ id: channel.id, name: channel.name })),
   ];
   const rows: SelectionSourceRow[] = [];
@@ -191,9 +228,26 @@ export function selectionSources(
   }
   // Anything the list does not know about (archived, or a mid-flight rename).
   for (const [channelId, count] of counts) {
-    rows.push({ channelId, name: channelId ? 'Another channel' : PUBLIC_CHANNEL_NAME, count });
+    rows.push({
+      channelId,
+      name: isPublicChannelId(channelId) ? PUBLIC_CHANNEL_NAME : 'Another channel',
+      count,
+    });
   }
   return rows;
+}
+
+/**
+ * Fold every "this unit is on public sale" spelling onto ONE id.
+ *
+ * The allocation map is built from `GET /channels/allocation`, which reports an
+ * unallocated unit as the server's `'public'` sentinel; a missing entry means
+ * the same thing. Comparing raw values here is what made public units classify
+ * as `movedFromOtherChannel` in the staged preview while the server's
+ * authoritative reply said `changedFromPublic`.
+ */
+function normalizeChannelId(id: string | null | undefined): string {
+  return isPublicChannelId(id) ? PUBLIC_CHANNEL_ID : id as string;
 }
 
 const SKIP_SAMPLE = 12;
@@ -226,7 +280,8 @@ export function planAssignment(input: {
   statusOf: (label: string) => ChannelSeatStatus | undefined;
   nameOf: (channelId: string) => string | null;
 }): AssignmentBuckets {
-  const { labels, targetChannelId, allocation, statusOf, nameOf } = input;
+  const { labels, allocation, statusOf, nameOf } = input;
+  const targetChannelId = normalizeChannelId(input.targetChannelId);
   const seen = new Set<string>();
   let fromPublic = 0;
   let alreadyIn = 0;
@@ -240,7 +295,7 @@ export function planAssignment(input: {
     seen.add(label);
     const status = statusOf(label);
     if (!status) { missing.push(label); continue; }
-    const current = allocation.get(label) ?? PUBLIC_CHANNEL_ID;
+    const current = normalizeChannelId(allocation.get(label));
     if (current === targetChannelId) { alreadyIn += 1; continue; }
     if (status === 'held') { held.push(label); continue; }
     if (status === 'booked') { booked.push(label); continue; }
