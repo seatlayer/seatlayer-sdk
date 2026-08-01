@@ -18,7 +18,15 @@ const manager = new SeatManager({
   apiBase: API,
   eventKey: EVENT,
   token: TOKEN,
-  mode: (q.get('mode') as 'view' | 'inspect' | 'block') || 'view',
+  mode: (q.get('mode') as 'view' | 'inspect' | 'block' | 'sections' | 'channels') || 'view',
+  // Channels mode is capability-gated and fails closed. A tenant secret (sk_…)
+  // is org authority and is treated as fully capable; pass ?caps=view or
+  // ?caps=manage to simulate a delegated mse_ grant's exact capability set.
+  capabilities: q.get('caps') === 'view'
+    ? ['event:view', 'event:channels:view']
+    : q.get('caps') === 'manage'
+      ? ['event:view', 'event:block', 'event:channels:view', 'event:channels:manage']
+      : undefined,
   onReady: () => console.log('[manage] ready'),
   onTallies: (t) => console.log('[manage] tallies', t),
   onControlRoom: (snapshot) => console.log('[manage] control-room', snapshot),
