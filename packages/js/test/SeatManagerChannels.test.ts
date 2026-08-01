@@ -11,6 +11,7 @@ import {
   accessLine,
   bucketRows,
   dropReviewRows,
+  markerLetter,
   markerOf,
   mutationCount,
   needsMoveConfirmation,
@@ -157,10 +158,20 @@ describe('channel plan', () => {
     }
   });
 
+  it('renders a marker as exactly ONE uppercase letter, never a truncated word', () => {
+    // The server column is free text: "star" used to render as the chip "ST".
+    expect(markerOf({ id: 'ch_x', name: 'Starlight', marker: 'star', color: null }).letter).toBe('S');
+    expect(markerOf({ id: 'ch_x', name: 'VIP suites', marker: 'VIP', color: null }).letter).toBe('V');
+    expect(markerLetter('★ gold', 'X')).toBe('G');
+    expect(markerLetter('', 'X')).toBe('X');
+    expect(markerLetter(null, 'P')).toBe('P');
+  });
 
   it('suggests an unused marker letter for a new channel', () => {
     expect(suggestMarker('Box office', ['A', 'S']).letter).toBe('B');
     expect(suggestMarker('Agency B', ['A', 'S']).letter).not.toBe('A');
+    // A stored word marker occupies the letter it RENDERS as, not its whole text.
+    expect(suggestMarker('Sponsor guests', ['star']).letter).not.toBe('S');
   });
 });
 

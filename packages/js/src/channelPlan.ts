@@ -148,6 +148,21 @@ export const PUBLIC_CHANNEL_COLOR = '#f4b740';
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I/O — they read as 1/0
 
 /**
+ * Clamp any marker text down to the ONE uppercase character every surface draws.
+ *
+ * The server stores `marker` as free text (it only length-caps it), so a channel
+ * created outside this widget can carry "star" or "VIP". The comp's marker chip
+ * is a single glyph: taking two characters ("ST") overflows the 22px chip and
+ * stops reading as a letter. Non-letter leading characters (an emoji, a digit,
+ * punctuation) are skipped in favour of the first real letter.
+ */
+export function markerLetter(raw: string | null | undefined, fallback: string): string {
+  const text = (raw ?? '').trim();
+  const letter = /\p{L}/u.exec(text)?.[0] ?? text[0] ?? '';
+  return (letter || fallback).toUpperCase().slice(0, 1);
+}
+
+/**
  * Suggest a marker for a new channel: the first letter of its name when that
  * letter is still free, otherwise the next unused letter. Deterministic so the
  * Create dialog's preview matches what actually gets stored.
@@ -156,8 +171,8 @@ export function suggestMarker(
   name: string,
   taken: Iterable<string>,
 ): { letter: string; color: string } {
-  const used = new Set([...taken].map((m) => m.trim().toUpperCase()).filter(Boolean));
-  const first = (name.trim()[0] ?? '').toUpperCase();
+  const used = new Set([...taken].map((m) => markerLetter(m, '')).filter(Boolean));
+  const first = markerLetter(name, '');
   const letter = LETTERS.includes(first) && !used.has(first)
     ? first
     : ([...LETTERS].find((candidate) => !used.has(candidate)) ?? (first || 'X'));
@@ -171,11 +186,11 @@ export function markerOf(
 ): { letter: string; color: string } {
   if (isPublicChannelId(channel.id)) {
     return {
-      letter: (channel.marker || 'P').slice(0, 2).toUpperCase(),
+      letter: markerLetter(channel.marker, 'P'),
       color: channel.color || PUBLIC_CHANNEL_COLOR,
     };
   }
-  const letter = (channel.marker || channel.name.trim()[0] || '?').slice(0, 2).toUpperCase();
+  const letter = markerLetter(channel.marker || channel.name, '?');
   return { letter, color: channel.color || CHANNEL_COLORS[index % CHANNEL_COLORS.length] };
 }
 

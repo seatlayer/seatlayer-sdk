@@ -34,6 +34,7 @@ import {
   accessLine,
   bucketRows,
   isPublicChannelId,
+  markerLetter,
   markerOf,
   mutationCount,
   needsMoveConfirmation,
@@ -1232,7 +1233,9 @@ export class ChannelsMode {
   }
 
   private renderCreateDialog(state: DialogState): void {
-    const taken = (this.list?.channels ?? []).map((channel) => channel.marker ?? channel.name[0] ?? '');
+    // Markers are compared as the single letter each one RENDERS as, so a stored
+    // "star" occupies 'S' and the next channel is offered a free letter instead.
+    const taken = (this.list?.channels ?? []).map((channel) => markerLetter(channel.marker || channel.name, ''));
     const suggestion = suggestMarker('', taken);
     this.renderScrim(`
       <h3 id="slm-ch-dlg-title">Create channel</h3>
@@ -1297,7 +1300,8 @@ export class ChannelsMode {
     try {
       const res = await this.host.api.createChannel(this.host.eventKey, {
         name: trimmed,
-        marker: letter || null,
+        // The column is free text; we only ever store what the chip can draw.
+        marker: markerLetter(letter, '') || null,
         color: color || null,
         externalRef: externalRef.trim() || null,
       });
