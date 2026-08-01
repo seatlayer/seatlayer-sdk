@@ -1,0 +1,417 @@
+/**
+ * Sales-channel planning — the pure, DOM-free half of Channels mode.
+ *
+ * Everything here is deterministic and testable without a canvas: the marker
+ * palette, the mixed-source selection summary, the LOCAL staged preview of an
+ * assignment, and the bucket rows the Review sheet renders.
+ *
+ * The local preview deliberately produces the SAME `AssignmentBuckets` shape the
+ * server returns from `POST /channels/assignments`. There is no dry-run endpoint,
+ * so the review sheet is drawn from this local computation and then REDRAWN from
+ * the authoritative server response after Apply. One renderer, two sources —
+ * which is why the shapes must match exactly.
+ *
+ * Spec: sales-channels-product-ux-spec §8.4–8.5.
+ */
+
+/** Public sale is a built-in pseudo-channel; the server uses '' as its id. */
+export const PUBLIC_CHANNEL_ID = '';
+export const PUBLIC_CHANNEL_NAME = 'Public sale';
+
+export type ChannelState = 'active' | 'paused' | 'archived';
+
+/** Physical inventory status, as the manage surface speaks it. */
+export type ChannelSeatStatus = 'free' | 'held' | 'booked' | 'blocked';
+
+export interface ChannelCounts {
+  allocated: number;
+  free: number;
+  held: number;
+  booked: number;
+  blocked: number;
+  units: number;
+}
+
+/** Buyer-access intents the server stores per channel. */
+export type ChannelAccessIntent = 'none' | 'internal' | 'server' | 'hosted_link';
+
+/**
+ * Buyer-access summary on a channel row. Shipped by the access hardening branch
+ * (merged to app main). Still optional in this type: a worker that predates the
+ * merge simply omits it and the rail reads "—" rather than inventing a state.
+ */
+export interface ChannelAccessSummary {
+  intent?: ChannelAccessIntent | string;
+  hasActiveGrants?: boolean;
+  lastMintAt?: number | null;
+  /** Free-text detail (partner host, who paused it) when the server offers one. */
+  detail?: string | null;
+}
+
+export interface ChannelRecord {
+  id: string;
+  name: string;
+  color: string | null;
+  marker: string | null;
+  externalRef: string | null;
+  state: ChannelState;
+  archiveDestination: string | null;
+  createdAt: number;
+  updatedAt: number;
+  archivedAt: number | null;
+  counts: ChannelCounts;
+  access?: ChannelAccessSummary | null;
+}
+
+export interface PublicSaleChannel {
+  id: typeof PUBLIC_CHANNEL_ID;
+  name: string;
+  state: 'active';
+  counts: ChannelCounts;
+  access?: ChannelAccessSummary | null;
+}
+
+export interface ChannelListResult {
+  assignmentVersion: number;
+  publicSale: PublicSaleChannel;
+  channels: ChannelRecord[];
+}
+
+export interface AssignmentBucketCount {
+  count: number;
+}
+
+export interface AssignmentSkippedBucket extends AssignmentBucketCount {
+  labels: string[];
+  truncated: boolean;
+}
+
+export interface AssignmentBuckets {
+  changedFromPublic: AssignmentBucketCount;
+  movedFromOtherChannel: AssignmentBucketCount & {
+    channels: Array<{ channelId: string; name: string | null; count: number }>;
+  };
+  alreadyInTarget: AssignmentBucketCount;
+  skippedHeld: AssignmentSkippedBucket;
+  skippedBooked: AssignmentSkippedBucket;
+  /** Requested labels that are not inventory in this event. */
+  notFound: AssignmentSkippedBucket;
+}
+
+export interface AssignmentResult {
+  ok: true;
+  targetChannelId: string;
+  assignmentVersion: number;
+  requested: number;
+  applied: number;
+  buckets: AssignmentBuckets;
+}
+
+export interface ArchiveBlockedDetails {
+  activeHolds?: number;
+  heldUnits?: number;
+  latestHoldExpiresAt?: number | null;
+  retryAfterMs?: number;
+}
+
+/**
+ * Administrative colors. Always paired with a LETTER on every surface — the
+ * comp's rule and spec §13's: channel identity never rests on hue alone.
+ */
+export const CHANNEL_COLORS = [
+  '#a78bfa', '#2dd4bf', '#fb923c', '#60a5fa', '#f472b6',
+  '#a3e635', '#f87171', '#38bdf8', '#c084fc', '#facc15',
+] as const;
+
+/** Public sale keeps the cockpit's gold, distinct from every private channel. */
+export const PUBLIC_CHANNEL_COLOR = '#f4b740';
+
+const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I/O — they read as 1/0
+
+/**
+ * Suggest a marker for a new channel: the first letter of its name when that
+ * letter is still free, otherwise the next unused letter. Deterministic so the
+ * Create dialog's preview matches what actually gets stored.
+ */
+export function suggestMarker(
+  name: string,
+  taken: Iterable<string>,
+): { letter: string; color: string } {
+  const used = new Set([...taken].map((m) => m.trim().toUpperCase()).filter(Boolean));
+  const first = (name.trim()[0] ?? '').toUpperCase();
+  const letter = LETTERS.includes(first) && !used.has(first)
+    ? first
+    : ([...LETTERS].find((candidate) => !used.has(candidate)) ?? (first || 'X'));
+  return { letter, color: CHANNEL_COLORS[used.size % CHANNEL_COLORS.length] };
+}
+
+/** The letter + color a channel actually renders with (server value wins). */
+export function markerOf(
+  channel: { id: string; name: string; marker?: string | null; color?: string | null },
+  index = 0,
+): { letter: string; color: string } {
+  if (channel.id === PUBLIC_CHANNEL_ID) {
+    return { letter: (channel.marker || 'P').slice(0, 2).toUpperCase(), color: channel.color || PUBLIC_CHANNEL_COLOR };
+  }
+  const letter = (channel.marker || channel.name.trim()[0] || '?').slice(0, 2).toUpperCase();
+  return { letter, color: channel.color || CHANNEL_COLORS[index % CHANNEL_COLORS.length] };
+}
+
+/** One line of the rail's mixed-source selection summary (§8.4). */
+export interface SelectionSourceRow {
+  channelId: string;
+  name: string;
+  count: number;
+}
+
+/**
+ * Group the current selection by the channel each unit is allocated to today.
+ * Public sale is listed first; the rest follow in list order so the rail's
+ * ordering never jitters as the selection changes.
+ */
+export function selectionSources(
+  labels: string[],
+  allocation: Map<string, string>,
+  list: ChannelListResult | null,
+): SelectionSourceRow[] {
+  const counts = new Map<string, number>();
+  for (const label of labels) {
+    const channelId = allocation.get(label) ?? PUBLIC_CHANNEL_ID;
+    counts.set(channelId, (counts.get(channelId) ?? 0) + 1);
+  }
+  const order: Array<{ id: string; name: string }> = [
+    { id: PUBLIC_CHANNEL_ID, name: list?.publicSale.name ?? PUBLIC_CHANNEL_NAME },
+    ...(list?.channels ?? []).map((channel) => ({ id: channel.id, name: channel.name })),
+  ];
+  const rows: SelectionSourceRow[] = [];
+  for (const entry of order) {
+    const count = counts.get(entry.id);
+    if (count) rows.push({ channelId: entry.id, name: entry.name, count });
+    counts.delete(entry.id);
+  }
+  // Anything the list does not know about (archived, or a mid-flight rename).
+  for (const [channelId, count] of counts) {
+    rows.push({ channelId, name: channelId ? 'Another channel' : PUBLIC_CHANNEL_NAME, count });
+  }
+  return rows;
+}
+
+const SKIP_SAMPLE = 12;
+
+function skipBucket(labels: string[]): AssignmentSkippedBucket {
+  return {
+    count: labels.length,
+    labels: labels.slice(0, SKIP_SAMPLE),
+    truncated: labels.length > SKIP_SAMPLE,
+  };
+}
+
+/**
+ * The LOCAL staged preview of "move these labels to this channel".
+ *
+ * Mirrors the DO's rules exactly (eventChannels.applyAssignment):
+ *   - a unit already in the target is `alreadyInTarget`, whatever its status;
+ *   - otherwise held and booked units are skipped and never rewritten;
+ *   - otherwise a public unit is `changedFromPublic`, a private one is
+ *     `movedFromOtherChannel` (itemised per source);
+ *   - a label that is not inventory in this event is `notFound`.
+ *
+ * Every requested label lands in exactly one bucket — the property the Review
+ * sheet's "every selected seat is in exactly one line" promise depends on.
+ */
+export function planAssignment(input: {
+  labels: string[];
+  targetChannelId: string;
+  allocation: Map<string, string>;
+  statusOf: (label: string) => ChannelSeatStatus | undefined;
+  nameOf: (channelId: string) => string | null;
+}): AssignmentBuckets {
+  const { labels, targetChannelId, allocation, statusOf, nameOf } = input;
+  const seen = new Set<string>();
+  let fromPublic = 0;
+  let alreadyIn = 0;
+  const movedBySource = new Map<string, number>();
+  const held: string[] = [];
+  const booked: string[] = [];
+  const missing: string[] = [];
+
+  for (const label of labels) {
+    if (seen.has(label)) continue;
+    seen.add(label);
+    const status = statusOf(label);
+    if (!status) { missing.push(label); continue; }
+    const current = allocation.get(label) ?? PUBLIC_CHANNEL_ID;
+    if (current === targetChannelId) { alreadyIn += 1; continue; }
+    if (status === 'held') { held.push(label); continue; }
+    if (status === 'booked') { booked.push(label); continue; }
+    if (current === PUBLIC_CHANNEL_ID) fromPublic += 1;
+    else movedBySource.set(current, (movedBySource.get(current) ?? 0) + 1);
+  }
+
+  const channels = [...movedBySource.entries()].map(([channelId, count]) => ({
+    channelId,
+    name: nameOf(channelId),
+    count,
+  }));
+  return {
+    changedFromPublic: { count: fromPublic },
+    movedFromOtherChannel: {
+      count: channels.reduce((sum, row) => sum + row.count, 0),
+      channels,
+    },
+    alreadyInTarget: { count: alreadyIn },
+    skippedHeld: skipBucket(held),
+    skippedBooked: skipBucket(booked),
+    notFound: skipBucket(missing),
+  };
+}
+
+/** Units this plan will actually mutate — what the Apply button counts. */
+export function mutationCount(buckets: AssignmentBuckets): number {
+  return buckets.changedFromPublic.count + buckets.movedFromOtherChannel.count;
+}
+
+/** True when moving inventory out of another PRIVATE channel — §8.5 requires an
+ *  explicit confirmation line for exactly this case. */
+export function needsMoveConfirmation(buckets: AssignmentBuckets): boolean {
+  return buckets.movedFromOtherChannel.count > 0;
+}
+
+export interface BucketRow {
+  kind: 'add' | 'move' | 'same' | 'skip';
+  icon: string;
+  count: number;
+  text: string;
+  why?: string;
+  /** Sampled seat labels for a skipped bucket, when the server sent any. */
+  peek?: string;
+}
+
+/**
+ * Render-ready rows for the Review sheet. The comp shows five lines; the server
+ * carries a sixth bucket (`notFound`) which is emitted only when it is non-zero,
+ * so a normal review still reads exactly like the approved design.
+ *
+ * Empty buckets are dropped — a zero line is noise, not honesty.
+ */
+export function bucketRows(buckets: AssignmentBuckets, targetName: string): BucketRow[] {
+  const rows: BucketRow[] = [];
+  if (buckets.changedFromPublic.count) {
+    rows.push({
+      kind: 'add', icon: '+', count: buckets.changedFromPublic.count,
+      text: `${buckets.changedFromPublic.count.toLocaleString()} from ${PUBLIC_CHANNEL_NAME}`,
+    });
+  }
+  for (const source of buckets.movedFromOtherChannel.channels) {
+    rows.push({
+      kind: 'move', icon: '⇄', count: source.count,
+      text: `${source.count.toLocaleString()} moved out of ${source.name ?? 'another channel'}`,
+      why: 'needs this confirmation',
+    });
+  }
+  if (buckets.alreadyInTarget.count) {
+    rows.push({
+      kind: 'same', icon: '=', count: buckets.alreadyInTarget.count,
+      text: `${buckets.alreadyInTarget.count.toLocaleString()} already in ${targetName}`,
+      why: 'unchanged',
+    });
+  }
+  if (buckets.skippedHeld.count) {
+    rows.push({
+      kind: 'skip', icon: '⏸', count: buckets.skippedHeld.count,
+      text: `${buckets.skippedHeld.count.toLocaleString()} in a buyer's checkout`,
+      why: "can't move while held",
+      peek: peekOf(buckets.skippedHeld),
+    });
+  }
+  if (buckets.skippedBooked.count) {
+    rows.push({
+      kind: 'skip', icon: '🔒', count: buckets.skippedBooked.count,
+      text: `${buckets.skippedBooked.count.toLocaleString()} already sold`,
+      why: 'sales are never rewritten',
+      peek: peekOf(buckets.skippedBooked),
+    });
+  }
+  if (buckets.notFound.count) {
+    rows.push({
+      kind: 'skip', icon: '?', count: buckets.notFound.count,
+      text: `${buckets.notFound.count.toLocaleString()} not on this map`,
+      why: 'these seats are no longer part of the event',
+      peek: peekOf(buckets.notFound),
+    });
+  }
+  return rows;
+}
+
+function peekOf(bucket: AssignmentSkippedBucket): string | undefined {
+  if (!bucket.labels.length) return undefined;
+  const shown = bucket.labels.slice(0, 4).join(', ');
+  return bucket.truncated || bucket.labels.length > 4 ? `${shown}…` : shown;
+}
+
+/**
+ * "try again in ~N minutes" for the archive-blocked-by-holds 409 (§8.8).
+ * Rounds up so the organizer never comes back one tick early.
+ */
+export function retryAfterCopy(details: ArchiveBlockedDetails | null | undefined): string {
+  const ms = details?.retryAfterMs ?? (details?.latestHoldExpiresAt
+    ? Math.max(0, details.latestHoldExpiresAt - Date.now())
+    : 0);
+  if (!ms) return 'in a moment';
+  const minutes = Math.ceil(ms / 60_000);
+  if (minutes <= 1) return 'in about a minute';
+  return `in about ${minutes} minutes`;
+}
+
+/** The access line under a channel row. Falls back to "—" before the hardening
+ *  branch lands the `access` field, never to a guess. */
+export function accessLine(access: ChannelAccessSummary | null | undefined): string {
+  if (!access || !access.intent) return '—';
+  const base = access.intent === 'internal' ? 'Internal selling · no buyer access needed'
+    : access.intent === 'server' ? 'Server integration'
+      : access.intent === 'hosted_link' ? 'Hosted access link'
+        : 'No buyer access configured';
+  const grants = access.hasActiveGrants ? 'in use now'
+    : access.lastMintAt ? `last used ${new Date(access.lastMintAt).toLocaleDateString()}` : null;
+  const detail = access.detail ?? grants;
+  return detail ? `${base} · ${detail}` : base;
+}
+
+/** Plain-language label for the access-intent control. */
+export function accessIntentLabel(intent: ChannelAccessIntent): string {
+  return intent === 'internal' ? 'Internal selling — our own staff sell these'
+    : intent === 'server' ? 'Server integration — our backend lets buyers in'
+      : intent === 'hosted_link' ? 'Hosted access link — SeatLayer issues the link'
+        : 'No buyer access yet — the allocation is just protected';
+}
+
+/**
+ * The chart-update refusal `channel_assignment_would_drop` (409) deliberately
+ * mirrors the Apply skipped buckets, so ONE review component renders both.
+ * This adapts it into the same `BucketRow[]` the Review sheet already draws.
+ */
+export interface AssignmentDropDetails {
+  droppedUnits?: number;
+  channels?: Array<{ channelId: string; name: string | null; count: number; labels?: string[]; truncated?: boolean }>;
+  acknowledgeWith?: string;
+}
+
+export function dropReviewRows(details: AssignmentDropDetails | null | undefined): BucketRow[] {
+  return (details?.channels ?? []).map((channel) => ({
+    kind: 'skip' as const,
+    icon: '⚠',
+    count: channel.count,
+    text: `${channel.count.toLocaleString()} would leave ${channel.name ?? 'a channel'}`,
+    why: 'the new chart no longer has these seats',
+    peek: channel.labels?.length
+      ? peekOf({ count: channel.count, labels: channel.labels, truncated: channel.truncated ?? false })
+      : undefined,
+  }));
+}
+
+/** Plain-language state badge text (§9: no internal vocabulary on user surfaces). */
+export function stateBadge(state: ChannelState | 'builtin'): string {
+  return state === 'builtin' ? 'Built-in'
+    : state === 'active' ? 'Active'
+      : state === 'paused' ? 'Paused' : 'Archived';
+}

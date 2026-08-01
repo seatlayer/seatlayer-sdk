@@ -19,21 +19,87 @@
  * route is still session-only server-side).
  */
 import type { AvailabilityRule, ChartDoc } from '@seatlayer/core';
+import type {
+  AssignmentResult,
+  ChannelAccessIntent,
+  ChannelListResult,
+  ChannelRecord,
+} from './channelPlan';
 
 export type { AvailabilityRule } from '@seatlayer/core';
+
+/** One page of the organizer-only label → channel projection. */
+export interface ChannelAllocationPage {
+  assignmentVersion: number;
+  allocations: Array<{ label: string; channelId: string }>;
+  nextAfterLabel: string | null;
+}
+
+export interface ChannelAuditEntry {
+  id: number;
+  at: number;
+  actor: string | null;
+  action: string;
+  channelId: string | null;
+  assignmentVersion: number;
+  before: unknown;
+  after: unknown;
+  reason: string | null;
+}
+
+export interface ChannelAuditPage {
+  entries: ChannelAuditEntry[];
+  nextBefore: number | null;
+}
+
+/**
+ * Buyer projection for a preview audience — the same scoped server view the
+ * buyer SDK receives. When an audience cannot be previewed (a paused or
+ * archived channel), the server answers `{available:false, unavailable:[…]}`
+ * and the UI shows the real paused/unavailable landing state instead of
+ * rendering those seats as eligible.
+ *
+ * Fields stay optional: a worker that predates the hardening merge 404s here,
+ * and Channels mode says the preview needs a newer server rather than faking a
+ * projection client-side.
+ */
+export interface ChannelPreviewProjection {
+  available?: boolean;
+  unavailable?: Array<{ channelId: string; state: 'paused' | 'archived' | string }>;
+  channelIds?: string[];
+  includePublic?: boolean;
+  /** Labels this audience may buy. Everything else renders as ONE neutral
+   *  unavailable state so preview never leaks which channel holds a seat. */
+  eligible?: string[];
+  counts?: { eligible?: number; free?: number; held?: number; booked?: number };
+}
 
 export class ManageApiError extends Error {
   status: number;
   code?: string;
   /** Present when a block/unbook 409s because seats were just taken. */
   conflicts?: { label: string; reason?: string }[];
+  /**
+   * Structured refusal detail. The channel routes use it for the two 409s a UI
+   * must render rather than merely report: `channel_archive_blocked_by_holds`
+   * carries {activeHolds, heldUnits, latestHoldExpiresAt, retryAfterMs}, and
+   * `channel_assignment_conflict` carries the current assignmentVersion.
+   */
+  details?: Record<string, unknown>;
 
-  constructor(status: number, message: string, code?: string, conflicts?: { label: string; reason?: string }[]) {
+  constructor(
+    status: number,
+    message: string,
+    code?: string,
+    conflicts?: { label: string; reason?: string }[],
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = 'ManageApiError';
     this.status = status;
     this.code = code;
     this.conflicts = conflicts;
+    this.details = details;
   }
 }
 
@@ -148,8 +214,19 @@ async function parse<T>(res: Response): Promise<T> {
   const isJson = (res.headers.get('content-type') ?? '').includes('application/json');
   const data = isJson ? await res.json().catch(() => null) : null;
   if (!res.ok) {
-    const err = data as { error?: string; code?: string; conflicts?: { label: string; reason?: string }[] } | null;
-    throw new ManageApiError(res.status, err?.error ?? `request_failed_${res.status}`, err?.code, err?.conflicts);
+    const err = data as {
+      error?: string;
+      code?: string;
+      conflicts?: { label: string; reason?: string }[];
+      details?: Record<string, unknown>;
+    } | null;
+    throw new ManageApiError(
+      res.status,
+      err?.error ?? `request_failed_${res.status}`,
+      err?.code,
+      err?.conflicts,
+      err?.details,
+    );
   }
   return data as T;
 }
@@ -172,7 +249,7 @@ export class ManageApi {
     this.token = token;
   }
 
-  private auth<T>(path: string, init: { method?: 'GET' | 'POST'; body?: unknown } = {}): Promise<T> {
+  private auth<T>(path: string, init: { method?: 'GET' | 'POST' | 'PATCH'; body?: unknown } = {}): Promise<T> {
     const method = init.method ?? 'GET';
     const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` };
     let body: string | undefined;
@@ -257,6 +334,127 @@ export class ManageApi {
     rules: Record<string, AvailabilityRule>,
   ): Promise<{ ok: true; hidden: string[]; rules: Record<string, AvailabilityRule> }> {
     return this.auth(`/v1/events/${encodeURIComponent(key)}/availability`, { method: 'POST', body: { rules } });
+  }
+
+  // ---- sales channels (token, capability-gated) ----
+  // Reads need `event:channels:view`, mutations `event:channels:manage`.
+  // `event:block` grants NEITHER (spec §10), so a Block-only cockpit token gets
+  // a 403 here and Channels mode never renders.
+
+  /** Allocation list with exact per-channel counts. `includeArchived` adds the
+   *  read-only archived rows behind the rail's "Show archived" control. */
+  channels(key: string, opts: { includeArchived?: boolean } = {}): Promise<ChannelListResult> {
+    const qs = opts.includeArchived ? '?includeArchived=1' : '';
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/channels${qs}`);
+  }
+
+  /** One page of the label → channel map that paints the allocation overlay.
+   *  Paged by label; follow `nextAfterLabel` until it is null. */
+  channelAllocation(
+    key: string,
+    opts: { afterLabel?: string; limit?: number } = {},
+  ): Promise<ChannelAllocationPage> {
+    const params = new URLSearchParams();
+    if (opts.afterLabel) params.set('afterLabel', opts.afterLabel);
+    if (opts.limit != null) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/channels/allocation${qs ? `?${qs}` : ''}`);
+  }
+
+  channelAudit(key: string, opts: { limit?: number; before?: number } = {}): Promise<ChannelAuditPage> {
+    const params = new URLSearchParams();
+    if (opts.limit != null) params.set('limit', String(opts.limit));
+    if (opts.before != null) params.set('before', String(opts.before));
+    const qs = params.toString();
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/channels/audit${qs ? `?${qs}` : ''}`);
+  }
+
+  createChannel(
+    key: string,
+    input: { name: string; color?: string | null; marker?: string | null; externalRef?: string | null },
+  ): Promise<{ ok: true; channel: ChannelRecord }> {
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/channels`, { method: 'POST', body: input });
+  }
+
+  renameChannel(key: string, channelId: string, name: string): Promise<{ ok: true; channel: ChannelRecord }> {
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/channels/${encodeURIComponent(channelId)}`, {
+      method: 'PATCH', body: { name },
+    });
+  }
+
+  setChannelPaused(key: string, channelId: string, paused: boolean): Promise<{ ok: true; channel: ChannelRecord }> {
+    const path = paused ? 'pause' : 'unpause';
+    return this.auth(
+      `/v1/events/${encodeURIComponent(key)}/channels/${encodeURIComponent(channelId)}/${path}`,
+      { method: 'POST', body: {} },
+    );
+  }
+
+  /** Archive with a mandatory destination for the remaining allocation.
+   *  Throws ManageApiError 409 `channel_archive_blocked_by_holds` while any hold
+   *  is live; `err.details` carries the exact counts + retry window. */
+  archiveChannel(
+    key: string,
+    channelId: string,
+    destination: string | null,
+  ): Promise<{ ok: true; channel: ChannelRecord; assignmentVersion: number; moved: number }> {
+    return this.auth(
+      `/v1/events/${encodeURIComponent(key)}/channels/${encodeURIComponent(channelId)}/archive`,
+      { method: 'POST', body: { destination } },
+    );
+  }
+
+  /**
+   * Versioned Apply. A stale `assignmentVersion` mutates NOTHING and throws
+   * ManageApiError 409 `channel_assignment_conflict` — the caller keeps its
+   * selection and offers "Refresh and review". There is no dry-run: the review
+   * sheet previews locally, this call returns the authoritative buckets.
+   */
+  applyChannelAssignment(
+    key: string,
+    input: { targetChannelId: string | null; labels: string[]; assignmentVersion: number },
+  ): Promise<AssignmentResult> {
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/channels/assignments`, {
+      method: 'POST',
+      body: {
+        targetChannelId: input.targetChannelId || null,
+        labels: input.labels,
+        assignmentVersion: input.assignmentVersion,
+      },
+    });
+  }
+
+  /**
+   * Read-only buyer projection for an audience (§8.6) — the SAME scoped server
+   * view the buyer SDK receives, never a local approximation.
+   *
+   * Ships on the access-hardening branch. Older workers 404/405 here; callers
+   * MUST feature-detect and quietly say the preview needs a newer server rather
+   * than faking a projection client-side.
+   */
+  channelPreview(
+    key: string,
+    channelIds: string[],
+    opts: { includePublic?: boolean } = {},
+  ): Promise<ChannelPreviewProjection> {
+    const params = new URLSearchParams();
+    if (channelIds.length) params.set('channelIds', channelIds.join(','));
+    if (opts.includePublic != null) params.set('includePublic', opts.includePublic ? '1' : '0');
+    const qs = params.toString();
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/channels/preview${qs ? `?${qs}` : ''}`);
+  }
+
+  /** Declare how buyers are meant to reach this channel. Drives the rail's
+   *  access line and turns "No buyer access configured" from information into a
+   *  warning when the organizer says the channel is for buyer self-service. */
+  setChannelAccessIntent(
+    key: string,
+    channelId: string,
+    accessIntent: ChannelAccessIntent,
+  ): Promise<{ ok: true; channel: ChannelRecord }> {
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/channels/${encodeURIComponent(channelId)}`, {
+      method: 'PATCH', body: { accessIntent },
+    });
   }
 
   // ---- reports (token) ----

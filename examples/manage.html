@@ -19,7 +19,10 @@
       (a second client). Hold/book in the buyer → watch the board flash + tallies tick. Marquee-drag a
       zone in the board's <b>Block</b> mode → the buyer's seats go unavailable (realtime).<br><br>
       Query params: <code>?event=west-end-p3</code> · <code>?token=sk_…</code> (writes) ·
-      <code>?api=https://seatmap-api.paiteq.in</code>
+      <code>?api=https://seatmap-api.paiteq.in</code><br><br>
+      <b>Channels mode:</b> add <code>?mode=channels</code> (or press <code>C</code>). Gating is fail-closed —
+      <code>?caps=view</code> shows the read-only rail with no mutation controls, <code>?caps=manage</code>
+      the full surface. Narrow the window below 800px to get the Tools picker + bottom-sheet detents.
     </p>
   </div>
   <script type="module" src="./manage.ts"></script>
