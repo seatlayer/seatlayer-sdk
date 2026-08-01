@@ -80,6 +80,14 @@ export interface BuyerRealtimeOptions {
 }
 
 export const SEATLAYER_V1 = 'seatlayer.v1';
+/**
+ * Join separator for the section-visibility dedupe keys. A NUL can never occur
+ * in a section id, so two different arrays can never collide on one key. It is
+ * written as an escape deliberately: a literal NUL byte in the source made the
+ * whole file read as binary to grep, diff, and review tooling.
+ */
+const SEP = '\u0000';
+
 /** Protocol doc §3: revocation closes the socket with this code. */
 export const CLOSE_ACCESS_REVOKED = 4401;
 
@@ -354,8 +362,8 @@ export class BuyerRealtimeClient {
     if (Array.isArray(frame.hidden) || Array.isArray(frame.closed)) {
       const hidden = Array.isArray(frame.hidden) ? (frame.hidden as string[]) : [];
       const closed = Array.isArray(frame.closed) ? (frame.closed as string[]) : [];
-      const hKey = hidden.join(' ');
-      const cKey = closed.join(' ');
+      const hKey = hidden.join(SEP);
+      const cKey = closed.join(SEP);
       if (hKey !== this.hidden || cKey !== this.closedSections) {
         this.hidden = hKey;
         this.closedSections = cKey;
