@@ -68,7 +68,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
   function SeatManager(props, ref) {
     const {
       className, style, apiBase, eventKey, token, tokenExpiresAt,
-      mode, currency, keepLiveWhileHidden, followLive,
+      mode, currency, keepLiveWhileHidden, followLive, capabilities,
     } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -91,6 +91,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         currency,
         keepLiveWhileHidden,
         followLive,
+        capabilities,
         theme: callbacks.current.theme,
         onReady: () => callbacks.current.onReady?.(),
         onTallies: (t: SeatManagerTallies) => callbacks.current.onTallies?.(t),
