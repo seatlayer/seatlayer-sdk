@@ -25,6 +25,9 @@
  */
 import type { AvailabilityRule, ChartDoc } from '@seatlayer/core';
 import type {
+  AccessLinkRecord,
+  AccessLinkReveal,
+  AccessLinkStatusRecord,
   AssignmentResult,
   ChannelAccessIntent,
   ChannelListResult,
@@ -91,6 +94,13 @@ export class ManageApiError extends Error {
    * `channel_assignment_conflict` carries the current assignmentVersion.
    */
   details?: Record<string, unknown>;
+  /**
+   * The server's own human sentence, when it sent one. `message` is the machine
+   * code (that is what `error` carries), so a UI that wants to state a PLATFORM
+   * RULE — "redemptions must be between 1 and 10 000" — reads this instead of
+   * re-encoding the bound locally and risking disagreement with the server.
+   */
+  serverMessage?: string;
 
   constructor(
     status: number,
@@ -98,6 +108,7 @@ export class ManageApiError extends Error {
     code?: string,
     conflicts?: { label: string; reason?: string }[],
     details?: Record<string, unknown>,
+    serverMessage?: string,
   ) {
     super(message);
     this.name = 'ManageApiError';
@@ -105,6 +116,7 @@ export class ManageApiError extends Error {
     this.code = code;
     this.conflicts = conflicts;
     this.details = details;
+    this.serverMessage = serverMessage;
   }
 }
 
@@ -237,6 +249,7 @@ async function parse<T>(res: Response): Promise<T> {
       code?: string;
       conflicts?: { label: string; reason?: string }[];
       details?: Record<string, unknown>;
+      message?: string;
     } | null;
     throw new ManageApiError(
       res.status,
@@ -244,6 +257,7 @@ async function parse<T>(res: Response): Promise<T> {
       err?.code,
       err?.conflicts,
       err?.details,
+      typeof err?.message === 'string' ? err.message : undefined,
     );
   }
   return data as T;
@@ -267,7 +281,10 @@ export class ManageApi {
     this.token = token;
   }
 
-  private auth<T>(path: string, init: { method?: 'GET' | 'POST' | 'PATCH'; body?: unknown } = {}): Promise<T> {
+  private auth<T>(
+    path: string,
+    init: { method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'; body?: unknown } = {},
+  ): Promise<T> {
     const method = init.method ?? 'GET';
     const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` };
     let body: string | undefined;
@@ -500,6 +517,86 @@ export class ManageApi {
     return this.auth(`/v1/events/${encodeURIComponent(key)}/channels/${encodeURIComponent(channelId)}`, {
       method: 'PATCH', body: { accessIntent },
     });
+  }
+
+  // ---- hosted access links (M8) ----
+
+  /**
+   * Mint a hosted access link. The 201 is the ONE and ONLY time `url` and
+   * `capability` exist outside the buyer's browser — SeatLayer keeps a hash, so
+   * there is no route, cache, or support escalation that can produce this string
+   * again. Callers must reveal it immediately and then let it go.
+   *
+   * Every omitted field takes the server's default: expiry = when the event
+   * starts, 100 redemptions, 4 seats per buyer, this channel's allocation only.
+   * Platform bounds are enforced server-side and reported as 422 with the rule
+   * spelled out in `ManageApiError.serverMessage`.
+   *
+   * Side effect by design: this also declares the channel's access intent as
+   * `hosted_link`, so the rail stops saying "no buyer access configured".
+   */
+  createAccessLink(
+    key: string,
+    channelId: string,
+    input: {
+      label?: string | null;
+      /** Absolute epoch ms. Omit for "when the event starts". */
+      expiresAt?: number;
+      maxRedemptions?: number;
+      maxQuantity?: number;
+      includePublic?: boolean;
+    } = {},
+  ): Promise<AccessLinkReveal> {
+    return this.auth(
+      `/v1/events/${encodeURIComponent(key)}/channels/${encodeURIComponent(channelId)}/access-links`,
+      { method: 'POST', body: input },
+    );
+  }
+
+  /** Status only — label, expiry, redemptions, per-buyer cap, lineage, and the
+   *  live session count. Never the url, never the capability. Needs `:view`. */
+  accessLinks(key: string, channelId: string): Promise<{ links: AccessLinkStatusRecord[] }> {
+    return this.auth(
+      `/v1/events/${encodeURIComponent(key)}/channels/${encodeURIComponent(channelId)}/access-links`,
+    );
+  }
+
+  /**
+   * Rotate — the ONLY recovery for a link nobody kept. The old URL stops opening
+   * immediately and the response is a fresh one-time reveal.
+   *
+   * `endActiveSessions` is REQUIRED, not defaulted: the organizer must say
+   * whether buyers already inside finish their checkout or lose access now. The
+   * server answers 422 `end_active_sessions_required` if it is omitted, and that
+   * refusal is correct — a UI must not pick either branch on their behalf.
+   */
+  rotateAccessLink(
+    key: string,
+    channelId: string,
+    linkId: string,
+    endActiveSessions: boolean,
+  ): Promise<AccessLinkReveal & { previous: AccessLinkRecord; endedSessions: number }> {
+    return this.auth(
+      `/v1/events/${encodeURIComponent(key)}/channels/${encodeURIComponent(channelId)}`
+      + `/access-links/${encodeURIComponent(linkId)}/rotate`,
+      { method: 'POST', body: { endActiveSessions } },
+    );
+  }
+
+  /** Revoke. The link stops opening immediately; `endActiveSessions` decides
+   *  whether the buyers already inside keep their sessions. */
+  revokeAccessLink(
+    key: string,
+    channelId: string,
+    linkId: string,
+    endActiveSessions = false,
+  ): Promise<{ ok: true; link: AccessLinkRecord; endedSessions: number }> {
+    const qs = endActiveSessions ? '?endActiveSessions=1' : '';
+    return this.auth(
+      `/v1/events/${encodeURIComponent(key)}/channels/${encodeURIComponent(channelId)}`
+      + `/access-links/${encodeURIComponent(linkId)}${qs}`,
+      { method: 'DELETE' },
+    );
   }
 
   // ---- reports (token) ----
