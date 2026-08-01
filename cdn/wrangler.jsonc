@@ -1,9 +1,15 @@
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "seatlayer-sdk-cdn",
+  // Pin the target Cloudflare account. Without this, wrangler falls back to
+  // whatever the local OAuth login is — which is the OLD account — and a
+  // deploy can silently land in the wrong estate. Every environment in this
+  // file lives in the NEW account, so one top-level key covers them all.
+  "account_id": "deb54af831850e165c941904170efed7",
   "main": "src/worker.mjs",
   "compatibility_date": "2026-07-17",
   "workers_dev": true,
+  // LIVE since the 2026-08-01 cutover on the new account.
   "routes": [
     { "pattern": "cdn.seatlayer.io", "custom_domain": true }
   ],
