@@ -577,7 +577,18 @@ export function createControllerSink(
       await controller.refresh();
     },
 
+    /**
+     * Section availability moved. Statuses are re-pulled so the map repaints.
+     *
+     * Known limit: rebuilding the chart when a section is newly HIDDEN (its
+     * seats are stripped, not greyed) lives inside PickerController's own
+     * socket handler and has no public entry point, so an access-scoped picker
+     * repaints statuses but does not restructure the chart until its next
+     * mount. Closing/opening a section — the common mid-sale move — is a
+     * status-level change and is handled here in full.
+     */
     onSections(hidden, closed) {
+      void controller.refresh();
       options.onSections?.(hidden, closed);
     },
   };
