@@ -22,7 +22,8 @@ import type {
 import { distributeAlongCubic } from './complexGeometry';
 import { polygonInscribedAnchor } from './polygonAnchor';
 import { translateSectionOutlinePath } from './sectionPath';
-import { toLetters, toRoman } from './labeling';
+import { resolveSegmentedRowGroups, type SegmentedRowPlacement } from './segmentedRowModel';
+import { seatDisplayLabel, seatInventoryLabel } from './seatNumbering';
 import { METRES_PER_CHART_UNIT, SEATED_EYE_HEIGHT_M, sectionGeometry } from './units';
 import { resolveSection } from './venueStructure';
 
@@ -141,98 +142,28 @@ export interface TableSeatSlot extends RowSeatSlot {
 }
 
 /**
- * Number outward from the middle: rank seats by distance from centre (inner-left
- * wins ties), so the centre seat gets rank 0 (the lowest number). Shared by the
- * `center` direction across every scheme.
+ * Seat slots for one physical row.
+ *
+ * `placement` makes the slots read as part of a logical segmented row: labels
+ * continue across components (`A-8`, not a second `A-1`) using the logical row's
+ * numbering scheme and total seat count.
  */
-function centerRank(n: number): number[] {
-  const rank = new Array<number>(n);
-  Array.from({ length: n }, (_, i) => i)
-    .sort((a, b) => Math.abs(2 * a - (n - 1)) - Math.abs(2 * b - (n - 1)) || a - b)
-    .forEach((idx, k) => (rank[idx] = k));
-  return rank;
-}
-
-/**
- * The seat NUMBER part of a row seat's label (the row prefix is prepended by the
- * caller). Applies the row's numbering scheme, direction, step, start and label
- * prefix. Labels only — never geometry. See `RowObject.seatNumbering.scheme`.
- */
-export function seatLabelPart(row: RowObject, i: number): string {
-  const rawStart = row.seatLabelStart ?? 1;
-  const dir = row.seatNumbering?.direction ?? 'ltr';
-  const step = row.seatNumbering?.step ?? 1;
-  const scheme = row.seatNumbering?.scheme ?? 'decimal';
-  const prefix = row.seatNumbering?.prefix ?? '';
-  const endAt = row.seatNumbering?.endAt;
-  const n = row.seatCount;
-
-  // Both up/down variants replace direction and number by physical left→right
-  // order. `updown` is odd-up-even-back (1,3,5,…,6,4,2); the distinct reverse
-  // variant is odd-back-even-up (…5,3,1,2,4,6). `start` shifts either sequence.
-  // They own their sequence, so both ignore `endAt`.
-  if (scheme === 'updown' || scheme === 'updown-descending') {
-    const half = Math.ceil(n / 2);
-    const core = scheme === 'updown'
-      ? (i < half ? rawStart + 2 * i : rawStart - 1 + 2 * (n - i))
-      : (i < half ? rawStart + 2 * (half - 1 - i) : rawStart + 1 + 2 * (i - half));
-    return `${prefix}${core}`;
-  }
-
-  // End-at preset ("useEndAt"): derive `start` so the LAST-numbered seat
-  // (position rank n-1) lands on `endAt`, honouring the scheme's effective step
-  // (odd/even = 2). `endAt` wins over the stored `seatLabelStart`.
-  const effStep = scheme === 'odd' || scheme === 'even' ? 2 : step;
-  const start = endAt != null && Number.isFinite(endAt) ? endAt - (n - 1) * effStep : rawStart;
-
-  // Position rank p ∈ [0, n-1]: the 0-based ordinal along the numbering
-  // direction. Every remaining scheme is a formatting of `start + p*step`.
-  const p = dir === 'center' ? centerRank(n)[i] : dir === 'rtl' ? n - 1 - i : i;
-
-  let core: string;
-  switch (scheme) {
-    case 'odd': {
-      const firstOdd = start % 2 === 1 ? start : start + 1;
-      core = String(firstOdd + p * 2);
-      break;
-    }
-    case 'even': {
-      const firstEven = start % 2 === 0 ? start : start + 1;
-      core = String(firstEven + p * 2);
-      break;
-    }
-    case 'roman':
-      core = toRoman(start + p * step);
-      break;
-    case 'letters-upper':
-      core = toLetters(start + p * step, false);
-      break;
-    case 'letters-lower':
-      core = toLetters(start + p * step, true);
-      break;
-    case 'decimal':
-    default:
-      core = String(start + p * step);
-      break;
-  }
-  return `${prefix}${core}`;
-}
-
-export function expandRowSlots(row: RowObject): RowSeatSlot[] {
+export function expandRowSlots(row: RowObject, placement?: SegmentedRowPlacement): RowSeatSlot[] {
   const ov = overrideMap(row);
   return rowSeatPositions(row).map((p, i) => {
     const o = ov.get(i);
     const accessibility = overrideAccessibility(o);
-    const part = seatLabelPart(row, i);
-    const inventoryLabel = o?.label ?? `${row.label}-${part}`;
-    const displayPrefix = row.displayLabel ?? row.label;
+    // Inventory label stays PHYSICAL (stable booking identity); only the
+    // human-facing label follows a segmented row's logical numbering. Both
+    // resolved by `seatNumbering` so no surface can make this split differently.
+    const inventoryLabel = seatInventoryLabel(row, i, o);
     const commercial = { ...row.commercial, ...o?.commercial };
     return {
       index: i,
       x: p.x + (o?.dx ?? 0),
       y: p.y + (o?.dy ?? 0),
       label: inventoryLabel,
-      displayLabel: o?.displayLabel ?? `${displayPrefix}-${part}`,
+      displayLabel: seatDisplayLabel(row, i, placement, o),
       categoryKey: o?.categoryKey ?? row.categoryKey,
       skipped: !!o?.skip,
       accessible: accessibility.length > 0,
@@ -648,66 +579,7 @@ function expandFloorObjects(
   viewFallback?: string,
 ): ExpandedSeat[] {
   const out: ExpandedSeat[] = [];
-  const segmented = new Map<string, {
-    groupId: string;
-    adjacencyOffset: number;
-    displayOffset: number;
-    displayLabel: string;
-    totalSeats: number;
-    canonical: RowObject;
-    viewFromSeatUrl?: string;
-  }>();
-
-  // Resolve only complete, internally coherent groups. Malformed metadata is
-  // surfaced by validation and deliberately falls back to physical-row
-  // semantics here, so a corrupt document can never make buyer adjacency more
-  // permissive than the legacy model.
-  const grouped = new Map<string, RowObject[]>();
-  for (const object of objects) {
-    if (object.type !== 'row' || !object.segmentedRow) continue;
-    const list = grouped.get(object.segmentedRow.groupId) ?? [];
-    list.push(object);
-    grouped.set(object.segmentedRow.groupId, list);
-  }
-  for (const [groupId, members] of grouped) {
-    const ordered = members.slice().sort((left, right) => (
-      left.segmentedRow!.componentIndex - right.segmentedRow!.componentIndex
-    ));
-    const expectedCount = ordered[0]?.segmentedRow?.componentCount ?? 0;
-    const first = ordered[0]?.segmentedRow;
-    if (!first) continue;
-    const valid = expectedCount >= 2
-      && ordered.length === expectedCount
-      && first?.boundaryBefore === 'start'
-      && ordered.every((row, index) => (
-        row.segmentedRow?.kind === 'segmented-row-v1'
-        && row.segmentedRow.groupId === groupId
-        && row.segmentedRow.componentCount === expectedCount
-        && row.segmentedRow.componentIndex === index
-        && (index === 0
-          ? row.segmentedRow.boundaryBefore === 'start'
-          : row.segmentedRow.boundaryBefore !== 'start')
-        && row.segmentedRow.displayLabel === first.displayLabel
-      ));
-    if (!valid) continue;
-    const totalSeats = ordered.reduce((sum, row) => sum + row.seatCount, 0);
-    let adjacencyOffset = 0;
-    let displayOffset = 0;
-    for (const row of ordered) {
-      if (row.segmentedRow!.boundaryBefore === 'break') adjacencyOffset += 1;
-      segmented.set(row.id, {
-        groupId,
-        adjacencyOffset,
-        displayOffset,
-        displayLabel: first.displayLabel,
-        totalSeats,
-        canonical: ordered[0],
-        viewFromSeatUrl: first.viewFromSeatUrl,
-      });
-      adjacencyOffset += row.seatCount;
-      displayOffset += row.seatCount;
-    }
-  }
+  const segmented = resolveSegmentedRowGroups(objects);
 
   for (const obj of objects) {
     let seats: ExpandedSeat[] = [];
@@ -722,18 +594,13 @@ function expandFloorObjects(
         for (const seat of seats) {
           const physicalIndex = Number(seat.id.slice(seat.id.lastIndexOf(':') + 1));
           if (!Number.isInteger(physicalIndex)) continue;
-          const displayOrdinal = logical.displayOffset + physicalIndex;
           seat.logicalRowId = logical.groupId;
           seat.logicalSeatIndex = logical.adjacencyOffset + physicalIndex;
           // A seat-level display override remains the highest-precedence copy.
+          // Left to `expandRow`, which drops it when it equals the inventory
+          // label; only the DERIVED logical label is recomputed here.
           if (!overrides.get(physicalIndex)?.displayLabel) {
-            const numberingRow: RowObject = {
-              ...logical.canonical,
-              seatCount: logical.totalSeats,
-              label: logical.displayLabel,
-              displayLabel: logical.displayLabel,
-            };
-            seat.displayLabel = `${logical.displayLabel}-${seatLabelPart(numberingRow, displayOrdinal)}`;
+            seat.displayLabel = seatDisplayLabel(obj, physicalIndex, logical);
           }
           seat.viewUrl ??= logical.viewFromSeatUrl;
         }

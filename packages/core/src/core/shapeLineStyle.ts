@@ -18,6 +18,17 @@ export function isOpenShapeKind(kind: ShapeObject['kind']): kind is 'line' | 'po
   return kind === 'line' || kind === 'polyline';
 }
 
+/**
+ * Shape kinds whose geometry is a `points[]` array, so they can be edited
+ * vertex by vertex. Lives here rather than in the Designer because both the
+ * controller's boundary/handle code and `controller/shapesTextDecorFacet` need
+ * the same answer, and the Designer previously carried a private copy of the
+ * open-shape rule alongside `isOpenShapeKind`.
+ */
+export function isPointShapeKind(kind: ShapeObject['kind']): kind is 'polygon' | 'line' | 'polyline' {
+  return kind === 'polygon' || isOpenShapeKind(kind);
+}
+
 export function resolvedShapeLineStyle(shape: Pick<ShapeObject, 'lineCap' | 'lineJoin' | 'startEnding' | 'endEnding'>) {
   return {
     lineCap: shape.lineCap ?? DEFAULT_SHAPE_LINE_CAP,

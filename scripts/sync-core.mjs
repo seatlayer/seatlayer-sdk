@@ -66,6 +66,11 @@ const FILES = [
   ['src/core/renderedQuality.ts', 'packages/core/src/core/renderedQuality.ts'],
   ['src/core/layout.ts', 'packages/core/src/core/layout.ts'],
   ['src/core/labeling.ts', 'packages/core/src/core/labeling.ts'],
+  // Extracted OUT of layout.ts in the app's designer decomposition and imported
+  // straight back by it, so the mirror stops building the moment either is
+  // missing. Manifest drift caught by the 0.36.0 release sync.
+  ['src/core/segmentedRowModel.ts', 'packages/core/src/core/segmentedRowModel.ts'],
+  ['src/core/seatNumbering.ts', 'packages/core/src/core/seatNumbering.ts'],
   ['src/core/bestAvailable.ts', 'packages/core/src/core/bestAvailable.ts'],
   ['src/core/ga.ts', 'packages/core/src/core/ga.ts'],
   ['src/core/sections.ts', 'packages/core/src/core/sections.ts'],

@@ -1150,7 +1150,13 @@ export interface ReferenceSectionTraceProposal {
   outlinePath: SectionOutlinePath;
   /** Only structural source voids; printed labels/icons are filtered out. */
   holes: Point[][];
-  color: string;
+  /**
+   * Optional, and the tracer deliberately omits it. The colour a section is
+   * drawn in belongs to the CHART, not to the screenshot it was traced from —
+   * see the note in `referenceSectionTrace.ts`. The sampled value lives on the
+   * region row as `sampled_color`. Consumers fall back to zone/theme colour.
+   */
+  color?: string;
   referenceSource: {
     assetId: string;
     regionId: string;
@@ -1377,6 +1383,12 @@ export interface RendererCallbacks {
 export type LodRung = 'zones' | 'sections' | 'seats';
 
 export interface RendererOptions extends RendererCallbacks {
+  /**
+   * Internal fixed-output mode used by the free maker's PNG/PDF pipeline.
+   * It disables interaction, ResizeObserver, animation/FPS work and overview
+   * bitmap caching while keeping the ordinary buyer renderer unchanged.
+   */
+  exportMode?: boolean;
   /** Max seats selectable at once (default 10). */
   maxSelection?: number;
   /** Only these statuses are clickable (default ['free']). */

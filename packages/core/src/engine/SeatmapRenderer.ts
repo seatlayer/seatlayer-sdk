@@ -122,6 +122,11 @@ const PAN_START_SLOP_PX = 8;
  *  mouse click. 700ms covers the legacy 300ms click delay with margin; mouse
  *  and pen paths never set the timestamp, so they are unaffected. */
 const GHOST_CLICK_MS = 700;
+/** World-space padding kept between an automatic row label and nearby ink. */
+const ROW_LABEL_CLEARANCE = 2;
+/** Cell size for the tiny row/free-text collision index. Row labels are
+ * normally 10–40 chart units wide, so 64 keeps each query to a few entries. */
+const ROW_LABEL_COLLISION_CELL = 64;
 /**
  * Below this scale, ZONE blocks/labels take over from per-section detail (the
  * farthest rung). ~0.55× the section rung so: seats → section blocks → zones.
@@ -277,6 +282,68 @@ interface OverviewPalette {
   sectionInk: string;
   focalFill: string;
   focalStroke: string;
+}
+
+interface WorldBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface RowLabelPlanEntry {
+  text: string;
+  x: number;
+  y: number;
+  rotation: number;
+  fontSize: number;
+  ink: string;
+  opacity: number;
+  /** Absent for a free-drag position, which must remain pixel-faithful. */
+  automaticAway?: Point;
+}
+
+function worldBoxesOverlap(a: WorldBox, b: WorldBox): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width
+    && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+/** Small deterministic grid used only while rebuilding viewport labels. */
+class WorldBoxIndex {
+  private cells = new Map<string, WorldBox[]>();
+
+  insert(box: WorldBox): void {
+    for (const key of this.keys(box)) {
+      const bucket = this.cells.get(key);
+      if (bucket) bucket.push(box);
+      else this.cells.set(key, [box]);
+    }
+  }
+
+  collisionCount(box: WorldBox): number {
+    const seen = new Set<WorldBox>();
+    let count = 0;
+    for (const key of this.keys(box)) {
+      for (const existing of this.cells.get(key) ?? []) {
+        if (seen.has(existing)) continue;
+        seen.add(existing);
+        if (worldBoxesOverlap(box, existing)) count++;
+      }
+    }
+    return count;
+  }
+
+  private keys(box: WorldBox): string[] {
+    const x0 = Math.floor(box.x / ROW_LABEL_COLLISION_CELL);
+    const x1 = Math.floor((box.x + Math.max(0, box.width)) / ROW_LABEL_COLLISION_CELL);
+    const y0 = Math.floor(box.y / ROW_LABEL_COLLISION_CELL);
+    const y1 = Math.floor((box.y + Math.max(0, box.height)) / ROW_LABEL_COLLISION_CELL);
+    const keys: string[] = [];
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) keys.push(`${x}:${y}`);
+    }
+    return keys;
+  }
 }
 
 function overviewPalette(canvasBackground: string): OverviewPalette {
@@ -732,6 +799,7 @@ interface ZoneRender {
 export class SeatmapRenderer implements ISeatmapRenderer {
   private container: HTMLDivElement;
   private opts: Required<Pick<RendererOptions, 'maxSelection'>> & RendererOptions;
+  private readonly exportMode: boolean;
 
   private stage: Stage;
   private bgLayer: Layer;
@@ -807,7 +875,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   /** OV-45(a): authored row-letter labels for the buyer/preview map, resolved in
    *  world space (matching seat labels) and honouring each row's labelPresentation
    *  (position/rotation/visibility/style). Painted at the seats LOD rung. */
-  private rowLabelPlan: Array<{ text: string; x: number; y: number; rotation: number; fontSize: number; ink: string; opacity: number }> = [];
+  private rowLabelPlan: RowLabelPlanEntry[] = [];
   /** Category order from the doc — the stable index into the CB palette. */
   private catOrder: string[] = [];
 
@@ -917,6 +985,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private bounds = { x: 0, y: 0, width: 1, height: 1 };
   private cached = false;
   private dpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 2);
+  /** Current chart's buyer-visible image work. Failures are retained until ready(). */
+  private assetGeneration = 0;
+  private assetPromises: Promise<void>[] = [];
+  private assetErrors: string[] = [];
+  private assetCancels = new Set<() => void>();
 
   private rafId = 0;
   private frames = 0;
@@ -973,8 +1046,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   constructor(container: HTMLDivElement, options: RendererOptions = {}) {
     this.container = container;
     this.opts = { maxSelection: 10, selectableStatuses: ['free'], ...options };
+    this.exportMode = options.exportMode === true;
     this.currency = options.currency;
 
+    const previousPixelRatio = Konva.pixelRatio;
+    if (this.exportMode) this.dpr = 1;
     Konva.pixelRatio = this.dpr;
 
     this.stage = new Stage({
@@ -984,22 +1060,24 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       draggable: false, // pan/pinch are ours, via pointer events
     });
 
-    container.style.touchAction = 'none';
-    container.addEventListener('pointerdown', this.onPointerDown, { passive: false });
-    container.addEventListener('pointermove', this.onPointerMove, { passive: false });
-    container.addEventListener('pointerup', this.onPointerEnd, { passive: false });
-    container.addEventListener('pointercancel', this.onPointerEnd, { passive: false });
+    if (!this.exportMode) {
+      container.style.touchAction = 'none';
+      container.addEventListener('pointerdown', this.onPointerDown, { passive: false });
+      container.addEventListener('pointermove', this.onPointerMove, { passive: false });
+      container.addEventListener('pointerup', this.onPointerEnd, { passive: false });
+      container.addEventListener('pointercancel', this.onPointerEnd, { passive: false });
 
-    // Keyboard accessibility: the canvas is focusable and navigable seat-by-seat.
-    if (container.tabIndex < 0) container.tabIndex = 0;
-    container.setAttribute('role', 'application');
-    if (!container.getAttribute('aria-label')) {
-      container.setAttribute('aria-label', t('map.aria'));
+      // Keyboard accessibility: the canvas is focusable and navigable seat-by-seat.
+      if (container.tabIndex < 0) container.tabIndex = 0;
+      container.setAttribute('role', 'application');
+      if (!container.getAttribute('aria-label')) {
+        container.setAttribute('aria-label', t('map.aria'));
+      }
+      container.addEventListener('keydown', this.onKeyDown);
     }
-    container.addEventListener('keydown', this.onKeyDown);
 
-    this.bgLayer = new Layer({ listening: true });
-    this.seatLayer = new Layer({ listening: true });
+    this.bgLayer = new Layer({ listening: !this.exportMode });
+    this.seatLayer = new Layer({ listening: !this.exportMode });
     this.overlayLayer = new Layer({ listening: false });
     this.labelGroup = new Group({ listening: false });
     this.overlayLayer.add(this.labelGroup);
@@ -1033,15 +1111,21 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.overlayLayer.add(this.focusRing);
 
     this.stage.add(this.bgLayer, this.seatLayer, this.overlayLayer);
+    // Export canvases intentionally use one physical pixel per stage pixel.
+    // Restore the shared Konva default immediately so a live renderer created
+    // while this exporter exists still receives its ordinary device ratio.
+    if (this.exportMode) Konva.pixelRatio = previousPixelRatio;
 
-    this.wireInteraction();
-    this.startFpsLoop();
+    if (!this.exportMode) {
+      this.wireInteraction();
+      this.startFpsLoop();
+    }
 
-    if (import.meta.env.DEV) {
+    if (import.meta.env.DEV && !this.exportMode) {
       (window as unknown as Record<string, unknown>).__seatmap = this;
     }
 
-    if (typeof ResizeObserver !== 'undefined') {
+    if (!this.exportMode && typeof ResizeObserver !== 'undefined') {
       this.resizeObs = new ResizeObserver(() => this.handleResize());
       this.resizeObs.observe(container);
     }
@@ -1054,6 +1138,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // scopes the chart accordingly — single-floor charts pass through (=== doc).
     // A fresh chart (new ref) resets to 2D; a re-render (same ref) preserves the mode.
     if (doc !== this.chartDoc) this.stacked = false;
+    this.cancelAssetLoads();
     this.chartDoc = doc;
     this.activeFloorId = opts?.floorId ?? floorsOf(doc)[0].id;
     // Object id → floor id, for resolving which deck a tap hit in the 3D stack
@@ -1072,7 +1157,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // A floor/chart replacement is a fresh live scene: clear both pieces of
     // cache state before adding its seats so direct Konva picking is truthful.
     this.seatLayer.clearCache();
-    this.seatLayer.listening(true);
+    this.seatLayer.listening(!this.exportMode);
     this.seatLayer.destroyChildren();
     this.unsectionedSeatGroup = null;
     this.labelGroup.destroyChildren();
@@ -1192,7 +1277,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // Rows/booths outside an authored section retain one always-visible legacy
     // container. Every section has its own group (created by renderSection), so
     // large venues can omit only whole, safely offscreen sections from paints.
-    this.unsectionedSeatGroup = new Group({ listening: true });
+    this.unsectionedSeatGroup = new Group({ listening: !this.exportMode });
     this.seatLayer.add(this.unsectionedSeatGroup);
     this.renderSeats();
     this.buildRowLabelPlan(view);
@@ -1966,7 +2051,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private paintGAStateForView(): void {
     for (const ga of this.gaById.values()) {
       const filteredOut = Boolean(this.categoryFilter && !this.categoryFilter.has(ga.categoryKey));
-      const overviewHidden = ga.sectionId != null && this.effScale() < CACHE_THRESHOLD;
+      const overviewHidden = !this.exportMode
+        && ga.sectionId != null
+        && this.effScale() < CACHE_THRESHOLD;
       ga.polygon.opacity(overviewHidden
         ? 0
         : this.gaCategoryDimmed(ga.categoryKey)
@@ -1974,7 +2061,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
           : GA_FILL_OPACITY);
       // A legend hover is only visual; a price-filter exclusion is not sellable
       // from the map until the filter is cleared.
-      ga.polygon.listening(!overviewHidden && !filteredOut);
+      ga.polygon.listening(!this.exportMode && !overviewHidden && !filteredOut);
     }
   }
 
@@ -2499,6 +2586,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   destroy(): void {
     this.destroyed = true;
+    this.cancelAssetLoads();
     if (this.rafId) cancelAnimationFrame(this.rafId);
     if (this.isoRaf) cancelAnimationFrame(this.isoRaf);
     if (this.glideRaf) cancelAnimationFrame(this.glideRaf);
@@ -2517,6 +2605,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   /** Theme font stack for all rendered text (falls back to Inter). */
   private labelFont(): string {
+    if (this.exportMode) {
+      return this.theme.fontFamily?.toLowerCase().includes('jetbrains')
+        ? 'JetBrains Mono, monospace'
+        : 'Inter, sans-serif';
+    }
     return this.theme.fontFamily || 'Inter, sans-serif';
   }
 
@@ -2572,7 +2665,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
    *  rung. Overview caching always restores all groups first, so panning a
    *  cached whole-venue bitmap can never reveal missing inventory. */
   private updateSeatGroupVisibility(): void {
-    const liveSeats = this.effScale() >= CACHE_THRESHOLD;
+    const liveSeats = this.exportMode || this.effScale() >= CACHE_THRESHOLD;
     // During a large-venue focus glide, transient camera rectangles can sweep
     // across thousands of seats that will be offscreen at the endpoint. Keep
     // the semantic shells visible through the motion and project native seats
@@ -3343,11 +3436,78 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // exposes its guide only while the focal tool is active.
   }
 
+  /**
+   * Track an image through decode without ever leaving a rejected promise
+   * unobserved. Ordinary picker rendering remains best-effort; export ready()
+   * turns the retained failures into one actionable error.
+   */
+  private trackAssetImage(
+    image: HTMLImageElement,
+    source: string,
+    label: string,
+    onReady: () => void,
+  ): void {
+    const generation = this.assetGeneration;
+    if (/^https?:\/\//i.test(source)) image.crossOrigin = 'anonymous';
+    const work = new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        this.assetCancels.delete(cancel);
+        resolve();
+      };
+      const cancel = () => {
+        image.onload = null;
+        image.onerror = null;
+        try {
+          image.removeAttribute('src');
+          image.src = '';
+        } catch {
+          // Releasing the renderer must not be blocked by an Image implementation.
+        }
+        finish();
+      };
+      this.assetCancels.add(cancel);
+      image.onload = () => {
+        if (!this.exportMode) {
+          if (generation === this.assetGeneration) onReady();
+          finish();
+          return;
+        }
+        const decoded = typeof image.decode === 'function' ? image.decode() : Promise.resolve();
+        void decoded
+          .then(() => {
+            if (generation === this.assetGeneration) onReady();
+          })
+          .catch(() => {
+            if (generation === this.assetGeneration) this.assetErrors.push(`${label} could not be decoded.`);
+          })
+          .finally(finish);
+      };
+      image.onerror = () => {
+        if (generation === this.assetGeneration) this.assetErrors.push(`${label} could not be loaded.`);
+        finish();
+      };
+      image.src = source;
+    });
+    this.assetPromises.push(work);
+  }
+
+  /** Cancel and release every image retained by the previous chart/export. */
+  private cancelAssetLoads(): void {
+    this.assetGeneration++;
+    for (const cancel of [...this.assetCancels]) cancel();
+    this.assetCancels.clear();
+    this.assetPromises = [];
+    this.assetErrors = [];
+  }
+
   /** Organizer floor-plan photo, dimmed, at the very bottom of the bg layer. */
   private renderBackgroundImage(bg: NonNullable<ChartDoc['backgroundImage']>): void {
     if (!bg.url || bg.visible === false) return;
     const img = new window.Image();
-    img.onload = () => {
+    this.trackAssetImage(img, bg.url, 'Buyer background image', () => {
       const natW = img.naturalWidth || 4;
       const natH = img.naturalHeight || 3;
       const rawCrop = bg.crop ?? { x: 0, y: 0, width: 1, height: 1 };
@@ -3382,8 +3542,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       this.bgLayer.add(node);
       node.moveToBottom();
       this.bgLayer.batchDraw();
-    };
-    img.src = bg.url;
+    });
   }
 
   /**
@@ -3415,12 +3574,11 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // decor stays on bgLayer, beneath sections and seats.
     if (obj.layer === 'foreground') this.fgDecorGroup.add(node);
     else this.bgLayer.add(node);
-    img.onload = () => {
+    this.trackAssetImage(img, obj.href, `Decor image “${obj.label || obj.id}”`, () => {
       const layer = node.getLayer();
       if (!layer) return; // chart swapped out before the image loaded
       layer.batchDraw();
-    };
-    img.src = obj.href;
+    });
   }
 
   private renderTable(obj: Extract<ChartDoc['objects'][number], { type: 'table' }>): void {
@@ -5512,6 +5670,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
 
   /** rAF-coalesced `onViewChange` — at most one host callback per animation frame. */
   private scheduleViewChange(): void {
+    if (this.exportMode) return;
     if (this.viewChangeRaf) return;
     this.viewChangeRaf = requestAnimationFrame(() => {
       this.viewChangeRaf = 0;
@@ -5523,7 +5682,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // Effective scale folds in the iso y-squash (smaller ⇒ seats read smaller),
     // so LOD/melt thresholds trip correctly in 3D view. Equals the raw stage
     // scale at isoT=0 → flat behaviour is unchanged.
-    const scale = this.effScale();
+    const scale = this.exportMode
+      ? Math.max(this.effScale(), BLOCK_MELT_TOP + 0.01, LABEL_SCALE)
+      : this.effScale();
     const focalScale = Math.max(scale, 0.0001);
     for (const [label, targetPx] of this.primaryFocalLabels) {
       this.sizeLabel(label, targetPx / focalScale, label.y());
@@ -5534,7 +5695,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     // Reveal/hide the per-seat accessibility glyphs for this zoom BEFORE the
     // cache decision below, so the seat-layer bitmap bakes them in/out to match.
     this.updateAccessGlyphs(scale);
-    const shouldCache = scale < CACHE_THRESHOLD;
+    const shouldCache = !this.exportMode && scale < CACHE_THRESHOLD;
     // Perspective section overviews deliberately paint only the bounded shells;
     // the entire native seat layer is opacity 0. Do not synchronously rebuild a
     // 14k-node bitmap that cannot contribute a pixel. If a prior flat overview
@@ -5555,7 +5716,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       // overview bitmap keeps every seat's local transform/clientRect warm, so
       // the first melt into a section paints at ordinary pan cost (OV-80).
       if (this.cached) this.releaseSeatLayerBitmap();
-      this.seatLayer.listening(true);
+      this.seatLayer.listening(!this.exportMode);
       this.cached = false;
       this.seatLayer.batchDraw();
     }
@@ -5651,8 +5812,115 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     this.overlayLayer.draw();
   }
 
+  /**
+   * Resolve every buyer-visible image requested by the current chart. Export
+   * callers get a hard error with the affected layer name; the interactive
+   * renderer never calls this and retains its existing best-effort behaviour.
+   */
+  async ready(): Promise<void> {
+    const generation = this.assetGeneration;
+    const fontSet = typeof document !== 'undefined' && 'fonts' in document
+      ? document.fonts
+      : null;
+    await Promise.all([
+      ...this.assetPromises.slice(),
+      ...(fontSet ? [
+        fontSet.ready.then(() => undefined),
+        fontSet.load('700 24px Inter').then(() => undefined),
+        fontSet.load('600 12px "JetBrains Mono"').then(() => undefined),
+      ] : []),
+    ]);
+    if (generation !== this.assetGeneration) {
+      throw new Error('The chart changed while its export assets were loading.');
+    }
+    if (this.assetErrors.length) {
+      throw new Error(`Export stopped because ${this.assetErrors.join(' ')}`);
+    }
+    if (this.exportMode) {
+      this.fitExportContent();
+      this.forceDraw();
+    }
+  }
+
+  /** Exact visible scene bounds in chart coordinates after fonts/assets exist. */
+  private exportSceneBounds(): { x: number; y: number; width: number; height: number } {
+    const rects = [this.bgLayer, this.seatLayer, this.overlayLayer]
+      .map((layer) => layer.getClientRect({ relativeTo: this.stage }))
+      .filter((rect) => rect.width > 0 && rect.height > 0);
+    if (!rects.length) return this.bounds;
+    const minX = Math.min(...rects.map((rect) => rect.x));
+    const minY = Math.min(...rects.map((rect) => rect.y));
+    const maxX = Math.max(...rects.map((rect) => rect.x + rect.width));
+    const maxY = Math.max(...rects.map((rect) => rect.y + rect.height));
+    return {
+      x: minX,
+      y: minY,
+      width: Math.max(1, maxX - minX),
+      height: Math.max(1, maxY - minY),
+    };
+  }
+
+  /** Fit exact rendered nodes, including rotated text/decor, with pixel padding. */
+  private fitExportContent(): void {
+    if (!this.exportMode) return;
+    const width = this.stage.width();
+    const height = this.stage.height();
+    const padding = Math.max(12, Math.min(36, Math.min(width, height) * 0.025));
+    const fit = () => {
+      const bounds = this.exportSceneBounds();
+      const availableWidth = Math.max(1, width - padding * 2);
+      const availableHeight = Math.max(1, height - padding * 2);
+      const scale = Math.min(availableWidth / bounds.width, availableHeight / bounds.height) || 1;
+      this.fitScale = scale;
+      this.stage.scale({ x: scale, y: scale });
+      this.stage.position({
+        x: (width - bounds.width * scale) / 2 - bounds.x * scale,
+        y: (height - bounds.height * scale) / 2 - bounds.y * scale,
+      });
+      this.afterViewChange();
+    };
+    // The first fit can rebuild viewport labels; a second pass includes their
+    // exact font metrics and rotated boxes in the final frame.
+    fit();
+    fit();
+  }
+
+  /**
+   * Capture a clean, opaque fixed-size canvas. The CSS host background is
+   * painted explicitly because Konva layers themselves are transparent.
+   */
+  captureCanvas(): HTMLCanvasElement {
+    if (!this.exportMode) {
+      throw new Error('captureCanvas() is available only on a renderer created with exportMode.');
+    }
+    this.forceDraw();
+    let scene: HTMLCanvasElement;
+    try {
+      scene = this.stage.toCanvas({ pixelRatio: 1, imageSmoothingEnabled: true });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`The chart canvas could not be captured. A buyer-visible image may block export. ${detail}`);
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = this.stage.width();
+    canvas.height = this.stage.height();
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas 2D is unavailable; this browser cannot create an export.');
+    context.fillStyle = this.canvasBackground;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    try {
+      context.drawImage(scene, 0, 0);
+    } finally {
+      scene.width = 1;
+      scene.height = 1;
+    }
+    return canvas;
+  }
+
   private updateFreeTextVisibility(): void {
-    const effectiveScale = this.effScale();
+    const effectiveScale = this.exportMode
+      ? Math.max(this.effScale(), LABEL_SCALE)
+      : this.effScale();
     for (const { objectId, node, categoryKey, kind } of this.freeTextById.values()) {
       const gaDimmed = categoryKey != null
         && (kind === 'ga-label' || kind === 'ga-capacity')
@@ -5706,20 +5974,98 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       const rotation = presentation?.rotation ?? 0;
       const text = obj.segmentedRow?.displayLabel ?? obj.displayLabel ?? obj.label;
       const opacity = this.objectFilteredOut(obj) ? 0.15 : 1;
-      const push = (x: number, y: number) => this.rowLabelPlan.push({ text, x, y, rotation, fontSize, ink, opacity });
+      const push = (x: number, y: number, automaticAway?: Point) => this.rowLabelPlan.push({
+        text, x, y, rotation, fontSize, ink, opacity, ...(automaticAway ? { automaticAway } : {}),
+      });
       if (presentation?.position) {
         // Free-drag wins: the stored point is the label's visual centre (WYSIWYG
         // with the Designer canvas and its placement handle).
         push(presentation.position.x, presentation.position.y);
         continue;
       }
-      const radians = (obj.rotation * Math.PI) / 180;
-      const along = { x: Math.cos(radians), y: Math.sin(radians) };
       const gap = this.seatR + 12;
       const preset = presentation?.positionPreset ?? 'start';
-      if (preset === 'start' || preset === 'both') push(first.x - along.x * gap, first.y - along.y * gap);
-      if (preset === 'end' || preset === 'both') push(last.x + along.x * gap, last.y + along.y * gap);
+      if (preset === 'start' || preset === 'both') {
+        const radians = (obj.rotation * Math.PI) / 180;
+        const away = { x: -Math.cos(radians), y: -Math.sin(radians) };
+        push(first.x + away.x * gap, first.y + away.y * gap, away);
+      }
+      if (preset === 'end' || preset === 'both') {
+        // Curved rows finish on a different tangent from the one they start on.
+        const radians = ((obj.rotation + obj.curve) * Math.PI) / 180;
+        const away = { x: Math.cos(radians), y: Math.sin(radians) };
+        push(last.x + away.x * gap, last.y + away.y * gap, away);
+      }
     }
+  }
+
+  /** Axis-aligned world bounds of a centred, potentially rotated row label. */
+  private rowLabelBox(
+    label: Text,
+    position: Point,
+    padding = ROW_LABEL_CLEARANCE,
+  ): WorldBox {
+    const radians = (label.rotation() * Math.PI) / 180;
+    const cos = Math.abs(Math.cos(radians));
+    const sin = Math.abs(Math.sin(radians));
+    const halfWidth = (label.width() * cos + label.height() * sin) / 2 + padding;
+    const halfHeight = (label.width() * sin + label.height() * cos) / 2 + padding;
+    return {
+      x: position.x - halfWidth,
+      y: position.y - halfHeight,
+      width: halfWidth * 2,
+      height: halfHeight * 2,
+    };
+  }
+
+  /**
+   * Keep an automatic start/end label out of seat markers and already-painted
+   * text. The authored point is never altered. Candidates are deliberately
+   * bounded and deterministic: the closest clear offset wins; if a chart is so
+   * dense that none is clear, the least-colliding candidate wins so the required
+   * row label remains present rather than being silently dropped.
+   */
+  private resolveAutomaticRowLabelPosition(
+    label: Text,
+    plan: RowLabelPlanEntry,
+    occupiedText: WorldBoxIndex,
+  ): Point {
+    const base = { x: plan.x, y: plan.y };
+    const away = plan.automaticAway;
+    if (!away) return base;
+    const normal = { x: -away.y, y: away.x };
+    const step = Math.max(7, Math.min(16, plan.fontSize * 0.75));
+    const offsets: Point[] = [{ x: 0, y: 0 }];
+    for (let ring = 1; ring <= 4; ring++) {
+      const distance = step * ring;
+      offsets.push(
+        { x: normal.x * distance, y: normal.y * distance },
+        { x: -normal.x * distance, y: -normal.y * distance },
+        { x: away.x * distance, y: away.y * distance },
+        { x: (away.x + normal.x) * distance, y: (away.y + normal.y) * distance },
+        { x: (away.x - normal.x) * distance, y: (away.y - normal.y) * distance },
+      );
+    }
+
+    let best = base;
+    let bestCollisions = Infinity;
+    let bestDistance = Infinity;
+    for (const offset of offsets) {
+      const candidate = { x: base.x + offset.x, y: base.y + offset.y };
+      const box = this.rowLabelBox(label, candidate);
+      const seatCollisions = this.seatIndex
+        ? queryRect(this.seatIndex, box, { mode: 'overlap' }).length
+        : 0;
+      const collisions = seatCollisions + occupiedText.collisionCount(box);
+      const distance = Math.hypot(offset.x, offset.y);
+      if (collisions < bestCollisions || (collisions === bestCollisions && distance < bestDistance)) {
+        best = candidate;
+        bestCollisions = collisions;
+        bestDistance = distance;
+      }
+      if (collisions === 0) break;
+    }
+    return best;
   }
 
   /** Row labels never carry status; the buyer just dims them under the same
@@ -5732,7 +6078,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   }
 
   private updateLabels(): void {
-    const effectiveScale = this.effScale();
+    const effectiveScale = this.exportMode
+      ? Math.max(this.effScale(), LABEL_SCALE)
+      : this.effScale();
     const show = effectiveScale >= LABEL_SCALE;
     for (const [id, label] of this.boothLabelById) {
       const shape = this.circleById.get(id);
@@ -5831,6 +6179,23 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     }
     // OV-45(a): authored row letters, world-space like seat labels, at the seats
     // rung. Culled by screen bounds; centred and honouring per-row rotation/style.
+    // Automatic start/end labels avoid neighbouring inventory and other visible
+    // copy. Free-drag positions remain exact WYSIWYG authoring coordinates.
+    const occupiedText = new WorldBoxIndex();
+    for (const { node } of this.freeTextById.values()) {
+      if (!node.isVisible()) continue;
+      const box = node.getClientRect({
+        relativeTo: this.bgLayer,
+        skipShadow: true,
+        skipStroke: true,
+      });
+      occupiedText.insert({
+        x: box.x - ROW_LABEL_CLEARANCE,
+        y: box.y - ROW_LABEL_CLEARANCE,
+        width: box.width + ROW_LABEL_CLEARANCE * 2,
+        height: box.height + ROW_LABEL_CLEARANCE * 2,
+      });
+    }
     for (const rl of this.rowLabelPlan) {
       const screen = this.worldToScreen({ x: rl.x, y: rl.y });
       if (screen.x < -40 || screen.x > this.stage.width() + 40
@@ -5854,6 +6219,10 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       });
       t.offsetX(t.width() / 2);
       t.offsetY(t.height() / 2);
+      const resolved = this.resolveAutomaticRowLabelPosition(t, rl, occupiedText);
+      t.position(resolved);
+      t.setAttr('rowLabel', true);
+      occupiedText.insert(this.rowLabelBox(t, resolved));
       this.labelGroup.add(t);
     }
     // Keep freshly-built seat labels upright under the iso layer skew.

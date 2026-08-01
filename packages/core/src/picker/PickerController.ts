@@ -211,6 +211,10 @@ export interface PickerTransport {
   /** Optional (P4) — push an active hold's expiry out ("need more time?"). */
   extend?(key: string, holdId: string, ttlMs?: number): Promise<{ holdId: string; expiresAt: number; extends?: number }>;
   socketUrl(key: string): string;
+  /** Optional — WebSocket subprotocols for the live feed (e.g. a one-use
+   *  subscribe ticket via `Sec-WebSocket-Protocol`, realtime-protocol v1).
+   *  Absent or empty means today's plain connection. */
+  socketProtocols?(key: string): string[];
 }
 
 export interface PickerCallbacks extends RendererCallbacks {
@@ -1875,7 +1879,8 @@ export class PickerController {
     if (!url) return;
     let ws: WebSocket;
     try {
-      ws = new WebSocket(url);
+      const protocols = this.api.socketProtocols?.(this.key);
+      ws = protocols && protocols.length ? new WebSocket(url, protocols) : new WebSocket(url);
     } catch {
       this.scheduleReconnect();
       return;

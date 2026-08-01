@@ -14,6 +14,36 @@ export function cubicPoint(path: CubicPath, t: number): Point {
   };
 }
 
+/**
+ * Build a predictable single-bend cubic whose midpoint passes exactly through
+ * `middle`. At t=.5 a cubic weighs both controls by 3/8, so moving both
+ * controls together by 4/3 of the requested midpoint offset makes the visible
+ * curve pass through the point the author dragged to.
+ *
+ * Lives here rather than in the Designer because two features need the same
+ * answer: the row bend handle (`renderRowPathHandles`) and the row curvature
+ * operations in `controller/rowOpsFacet`.
+ */
+export function smoothCubicThroughMiddle(start: Point, end: Point, middle: Point): CubicPath {
+  const chordMiddle = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  const offset = {
+    x: (middle.x - chordMiddle.x) * 4 / 3,
+    y: (middle.y - chordMiddle.y) * 4 / 3,
+  };
+  return {
+    start: { ...start },
+    control1: {
+      x: start.x + (end.x - start.x) / 3 + offset.x,
+      y: start.y + (end.y - start.y) / 3 + offset.y,
+    },
+    control2: {
+      x: start.x + ((end.x - start.x) * 2) / 3 + offset.x,
+      y: start.y + ((end.y - start.y) * 2) / 3 + offset.y,
+    },
+    end: { ...end },
+  };
+}
+
 /** Equal-arc-length points on a cubic path, including both endpoints. */
 export function distributeAlongCubic(path: CubicPath, count: number, resolution = 192): Point[] {
   if (!Number.isInteger(count) || count < 1) throw new Error('Path point count must be a positive integer');
