@@ -3,6 +3,10 @@ packages:
 overrides:
   esbuild: 0.28.1
 allowBuilds:
+  # ng-packagr pulls this in for its watch mode, which we never use — the Angular
+  # package only ever gets a one-shot build. Declining it explicitly keeps
+  # `pnpm install` from failing on an unclassified build script.
+  '@parcel/watcher': false
   esbuild: true
   sharp: true
   workerd: true

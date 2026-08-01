@@ -9,6 +9,8 @@ export const packageFiles = [
   'packages/core/package.json',
   'packages/js/package.json',
   'packages/react/package.json',
+  'packages/vue/package.json',
+  'packages/angular/package.json',
 ];
 
 export function readJson(path) {

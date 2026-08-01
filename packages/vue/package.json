@@ -1,0 +1,60 @@
+{
+  "name": "@seatlayer/vue",
+  "version": "0.34.0",
+  "description": "Vue 3 components for the SeatLayer embed SDK \u2014 render an interactive seat picker and hold seats.",
+  "license": "MIT",
+  "homepage": "https://docs.seatlayer.io/buyer-sdk/seat-picker/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/seatlayer/seatlayer-sdk.git",
+    "directory": "packages/vue"
+  },
+  "bugs": {
+    "url": "https://github.com/seatlayer/seatlayer-sdk/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "keywords": [
+    "seating",
+    "seat-map",
+    "seating-chart",
+    "seat-picker",
+    "seatlayer",
+    "vue",
+    "vue3",
+    "ticketing"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@seatlayer/js": "workspace:*"
+  },
+  "peerDependencies": {
+    "vue": ">=3.3.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.0",
+    "vue": "^3.5.13"
+  }
+}

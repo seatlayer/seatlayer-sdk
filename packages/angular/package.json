@@ -1,0 +1,62 @@
+{
+  "name": "@seatlayer/angular",
+  "version": "0.34.0",
+  "description": "Angular component for the SeatLayer embed SDK \u2014 render an interactive seat picker and hold seats.",
+  "license": "MIT",
+  "homepage": "https://docs.seatlayer.io/buyer-sdk/seat-picker/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/seatlayer/seatlayer-sdk.git",
+    "directory": "packages/angular"
+  },
+  "bugs": {
+    "url": "https://github.com/seatlayer/seatlayer-sdk/issues"
+  },
+  "sideEffects": false,
+  "keywords": [
+    "seating",
+    "seat-map",
+    "seating-chart",
+    "seat-picker",
+    "seatlayer",
+    "angular",
+    "ticketing"
+  ],
+  "scripts": {
+    "build": "ng-packagr -p ng-package.json && node ./check-entry-points.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.lib.json"
+  },
+  "dependencies": {
+    "@seatlayer/core": "workspace:*",
+    "@seatlayer/js": "workspace:*",
+    "tslib": "^2.8.1"
+  },
+  "peerDependencies": {
+    "@angular/common": ">=17.0.0",
+    "@angular/core": ">=17.0.0"
+  },
+  "devDependencies": {
+    "@angular/common": "^19.0.0",
+    "@angular/compiler": "^19.0.0",
+    "@angular/compiler-cli": "^19.0.0",
+    "@angular/core": "^19.0.0",
+    "ng-packagr": "^19.0.0",
+    "rxjs": "^7.8.1",
+    "typescript": "~5.6.0",
+    "zone.js": "^0.15.0"
+  },
+  "module": "./dist/fesm2022/seatlayer-angular.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/fesm2022/seatlayer-angular.mjs"
+    },
+    "./package.json": {
+      "default": "./package.json"
+    }
+  },
+  "files": [
+    "dist"
+  ]
+}

@@ -2,7 +2,7 @@
   "name": "seatlayer-sdk",
   "version": "0.0.0",
   "private": true,
-  "description": "SeatLayer SDK monorepo — the framework-agnostic core plus per-framework wrappers.",
+  "description": "SeatLayer SDK monorepo \u2014 the framework-agnostic core plus per-framework wrappers.",
   "type": "module",
   "scripts": {
     "sync:core": "node scripts/sync-core.mjs",
@@ -10,7 +10,7 @@
     "check:version": "node scripts/check-release-version.mjs",
     "build": "pnpm -r build",
     "test": "vitest run",
-    "lint:packages": "publint packages/core && publint packages/js && publint packages/react && attw --pack packages/core && attw --pack packages/js && attw --pack packages/react",
+    "lint:packages": "publint packages/core && publint packages/js && publint packages/react && publint packages/vue && publint packages/angular && attw --pack packages/core && attw --pack packages/js && attw --pack packages/react && attw --pack packages/vue && attw --pack packages/angular --ignore-rules cjs-resolves-to-esm false-cjs",
     "build:cdn": "vite build --config cdn/vite.config.ts && vite build --config cdn/vite.view3d.config.ts && node scripts/finalize-cdn.mjs",
     "typecheck": "pnpm -r typecheck && tsc -p cdn/tsconfig.json",
     "verify:cdn": "node scripts/verify-cdn-build.mjs",
