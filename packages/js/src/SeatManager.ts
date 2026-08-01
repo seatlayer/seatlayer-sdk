@@ -647,7 +647,7 @@ export class SeatManager {
       // legacy best-effort audit-log fallback during rolling upgrades.
       if (controlRoom?.activity) this.seedFeed(controlRoom.activity);
       else this.api.log(this.key, { limit: 24 }).then((page) => this.seedFeed(page.entries)).catch(() => {});
-      this.connect();
+      void this.connect();
       this.startFeedClock();
       this.ready = true;
       // Resolve channel authority BEFORE the first rail paint so the pill either
@@ -1110,11 +1110,35 @@ export class SeatManager {
 
   // ---- realtime -------------------------------------------------------------
 
-  private connect(): void {
+  /**
+   * Open the cockpit's realtime socket AS THE ORGANIZER.
+   *
+   * The scope has to be established before the upgrade, because a browser
+   * `WebSocket` cannot send an Authorization header: the manage token is traded
+   * over HTTPS for a one-use ticket which rides in `Sec-WebSocket-Protocol`.
+   * Without it the server treats this socket as an anonymous public buyer and
+   * projects its deltas, so any change inside a private channel allocation is
+   * structurally suppressed and the map silently drifts.
+   *
+   * If the mint fails (an expired token, a worker that predates the route) we
+   * still connect unticketed rather than going dark — the public-sale stream is
+   * worth having, and every `resnapshot()` re-establishes physical truth from
+   * the authenticated HTTP read.
+   */
+  private async connect(): Promise<void> {
+    if (this.closed) return;
+    let protocols: string[] | undefined;
+    try {
+      protocols = (await this.api.subscribeTicket(this.key)).protocols;
+    } catch {
+      protocols = undefined;
+    }
     if (this.closed) return;
     let ws: WebSocket;
     try {
-      ws = new WebSocket(this.api.socketUrl(this.key));
+      ws = protocols
+        ? new WebSocket(this.api.socketUrl(this.key), protocols)
+        : new WebSocket(this.api.socketUrl(this.key));
     } catch {
       this.scheduleReconnect();
       return;
@@ -1138,7 +1162,7 @@ export class SeatManager {
   private scheduleReconnect(): void {
     if (this.closed || this.reconnectTimer) return;
     const delay = Math.min(1000 * 2 ** Math.min(this.attempt++, 5), 15000);
-    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; this.connect(); }, delay);
+    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; void this.connect(); }, delay);
   }
 
   private onMessage(e: MessageEvent): void {
@@ -1152,6 +1176,9 @@ export class SeatManager {
     const m = msg as {
       type?: string;
       seats?: Record<string, string>;
+      /** Compact (protocol 1) snapshots send the modal status once and list
+       *  only the seats that differ from it. Absent on legacy frames. */
+      default?: string;
       changes?: { label: string; status: string }[];
       shoppingSessions?: number;
       activeHolds?: number;
@@ -1182,7 +1209,7 @@ export class SeatManager {
     }
     if (m.type === 'hidden') return;
     if (m.seats && typeof m.seats === 'object') {
-      this.applySnapshot(m.seats);
+      this.applySnapshot(m.seats, typeof m.default === 'string' ? m.default : undefined);
     } else if (Array.isArray(m.changes)) {
       const ids: string[] = [];
       const groups = new Map<string, { labels: string[]; verb: string; status: DoStatus }>();
@@ -1222,10 +1249,24 @@ export class SeatManager {
     }
   }
 
-  private applySnapshot(seats: Record<string, string>): void {
+  /**
+   * Replace the whole seat model.
+   *
+   * `fallback` is the compact frame's modal status: those snapshots list only
+   * the seats that DIFFER from it, so every other known label takes it. Without
+   * this the omitted majority would silently fall back to `free` — fine when
+   * the mode really is free, wrong the moment it is not.
+   */
+  private applySnapshot(seats: Record<string, string>, fallback?: string): void {
+    const known = (st: string): DoStatus =>
+      (['free', 'held', 'booked', 'blocked'].includes(st) ? st : 'free') as DoStatus;
     const next = new Map<string, DoStatus>();
+    if (fallback !== undefined) {
+      const base = known(fallback);
+      for (const label of this.labelToId.keys()) next.set(label, base);
+    }
     for (const [label, st] of Object.entries(seats)) {
-      next.set(label, (['free', 'held', 'booked', 'blocked'].includes(st) ? st : 'free') as DoStatus);
+      next.set(label, known(st));
     }
     this.status = next;
     this.lastSyncedAt = Date.now();

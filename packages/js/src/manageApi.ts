@@ -12,8 +12,13 @@
  *     cookie-CSRF gate, so no extra client header is needed.
  *   - `credentials: 'omit'` — there is no session cookie; the CMS runs
  *     cross-origin. The worker's credentialed CORS still echoes the CMS origin.
- *   - Realtime read (`/pub/events/:key/subscribe`, `/objects`, `/chart`) is
- *     PUBLIC (wildcard CORS, no token) — the live board subscribes with no auth.
+ *   - `/pub/events/:key/chart` stays public: geometry is the same map buyers
+ *     see. The seat STATE reads are not. `/pub/.../objects` and an unticketed
+ *     `/pub/.../subscribe` both answer with the BUYER projection, which shows
+ *     inventory the caller may not buy as a neutral `blocked` — so an organizer
+ *     reading them sees its own channel allocations as blocked seats. Both now
+ *     go through the token: `/v1/events/:key/objects` for the snapshot, and a
+ *     `/v1/events/:key/subscribe-tickets` mint for the socket's scope.
  *
  * `box-book` is intentionally omitted for M1 (box office ships in M2, and the
  * route is still session-only server-side).
@@ -189,6 +194,19 @@ export interface LogPage {
   nextBefore: number | null;
 }
 
+/**
+ * A one-use WebSocket subscribe ticket. `protocols` is exactly what to hand
+ * `new WebSocket(url, protocols)` — the ticket rides in `Sec-WebSocket-Protocol`
+ * because a browser socket cannot carry an Authorization header and a bearer
+ * must never travel in a URL.
+ */
+export interface SubscribeTicket {
+  ticket: string;
+  expiresAt: number;
+  protocol: string;
+  protocols: string[];
+}
+
 export interface PubObjectsResult {
   /** Every non-free seat's status keyed by label (free seats omitted). */
   seats: Record<string, string>;
@@ -264,14 +282,41 @@ export class ManageApi {
     return fetch(`${this.base}${path}`, { credentials: 'omit' }).then((r) => parse<T>(r));
   }
 
-  // ---- realtime read (public, no token) ----
+  // ---- realtime read ----
 
+  /** The chart geometry. Genuinely public — it is the same map buyers see. */
   chart(key: string): Promise<PubChartResult> {
     return this.pub(`/pub/events/${encodeURIComponent(key)}/chart`);
   }
 
+  /**
+   * The ORGANIZER's seat map: physical state, token-authed.
+   *
+   * This used to read `/pub/events/:key/objects` with no credential, which
+   * answers with the BUYER projection — every unit the caller may not buy
+   * collapses to a neutral `blocked`. An anonymous caller may buy only Public
+   * sale inventory, so the cockpit rendered every channel-allocated seat as
+   * blocked and then computed its KPIs, sell-through and (worse) its
+   * block/unblock target sets from that. `/v1/events/:key/objects` returns the
+   * unprojected snapshot the control-room read model already trusts.
+   */
   objects(key: string): Promise<PubObjectsResult> {
-    return this.pub(`/pub/events/${encodeURIComponent(key)}/objects`);
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/objects`);
+  }
+
+  /**
+   * Exchange the manage token for a one-use organizer socket ticket.
+   *
+   * A browser `WebSocket` cannot send an Authorization header, so the socket's
+   * scope is established here, over ordinary HTTPS. Without it the DO treats a
+   * manager socket as an anonymous public buyer and projects its deltas — so a
+   * hold inside a private allocation is structurally suppressed and the map
+   * drifts away from the truth `objects()` just established.
+   *
+   * Tickets are single-redemption and expire in ~30s: mint one per connect.
+   */
+  subscribeTicket(key: string): Promise<SubscribeTicket> {
+    return this.auth(`/v1/events/${encodeURIComponent(key)}/subscribe-tickets`, { method: 'POST' });
   }
 
   socketUrl(key: string): string {
