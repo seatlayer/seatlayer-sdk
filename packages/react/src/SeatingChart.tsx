@@ -58,6 +58,11 @@ export interface SeatingChartHandle {
   zoomOut(): void;
   /** Reset the camera so the whole chart fits the container. */
   zoomToFit(): void;
+  /**
+   * Re-acquire the buyer access session after your app re-authorizes the buyer
+   * (Sales Channels). Resolves false when the chart is not access-scoped.
+   */
+  refreshAccess(): Promise<boolean>;
 }
 
 export interface SeatingChartProps extends Omit<SeatingChartOptions, 'container'> {
@@ -100,6 +105,16 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
         currency,
         colorblindSafe,
         messages: callbacks.current.messages,
+        // Read through the ref so a host may pass the provider as an inline
+        // arrow without its new identity tearing the canvas down each render.
+        buyerAccessTokenProvider: props.buyerAccessTokenProvider
+          ? (context) => callbacks.current.buyerAccessTokenProvider!(context)
+          : undefined,
+        buyerAccessToken: callbacks.current.buyerAccessToken,
+        onAccessExpired: (state) => callbacks.current.onAccessExpired?.(state),
+        onAccessUnavailable: (state) => callbacks.current.onAccessUnavailable?.(state),
+        onSelectedObjectUnavailable: (state) =>
+          callbacks.current.onSelectedObjectUnavailable?.(state),
         onSelectionChange: (seats) => callbacks.current.onSelectionChange?.(seats),
         onHold: (result) => callbacks.current.onHold?.(result),
         onHoldRestored: (result) => callbacks.current.onHoldRestored?.(result),
@@ -142,6 +157,7 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
         zoomIn: () => chartRef.current?.zoomIn(),
         zoomOut: () => chartRef.current?.zoomOut(),
         zoomToFit: () => chartRef.current?.zoomToFit(),
+        refreshAccess: () => chartRef.current?.refreshAccess() ?? Promise.resolve(false),
       }),
       [],
     );

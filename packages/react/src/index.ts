@@ -41,3 +41,13 @@ export type {
   SeatManagerActionResult,
 } from './SeatManager';
 export type { ControlRoomActivityEntry, ControlRoomSectionMetric, ControlRoomSnapshot } from '@seatlayer/js';
+// Sales Channels — buyer access sessions for private channel inventory.
+export type {
+  BuyerAccessToken,
+  BuyerAccessTokenProvider,
+  BuyerAccessRefreshReason,
+  BuyerAccessUnavailableReason,
+  BuyerAccessExpiredEvent,
+  BuyerAccessUnavailableEvent,
+  SelectedObjectUnavailableEvent,
+} from '@seatlayer/js';

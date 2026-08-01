@@ -86,4 +86,36 @@ describe('SeatPicker prop forwarding', () => {
     const options = await mountWith({});
     expect(options.container).toBeInstanceOf(HTMLElement);
   });
+
+  it('forwards the buyer access options and the typed access callbacks', async () => {
+    const buyerAccessTokenProvider = vi.fn(async () => ({ token: 'bse_x' }));
+    const onAccessExpired = vi.fn();
+    const onAccessUnavailable = vi.fn();
+    const onSelectedObjectUnavailable = vi.fn();
+    const options = await mountWith({
+      buyerAccessTokenProvider,
+      buyerAccessToken: 'bse_seed',
+      onAccessExpired,
+      onAccessUnavailable,
+      onSelectedObjectUnavailable,
+    });
+
+    expect(options.buyerAccessToken).toBe('bse_seed');
+    // The provider is wrapped (so an inline arrow never rebuilds the widget),
+    // but it must still reach the host function it stands for.
+    await (options.buyerAccessTokenProvider as (c: unknown) => Promise<unknown>)({ reason: 'initial' });
+    expect(buyerAccessTokenProvider).toHaveBeenCalledWith({ reason: 'initial' });
+
+    (options.onAccessExpired as (e: unknown) => void)({ reason: 'unauthorized', refreshed: false });
+    (options.onAccessUnavailable as (e: unknown) => void)({ reason: 'revoked', retryable: false });
+    (options.onSelectedObjectUnavailable as (e: unknown) => void)({ labels: ['A-1'], reason: 'taken' });
+    expect(onAccessExpired).toHaveBeenCalledWith({ reason: 'unauthorized', refreshed: false });
+    expect(onAccessUnavailable).toHaveBeenCalledWith({ reason: 'revoked', retryable: false });
+    expect(onSelectedObjectUnavailable).toHaveBeenCalledWith({ labels: ['A-1'], reason: 'taken' });
+  });
+
+  it('leaves the provider undefined when the host did not pass one', async () => {
+    const options = await mountWith({});
+    expect(options.buyerAccessTokenProvider).toBeUndefined();
+  });
 });
