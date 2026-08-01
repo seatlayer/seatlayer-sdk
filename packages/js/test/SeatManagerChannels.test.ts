@@ -7,11 +7,13 @@ import {
   type ChannelsModeHost,
 } from '../src/channelsMode';
 import {
+  PUBLIC_CHANNEL_ID,
   accessLine,
   bucketRows,
   dropReviewRows,
   markerOf,
   mutationCount,
+  needsMoveConfirmation,
   planAssignment,
   retryAfterCopy,
   selectionSources,
@@ -20,6 +22,14 @@ import {
   type ChannelListResult,
   type ChannelSeatStatus,
 } from '../src/channelPlan';
+
+/**
+ * The literal Public-sale id the worker puts on the wire
+ * (`eventChannels.PUBLIC_CHANNEL_ID`). Hard-coded ON PURPOSE: every fixture below
+ * used the SDK's own constant, so when that constant was wrong ('') the fixtures
+ * were wrong with it and the whole suite stayed green while production lied.
+ */
+const SERVER_PUBLIC_ID = 'public';
 
 function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {}): Response {
   return {
@@ -38,7 +48,9 @@ function listFixture(): ChannelListResult {
   return {
     assignmentVersion: 7,
     publicSale: {
-      id: '', name: 'Public sale', state: 'active',
+      // The server's real sentinel. These fixtures used '' until 2026-08-02 —
+      // which is exactly why they never caught the public-sale misclassification.
+      id: SERVER_PUBLIC_ID, name: 'Public sale', state: 'active',
       counts: counts({ allocated: 800, free: 469, booked: 296 }),
     },
     channels: [
@@ -63,6 +75,10 @@ function listFixture(): ChannelListResult {
 // ---------------------------------------------------------------------------
 
 describe('channel plan', () => {
+  it('speaks the same Public-sale id the server does', () => {
+    expect(PUBLIC_CHANNEL_ID).toBe(SERVER_PUBLIC_ID);
+  });
+
   const status: Record<string, ChannelSeatStatus> = {
     P1: 'free', P2: 'free', P3: 'held', P4: 'booked',
     S1: 'free', S2: 'free',
@@ -116,7 +132,7 @@ describe('channel plan', () => {
   it('summarises mixed selection sources, public first', () => {
     const rows = selectionSources(['A1', 'P1', 'S1', 'P2'], allocation, listFixture());
     expect(rows).toEqual([
-      { channelId: '', name: 'Public sale', count: 2 },
+      { channelId: SERVER_PUBLIC_ID, name: 'Public sale', count: 2 },
       { channelId: 'ch_a', name: 'Travel Agency A', count: 1 },
       { channelId: 'ch_s', name: 'Sponsor guests', count: 1 },
     ]);
@@ -127,12 +143,87 @@ describe('channel plan', () => {
       .toEqual({ letter: 'A', color: '#a78bfa' });
     // No stored marker: derive a letter rather than fall back to colour only.
     expect(markerOf({ id: 'ch_z', name: 'Zebra club', marker: null, color: null }).letter).toBe('Z');
-    expect(markerOf({ id: '', name: 'Public sale', marker: null, color: null }).letter).toBe('P');
+    expect(markerOf({ id: SERVER_PUBLIC_ID, name: 'Public sale', marker: null, color: null }).letter).toBe('P');
   });
+
+  // V3 — the rail drew "?" on production because the built-in row arrives with
+  // the server's 'public' id, which the old `id === ''` test never matched, so
+  // it fell through to the private branch with no name and no stored marker.
+  it('marks the built-in public row P, whichever sentinel the worker sends', () => {
+    for (const id of ['public', '']) {
+      const marker = markerOf({ id, name: 'Public sale', marker: null, color: null });
+      expect(marker.letter).toBe('P');
+      expect(marker.color).toBe('#f4b740');
+    }
+  });
+
 
   it('suggests an unused marker letter for a new channel', () => {
     expect(suggestMarker('Box office', ['A', 'S']).letter).toBe('B');
     expect(suggestMarker('Agency B', ['A', 'S']).letter).not.toBe('A');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V2 — Public sale is not "another channel"
+//
+// The allocation map is built from GET /channels/allocation, which names public
+// sale EXPLICITLY on every unallocated row ('public'). The fixtures above used
+// '' for public, which is why no existing test exercised the real wire value.
+// ---------------------------------------------------------------------------
+
+describe('channel plan · public-sentinel allocation', () => {
+  const status: Record<string, ChannelSeatStatus> = {
+    P1: 'free', P2: 'free', P3: 'free', S1: 'free',
+  };
+  // Exactly what loadAllocation would hold if it did NOT filter public rows out,
+  // plus the shape it does hold. Both must classify public units identically.
+  const explicitPublic = new Map<string, string>([
+    ['P1', SERVER_PUBLIC_ID], ['P2', SERVER_PUBLIC_ID], ['P3', SERVER_PUBLIC_ID],
+    ['S1', 'ch_s'],
+  ]);
+  const filteredPublic = new Map<string, string>([['S1', 'ch_s']]);
+
+  const plan = (allocation: Map<string, string>, target = 'ch_new') => planAssignment({
+    labels: ['P1', 'P2', 'P3'],
+    targetChannelId: target,
+    allocation,
+    statusOf: (label) => status[label],
+    nameOf: (id) => (id === 'ch_s' ? 'Sponsor guests' : null),
+  });
+
+  it('counts public-sale units as changedFromPublic, not movedFromOtherChannel', () => {
+    const buckets = plan(explicitPublic);
+    expect(buckets.changedFromPublic.count).toBe(3);
+    expect(buckets.movedFromOtherChannel.count).toBe(0);
+    expect(buckets.movedFromOtherChannel.channels).toEqual([]);
+  });
+
+  it('never asks for the private→private move confirmation on a public-only staging', () => {
+    expect(needsMoveConfirmation(plan(explicitPublic))).toBe(false);
+    const rows = bucketRows(plan(explicitPublic), 'Sponsor guests');
+    expect(rows.map((row) => row.kind)).toEqual(['add']);
+    expect(rows[0].text).toBe('3 from Public sale');
+    expect(rows[0].icon).toBe('+');
+  });
+
+  it('classifies identically whether the map names public sale or omits it', () => {
+    expect(plan(explicitPublic)).toEqual(plan(filteredPublic));
+  });
+
+  it('treats an explicit public target as "already in target" for public units', () => {
+    const buckets = plan(explicitPublic, SERVER_PUBLIC_ID);
+    expect(buckets.alreadyInTarget.count).toBe(3);
+    expect(mutationCount(buckets)).toBe(0);
+  });
+
+  it('names public sale in the selection summary, never "Another channel"', () => {
+    const rows = selectionSources(['P1', 'P2', 'S1'], explicitPublic, listFixture());
+    expect(rows).toEqual([
+      { channelId: SERVER_PUBLIC_ID, name: 'Public sale', count: 2 },
+      { channelId: 'ch_s', name: 'Sponsor guests', count: 1 },
+    ]);
+    expect(rows.some((row) => row.name === 'Another channel')).toBe(false);
   });
 });
 
@@ -269,7 +360,7 @@ function makeClient(over: Partial<ChannelsClient> = {}): ChannelsClient {
       assignmentVersion: 7,
       allocations: [
         { label: 'A1', channelId: 'ch_a' }, { label: 'A2', channelId: 'ch_a' },
-        { label: 'S1', channelId: 'ch_s' }, { label: 'P1', channelId: '' },
+        { label: 'S1', channelId: 'ch_s' }, { label: 'P1', channelId: SERVER_PUBLIC_ID },
       ],
       nextAfterLabel: null,
     }),
@@ -397,6 +488,33 @@ describe('ChannelsMode rail + a11y', () => {
     expect(rows[2].textContent).toContain('Paused');
     // Falls back rather than inventing a state when access is absent.
     expect(rows[0].querySelector('.slm-ch-access')).toBeNull();
+  });
+
+  // V3 as the owner saw it: the built-in row's chip read "?" on production.
+  it('draws the Public sale marker as P in the accent gold, never "?"', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    const chip = harness.rail.querySelector('.slm-ch-row.public .slm-ch-mk') as HTMLElement;
+    expect(chip.textContent).toBe('P');
+    expect(chip.style.background).toContain('244, 183, 64'); // #f4b740
+    expect(harness.rail.innerHTML).not.toContain('>?<');
+  });
+
+  // V2 as the owner saw it: staging Public-sale seats claimed they came out of
+  // "another channel" and demanded the private→private move confirmation.
+  it('reviews Public-sale seats as an addition, with no move confirmation', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    harness.setSelection(['P1']);
+    harness.mode.handleSelectionChange();
+    (harness.rail.querySelector('[data-ch-act="review"]') as HTMLElement | null)?.click();
+    await flush();
+    const dialog = document.querySelector('.slm-ch-dialog, [role="dialog"]')!;
+    expect(dialog.textContent).toContain('from Public sale');
+    expect(dialog.textContent).not.toContain('moved out of');
+    expect(dialog.textContent).not.toContain('another private channel');
   });
 
   it('announces the mixed-source selection summary in a live region', async () => {

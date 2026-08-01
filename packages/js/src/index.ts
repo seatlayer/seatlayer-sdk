@@ -66,6 +66,7 @@ export {
   accessLine,
   bucketRows,
   dropReviewRows,
+  isPublicChannelId,
   markerOf,
   mutationCount,
   needsMoveConfirmation,
