@@ -60,10 +60,15 @@ export type {
 export { ChannelsMode, bucketRowsHtml } from './channelsMode';
 export type { ChannelsCapabilities, ChannelsClient, ChannelsModeHost, ChannelsSeatView } from './channelsMode';
 export {
+  ACCESS_LINK_DEFAULTS,
   PUBLIC_CHANNEL_ID,
   PUBLIC_CHANNEL_NAME,
   accessIntentLabel,
   accessLine,
+  accessLinkBadge,
+  accessLinkErrorCopy,
+  accessLinkIsLive,
+  accessLinkPolicyLines,
   bucketRows,
   dropReviewRows,
   isPublicChannelId,
@@ -78,6 +83,11 @@ export {
   suggestMarker,
 } from './channelPlan';
 export type {
+  AccessLinkRecord,
+  AccessLinkReveal,
+  AccessLinkState,
+  AccessLinkStatus,
+  AccessLinkStatusRecord,
   ArchiveBlockedDetails,
   AssignmentBuckets,
   AssignmentDropDetails,

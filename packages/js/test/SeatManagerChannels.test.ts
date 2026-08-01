@@ -382,6 +382,10 @@ function makeClient(over: Partial<ChannelsClient> = {}): ChannelsClient {
     applyChannelAssignment: vi.fn(),
     channelPreview: vi.fn().mockResolvedValue({ available: true, eligible: ['A1'], counts: { eligible: 1 } }),
     setChannelAccessIntent: vi.fn(),
+    createAccessLink: vi.fn(),
+    accessLinks: vi.fn().mockResolvedValue({ links: [] }),
+    rotateAccessLink: vi.fn(),
+    revokeAccessLink: vi.fn(),
     ...over,
   };
 }

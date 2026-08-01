@@ -28,10 +28,15 @@
  *     newer server. Neither ever blocks allocation work.
  */
 import {
+  ACCESS_LINK_DEFAULTS,
   PUBLIC_CHANNEL_ID,
   PUBLIC_CHANNEL_NAME,
   accessIntentLabel,
   accessLine,
+  accessLinkBadge,
+  accessLinkErrorCopy,
+  accessLinkIsLive,
+  accessLinkPolicyLines,
   bucketRows,
   isPublicChannelId,
   markerLetter,
@@ -43,6 +48,8 @@ import {
   selectionSources,
   stateBadge,
   suggestMarker,
+  type AccessLinkReveal,
+  type AccessLinkStatusRecord,
   type AssignmentBuckets,
   type AssignmentResult,
   type ArchiveBlockedDetails,
@@ -96,6 +103,34 @@ export interface ChannelsClient {
     channelId: string,
     accessIntent: ChannelAccessIntent,
   ): Promise<{ ok: true; channel: ChannelRecord }>;
+  /** 201 with the ONE-TIME reveal. Every omitted field takes the server default
+   *  (expiry = event start, 100 redemptions, 4 seats per buyer). */
+  createAccessLink(
+    key: string,
+    channelId: string,
+    input: {
+      label?: string | null;
+      expiresAt?: number;
+      maxRedemptions?: number;
+      maxQuantity?: number;
+      includePublic?: boolean;
+    },
+  ): Promise<AccessLinkReveal>;
+  /** Status only. This response has no url and no capability, by contract. */
+  accessLinks(key: string, channelId: string): Promise<{ links: AccessLinkStatusRecord[] }>;
+  /** `endActiveSessions` is required — the server 422s without it, deliberately. */
+  rotateAccessLink(
+    key: string,
+    channelId: string,
+    linkId: string,
+    endActiveSessions: boolean,
+  ): Promise<AccessLinkReveal>;
+  revokeAccessLink(
+    key: string,
+    channelId: string,
+    linkId: string,
+    endActiveSessions?: boolean,
+  ): Promise<{ ok: true; link: unknown; endedSessions: number }>;
 }
 
 export interface ChannelsCapabilities {
@@ -269,6 +304,26 @@ export const CHANNELS_CSS = `
   border-radius:10px;background:rgba(244,183,64,.06);font-family:ui-monospace,Menlo,monospace;font-size:11px;
   overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .slm-ch-err{color:#f1a4a6;font-size:11.5px;margin-top:6px}
+
+/* hosted access links — STATUS only; there is no Copy control on this card */
+.slm-ch-link{padding:10px 11px;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface);
+  margin-bottom:8px}
+.slm-ch-link .lk-head{display:flex;align-items:center;gap:8px}
+.slm-ch-link .lk-name{flex:1;min-width:0;font-size:12.5px;font-weight:800;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.slm-ch-lkrow{display:flex;gap:8px;margin-top:5px;font-size:11px;color:var(--slm-muted)}
+.slm-ch-lkrow .k{flex:none;min-width:104px}
+.slm-ch-lkrow .v{color:var(--slm-text);font-variant-numeric:tabular-nums}
+.slm-ch-meter{height:5px;border-radius:3px;background:rgba(255,255,255,.09);overflow:hidden;margin-top:8px}
+.slm-ch-meter i{display:block;height:100%;background:var(--slm-accent);
+  transition:width var(--slm-mo-base) var(--slm-mo-out)}
+.slm-ch-radio{display:flex;gap:9px;align-items:flex-start;padding:11px 12px;border:1px solid var(--slm-line);
+  border-radius:10px;margin-top:8px;font-size:12.5px;cursor:pointer;
+  transition:border-color var(--slm-mo-quick) var(--slm-mo-out)}
+.slm-ch-radio:hover{border-color:var(--slm-muted)}
+.slm-ch-radio input{flex:none;margin-top:2px}
+.slm-ch-radio b{display:block;font-weight:800;margin-bottom:2px}
+.slm-ch-radio .why{display:block;color:var(--slm-muted);font-size:11.5px;line-height:1.45}
 .slm-ch-seatlist{max-height:44vh;overflow:auto;border:1px solid var(--slm-line);border-radius:10px;
   background:var(--slm-surface);margin-top:10px}
 .slm-ch-seatgroup{padding:8px 10px;border-bottom:1px solid var(--slm-line);display:flex;align-items:center;
@@ -301,7 +356,8 @@ export const CHANNELS_CSS = `
 .slm.compact .slm-modes{display:none}
 
 @media (prefers-reduced-motion:reduce){
-  .slm-ch-layer,.slm-ch-banner,.slm-ch-staged,.slm-ch-row,.slm.compact.ch-sheet .slm-rail{transition:none!important}
+  .slm-ch-layer,.slm-ch-banner,.slm-ch-staged,.slm-ch-row,.slm.compact.ch-sheet .slm-rail,
+  .slm-ch-meter i,.slm-ch-radio{transition:none!important}
   .slm-ch-staged.shake,.slm-ch-tick,.slm-ch-bucket,.slm-ch-scrim,.slm-ch-dialog,
   .slm-ch-counts b.bump,.slm-ch-selnum.bump{animation:none!important}
   .slm-ch-staged.shake{outline:2px solid #e5484d;outline-offset:2px}
@@ -326,19 +382,73 @@ export function bucketRowsHtml(rows: BucketRow[]): string {
     </div>`).join('');
 }
 
+/**
+ * Server integration is a BACKEND integration, so there is no screen to build
+ * and this block is deliberately informational.
+ *
+ * It replaces a disabled "Configure server integration · Coming soon" button
+ * that promised a wizard which does not exist and is not planned. A control that
+ * can never do anything is worse than a sentence explaining why it isn't there:
+ * the honest answer is "nothing to configure here, and here is the guide".
+ */
+const SERVER_INTEGRATION_HTML = `
+  <p class="slm-eyebrow" style="margin-top:18px">Server integration</p>
+  <p class="slm-hint">There is nothing to set up on this screen. Your own server mints a short-lived buyer
+    access session for this channel with the SeatLayer server SDK and hands it to the widget. A channel name
+    on its own never grants access.</p>
+  <p class="slm-note"><a class="slm-linkbtn" href="https://docs.seatlayer.io/server-api/channels"
+    target="_blank" rel="noreferrer noopener">Read the server integration guide →</a></p>`;
+
 function esc(value: unknown): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
+/** `<input type="datetime-local">` wants local wall-clock, not an ISO instant. */
+function datetimeLocalValue(ms: number): string {
+  const local = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+/** A whole number from a numeric field, or null when it is not one. This is the
+ *  ONLY client-side validation on link policy — the ranges belong to the server. */
+function intField(root: HTMLElement, selector: string): number | null {
+  const raw = root.querySelector<HTMLInputElement>(selector)?.value.trim() ?? '';
+  const value = Number(raw);
+  return raw !== '' && Number.isInteger(value) ? value : null;
+}
+
+/** Clipboard-less fallback: put the revealed URL under the caret so it can still
+ *  be copied by hand. Selection dies with the node, like the string itself. */
+function selectSecret(dialog: HTMLElement): void {
+  const node = dialog.querySelector<HTMLElement>('[data-ch-lk-url]');
+  if (!node) return;
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  } catch { /* selection is a nicety; the URL is on screen regardless */ }
+}
+
 type Detent = 'collapsed' | 'medium' | 'full';
 
-type DialogKind = 'create' | 'review' | 'archive' | 'rename' | 'link' | 'seatlist';
+type DialogKind =
+  | 'create' | 'review' | 'archive' | 'rename' | 'seatlist'
+  | 'linkCreate' | 'linkRotate' | 'linkRevoke';
 
+/**
+ * There is deliberately NO `reveal` dialog kind. A one-time reveal is not a
+ * re-renderable state: `renderDialog()` rebuilds a sheet from this object, so
+ * anything reachable from here is by definition recoverable. The reveal is
+ * mounted directly, holds its URL in a closure, and dies with its DOM node.
+ */
 interface DialogState {
   kind: DialogKind;
   channelId?: string;
+  linkId?: string;
   /** Authoritative result rendered after Apply (review dialog only). */
   applied?: AssignmentResult | null;
   archiveBlocked?: ArchiveBlockedDetails | null;
@@ -365,6 +475,16 @@ export class ChannelsMode {
   private dialog: DialogState | null = null;
   private detent: Detent = 'medium';
   private seatListLimit = SEAT_LIST_PAGE;
+
+  /**
+   * Hosted-link STATUS for the channel whose detail panel is open. This is the
+   * listing projection — it carries no url and no capability, because no route
+   * returns one. `unsupported` is the honest answer for a worker that predates
+   * M8, exactly like the buyer-preview probe.
+   */
+  private links: AccessLinkStatusRecord[] = [];
+  private linksChannelId: string | null = null;
+  private linksState: 'idle' | 'loading' | 'ready' | 'unsupported' | 'error' = 'idle';
 
   private previewAudience: string[] = [];
   private previewIncludePublic = false;
@@ -412,6 +532,11 @@ export class ChannelsMode {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
     this.closeDialog({ restoreFocus: false });
+    // Link status is per-channel and short-lived; nothing about it survives the
+    // mode, and there was never a secret in it to survive.
+    this.links = [];
+    this.linksChannelId = null;
+    this.linksState = 'idle';
     this.layer?.classList.remove('on');
     this.host.root.classList.remove('ch-mode', 'ch-preview', 'ch-sheet',
       'detent-collapsed', 'detent-medium', 'detent-full');
@@ -487,6 +612,9 @@ export class ChannelsMode {
         this.targetChannelId = list.channels.find((c) => c.state === 'active')?.id ?? PUBLIC_CHANNEL_ID;
       }
       await this.loadAllocation();
+      // Redemptions and live-session counts move on their own, so the open
+      // channel's link status rides the same clock as its seat counts.
+      if (this.detailChannelId) await this.loadLinks(this.detailChannelId);
       this.loading = false;
       if (this.active) {
         this.paintRail();
@@ -988,11 +1116,8 @@ export class ChannelsMode {
         : 'No buyer access is configured yet. The allocation is protected — it is not available to Public sale.'}</p>
       ${selfServiceGap ? `<div class="slm-ch-alert warn"><span>⚠</span>
         <span>This channel is marked for buyer self-service but no buyer has been let in yet.</span></div>` : ''}
-      <button type="button" class="slm-btn" data-ch-act="hosted-link" disabled
-        title="Hosted access links ship in the next milestone">Create hosted access link · Coming soon</button>
-      <div class="slm-ch-row2"><button type="button" class="slm-btn ghost" data-ch-act="server-access" disabled
-        title="Guided server setup ships in the next milestone">Configure server integration · Coming soon</button></div>
-      <p class="slm-note">Your own server can already mint buyer access sessions for this channel with the server SDK.</p>` : '';
+      ${this.hostedLinksHtml()}
+      ${SERVER_INTEGRATION_HTML}` : '';
     return `
       <p class="slm-eyebrow">
         <button type="button" class="slm-linkbtn" data-ch-act="back" style="text-align:left">‹ All channels</button>
@@ -1001,6 +1126,111 @@ export class ChannelsMode {
       <div class="slm-ch-list">${this.channelRowHtml(channel)}</div>
       ${access}
       ${lifecycle}`;
+  }
+
+  // ---- hosted access links --------------------------------------------------
+
+  /**
+   * Read the status projection for the open channel. Never paints — the caller
+   * decides when the rail repaints, so a poll-driven reload does not fight a
+   * user-driven one. A worker without M8 answers 404/405 and gets the honest
+   * "needs a newer server" line rather than an error toast.
+   */
+  private async loadLinks(channelId: string): Promise<void> {
+    if (!this.caps.view) return;
+    if (this.linksChannelId !== channelId) {
+      this.links = [];
+      this.linksChannelId = channelId;
+      this.linksState = 'loading';
+    }
+    try {
+      const res = await this.host.api.accessLinks(this.host.eventKey, channelId);
+      if (this.linksChannelId !== channelId) return; // the organizer moved on
+      this.links = res.links ?? [];
+      this.linksState = 'ready';
+    } catch (err) {
+      if (this.linksChannelId !== channelId) return;
+      const status = err instanceof ManageApiError ? err.status : 0;
+      this.links = [];
+      this.linksState = status === 404 || status === 405 || status === 501 ? 'unsupported' : 'error';
+      if (this.linksState === 'error') this.host.onError(err);
+    }
+  }
+
+  /**
+   * The hosted-link section of the detail panel.
+   *
+   * STATUS ONLY, by design (comp 06 `hosted`): label, state, expiry,
+   * redemptions, seats per buyer, live sessions. There is no Copy control here
+   * and no field to hang one on — the URL was shown once at creation and cannot
+   * be produced again. Rotation is the recovery path, and it says so.
+   */
+  private hostedLinksHtml(): string {
+    const eyebrow = `<p class="slm-eyebrow" style="margin-top:18px">Hosted access links</p>`;
+    if (this.linksState === 'unsupported') {
+      return `${eyebrow}<div class="slm-ch-alert warn"><span>ℹ</span>
+        <span><b>Hosted links need a newer server.</b> Everything else on this channel works normally.</span></div>`;
+    }
+    if (this.linksState === 'error') {
+      return `${eyebrow}<div class="slm-ch-alert err" role="alert"><span>⚠</span>
+        <span><b>Couldn't load this channel's links.</b>
+        <button type="button" data-ch-act="link-reload">Try again</button></span></div>`;
+    }
+    const live = this.links.filter(accessLinkIsLive).length;
+    const cards = this.linksState === 'loading' && !this.links.length
+      ? `<div class="slm-empty">Loading links…</div>`
+      : this.links.length
+        ? this.links.map((link) => this.linkCardHtml(link)).join('')
+        : `<p class="slm-hint">No hosted link yet. Create one to send this allocation to a named group —
+            they open the link and buy only these seats.</p>`;
+    // Fail-closed: without manage authority the create control is ABSENT, not
+    // disabled, exactly like every other mutation in this mode.
+    const create = this.caps.manage
+      ? `<button type="button" class="slm-btn" style="width:100%" data-ch-act="link-create">
+          ${live ? 'Create another hosted link' : 'Create hosted access link'}</button>`
+      : '';
+    return `${eyebrow}
+      ${cards}
+      ${create}
+      <p class="slm-note">A link is shown once, when you create it. SeatLayer keeps only a fingerprint of it, so it
+        can never be shown again — if a link is lost, rotate it and send the fresh one.</p>`;
+  }
+
+  private linkCardHtml(link: AccessLinkStatusRecord): string {
+    const badge = accessLinkBadge(link);
+    const used = link.maxRedemptions > 0
+      ? Math.min(100, Math.round((link.redemptions / link.maxRedemptions) * 100))
+      : 0;
+    const rows = accessLinkPolicyLines(link)
+      .map((row) => `<div class="slm-ch-lkrow"><span class="k">${esc(row.k)}</span>
+        <span class="v">${esc(row.v)}</span></div>`).join('');
+    const sessions = link.activeSessions
+      ? `<div class="slm-ch-lkrow"><span class="k">Buyers inside now</span>
+          <span class="v">${link.activeSessions.toLocaleString()}</span></div>`
+      : '';
+    const lastUsed = link.lastRedeemedAt
+      ? `<div class="slm-ch-lkrow"><span class="k">Last opened</span>
+          <span class="v">${esc(new Date(link.lastRedeemedAt).toLocaleString())}</span></div>`
+      : '';
+    const actions = this.caps.manage && accessLinkIsLive(link)
+      ? `<div class="slm-ch-row2">
+          <button type="button" class="slm-btn ghost" data-ch-rotate="${esc(link.id)}">Rotate</button>
+          <button type="button" class="slm-btn ghost" data-ch-revoke="${esc(link.id)}">Revoke</button>
+        </div>`
+      : '';
+    return `<div class="slm-ch-link">
+      <span class="lk-head">
+        <span class="lk-name">${esc(link.label || 'Hosted link')}</span>
+        <span class="slm-ch-badge ${badge.kind}">${esc(badge.text)}</span>
+      </span>
+      <div class="slm-ch-meter" role="img"
+        aria-label="${link.redemptions.toLocaleString()} of ${link.maxRedemptions.toLocaleString()} redemptions used">
+        <i style="width:${used}%"></i></div>
+      ${rows}${sessions}${lastUsed}
+      <div class="slm-ch-lkrow"><span class="k">The URL</span>
+        <span class="v">Revealed once at creation — not recoverable</span></div>
+      ${actions}
+    </div>`;
   }
 
   private previewRailHtml(): string {
@@ -1071,9 +1301,21 @@ export class ChannelsMode {
     });
     rail.querySelectorAll<HTMLElement>('[data-ch-detail]').forEach((button) => {
       button.addEventListener('click', () => {
-        this.detailChannelId = button.dataset.chDetail!;
+        const channelId = button.dataset.chDetail!;
+        this.detailChannelId = channelId;
         this.paintRail();
+        void this.loadLinks(channelId).then(() => this.paintRail());
       });
+    });
+    rail.querySelectorAll<HTMLElement>('[data-ch-rotate]').forEach((button) => {
+      button.addEventListener('click', () => this.openDialog({
+        kind: 'linkRotate', channelId: this.detailChannelId!, linkId: button.dataset.chRotate!,
+      }));
+    });
+    rail.querySelectorAll<HTMLElement>('[data-ch-revoke]').forEach((button) => {
+      button.addEventListener('click', () => this.openDialog({
+        kind: 'linkRevoke', channelId: this.detailChannelId!, linkId: button.dataset.chRevoke!,
+      }));
     });
     const target = rail.querySelector<HTMLSelectElement>('[data-ch-target]');
     target?.addEventListener('change', () => {
@@ -1111,7 +1353,19 @@ export class ChannelsMode {
       case 'seatlist': this.openDialog({ kind: 'seatlist' }); break;
       case 'pause': void this.togglePause(); break;
       case 'discard': this.host.clearSelection(); break;
-      case 'back': this.detailChannelId = null; this.paintRail(); break;
+      case 'back':
+        this.detailChannelId = null;
+        this.linksChannelId = null;
+        this.links = [];
+        this.linksState = 'idle';
+        this.paintRail();
+        break;
+      case 'link-create':
+        this.openDialog({ kind: 'linkCreate', channelId: this.detailChannelId! });
+        break;
+      case 'link-reload':
+        if (this.detailChannelId) void this.reloadLinks();
+        break;
       case 'retry': void this.refresh(); break;
       case 'toggle-archived':
         this.showArchived = !this.showArchived;
@@ -1187,6 +1441,9 @@ export class ChannelsMode {
     else if (state.kind === 'archive') this.renderArchiveDialog(state);
     else if (state.kind === 'rename') this.renderRenameDialog(state);
     else if (state.kind === 'seatlist') this.renderSeatListDialog();
+    else if (state.kind === 'linkCreate') this.renderLinkCreateDialog(state);
+    else if (state.kind === 'linkRotate') this.renderLinkRotateDialog(state);
+    else if (state.kind === 'linkRevoke') this.renderLinkRevokeDialog(state);
   }
 
   /**
@@ -1629,6 +1886,299 @@ export class ChannelsMode {
         this.renderSeatListDialog();
       });
     });
+  }
+
+  // ---- hosted-link dialogs --------------------------------------------------
+
+  private async reloadLinks(): Promise<void> {
+    const channelId = this.detailChannelId;
+    if (!channelId) return;
+    this.linksState = this.links.length ? this.linksState : 'loading';
+    await this.loadLinks(channelId);
+    this.paintRail();
+  }
+
+  private linkById(linkId: string | undefined): AccessLinkStatusRecord | null {
+    return this.links.find((link) => link.id === linkId) ?? null;
+  }
+
+  /**
+   * Create. The three policy fields carry the owner's defaults and every one of
+   * them is editable; the PLATFORM bounds (60s–180d, 1–10 000, 1–100, 20 live
+   * links) are the server's to enforce and the server's to explain, so this form
+   * checks only that a number is a number and surfaces the server's sentence for
+   * everything else.
+   */
+  private renderLinkCreateDialog(state: DialogState): void {
+    const channel = this.list?.channels.find((item) => item.id === state.channelId);
+    if (!channel || !this.caps.manage) { this.closeDialog(); return; }
+    this.renderScrim(`
+      <h3 id="slm-ch-dlg-title">Create a hosted access link for ${esc(channel.name)}</h3>
+      <p class="sub">Anyone who opens the link can buy from this channel's allocation — and only from it.
+        You'll see the link once, right after you create it.</p>
+      <div class="slm-field">
+        <label for="slm-ch-lk-label">Label <span style="text-transform:none;font-weight:500">(optional)</span></label>
+        <input class="slm-input" id="slm-ch-lk-label" maxlength="80" placeholder="e.g. VIP list Nov 14" />
+        <p class="slm-note">So you can tell your links apart later. Buyers never see it.</p>
+      </div>
+      <div class="slm-field">
+        <label for="slm-ch-lk-expiry">Stops working</label>
+        <select class="slm-select" id="slm-ch-lk-expiry" data-ch-lk-expiry>
+          <option value="event" selected>When the event starts</option>
+          <option value="custom">On a date I choose</option>
+        </select>
+      </div>
+      <div class="slm-field" data-ch-lk-when-field hidden>
+        <label for="slm-ch-lk-when">Date and time</label>
+        <input class="slm-input" type="datetime-local" id="slm-ch-lk-when" />
+      </div>
+      <div class="slm-field">
+        <label for="slm-ch-lk-redemptions">How many people can use it</label>
+        <input class="slm-input" type="number" id="slm-ch-lk-redemptions" inputmode="numeric"
+          value="${ACCESS_LINK_DEFAULTS.maxRedemptions}" />
+        <p class="slm-note">Each buyer who opens the link uses one.</p>
+      </div>
+      <div class="slm-field">
+        <label for="slm-ch-lk-quantity">Seats per buyer</label>
+        <input class="slm-input" type="number" id="slm-ch-lk-quantity" inputmode="numeric"
+          value="${ACCESS_LINK_DEFAULTS.maxQuantity}" />
+      </div>
+      <label class="slm-note" style="display:flex;gap:8px;align-items:center;margin:2px 0 6px">
+        <input type="checkbox" id="slm-ch-lk-public" />
+        Also let this link buy Public sale seats
+      </label>
+      <p class="slm-ch-err" data-ch-error ${state.error ? '' : 'hidden'}>${esc(state.error ?? '')}</p>
+      <div class="foot">
+        <button type="button" class="quiet" data-ch-close>Cancel</button>
+        <button type="button" class="slm-btn" data-ch-lk-create>Create link</button>
+      </div>`, (dialog) => {
+      const expiry = dialog.querySelector<HTMLSelectElement>('[data-ch-lk-expiry]')!;
+      const whenField = dialog.querySelector<HTMLElement>('[data-ch-lk-when-field]')!;
+      const when = dialog.querySelector<HTMLInputElement>('#slm-ch-lk-when')!;
+      expiry.addEventListener('change', () => {
+        const custom = expiry.value === 'custom';
+        whenField.hidden = !custom;
+        if (custom && !when.value) when.value = datetimeLocalValue(Date.now() + 7 * 86_400_000);
+      });
+      dialog.querySelector('[data-ch-lk-create]')?.addEventListener('click', () => {
+        const maxRedemptions = intField(dialog, '#slm-ch-lk-redemptions');
+        const maxQuantity = intField(dialog, '#slm-ch-lk-quantity');
+        if (maxRedemptions == null || maxQuantity == null) {
+          this.showDialogError('Those two settings need to be whole numbers.');
+          return;
+        }
+        let expiresAt: number | undefined;
+        if (expiry.value === 'custom') {
+          expiresAt = Date.parse(when.value);
+          if (!Number.isFinite(expiresAt)) {
+            this.showDialogError('Pick the date and time the link should stop working.');
+            return;
+          }
+        }
+        void this.createLink(channel.id, {
+          label: dialog.querySelector<HTMLInputElement>('#slm-ch-lk-label')?.value.trim() || null,
+          includePublic: dialog.querySelector<HTMLInputElement>('#slm-ch-lk-public')?.checked ?? false,
+          ...(expiresAt === undefined ? {} : { expiresAt }),
+          maxRedemptions,
+          maxQuantity,
+        });
+      });
+    });
+  }
+
+  private async createLink(
+    channelId: string,
+    input: {
+      label: string | null; includePublic: boolean;
+      expiresAt?: number; maxRedemptions: number; maxQuantity: number;
+    },
+  ): Promise<void> {
+    try {
+      const reveal = await this.host.api.createAccessLink(this.host.eventKey, channelId, input);
+      this.revealLink(reveal, { channelId });
+      // Creating a link declares the channel's access intent server-side, so the
+      // rail's access line and the self-service warning both need re-reading.
+      await this.refresh({ quiet: true });
+    } catch (err) {
+      this.showDialogError(accessLinkErrorCopy(err instanceof ManageApiError ? err : undefined));
+      if (!(err instanceof ManageApiError)) this.host.onError(err);
+    }
+  }
+
+  /**
+   * The ONE-TIME reveal.
+   *
+   * Three things make this unrecoverable rather than merely "not shown twice":
+   *
+   *   1. `url` is a local const. It is never assigned to a field on this class,
+   *      never handed to the host, never put in a `DialogState`.
+   *   2. `this.dialog` is cleared FIRST, so `renderDialog()` — the only function
+   *      that rebuilds a sheet — has nothing to rebuild this one from.
+   *   3. The string exists in exactly one DOM node inside the scrim. Dismissing
+   *      the dialog removes the scrim, and the closure goes with it.
+   *
+   * The server holds only a hash, so even a compromised client cannot ask for it
+   * again. Rotation is the recovery path, and the copy says so.
+   */
+  private revealLink(reveal: AccessLinkReveal, opts: { channelId: string; rotated?: boolean }): void {
+    const url = reveal.url;
+    this.dialog = null;
+    const rotated = opts.rotated
+      ? `<div class="slm-ch-alert warn" role="status"><span>⚠</span><span>
+          <b>The old link has stopped working.</b> ${reveal.endedSessions
+            ? `${reveal.endedSessions.toLocaleString()} buyer${reveal.endedSessions === 1 ? '' : 's'} lost access immediately.`
+            : 'Buyers who already came in can finish; every new visit needs this link.'}</span></div>`
+      : '';
+    const policy = accessLinkPolicyLines(reveal.link)
+      .map((row) => `<div class="slm-ch-lkrow"><span class="k">${esc(row.k)}</span>
+        <span class="v">${esc(row.v)}</span></div>`).join('');
+    this.renderScrim(`
+      <h3 id="slm-ch-dlg-title">Copy this link now</h3>
+      <p class="sub">This is the only time SeatLayer can show it. We keep just a fingerprint, so it cannot be
+        shown again — if it is lost, rotate the link for a fresh one.</p>
+      ${rotated}
+      <div class="slm-ch-secret" data-ch-lk-url>${esc(url)}</div>
+      <div class="slm-ch-row2" style="margin-top:8px">
+        <button type="button" class="slm-btn" data-ch-lk-copy>Copy link</button>
+      </div>
+      <div class="slm-ch-alert warn" style="margin-top:12px"><span>⚠</span>
+        <span>Anyone who opens this link can buy from this allocation. Send it only to the people it is meant
+        for — forwarding it hands on the same access, and SeatLayer cannot tell the difference.</span></div>
+      <p class="slm-eyebrow" style="margin-top:14px">What this link allows</p>
+      ${policy}
+      <div class="foot">
+        <button type="button" class="slm-btn" data-ch-close data-ch-lk-done>I've copied it</button>
+      </div>`, (dialog) => {
+      const copy = dialog.querySelector<HTMLElement>('[data-ch-lk-copy]');
+      copy?.addEventListener('click', () => {
+        const ok = (): void => {
+          copy.textContent = 'Copied';
+          this.announce('Hosted access link copied.');
+        };
+        const clipboard = typeof navigator === 'undefined' ? null : navigator.clipboard;
+        if (clipboard?.writeText) {
+          clipboard.writeText(url).then(ok, () => selectSecret(dialog));
+          return;
+        }
+        // No clipboard API (older embeds, insecure context): select the text so
+        // the organizer can copy it by hand rather than lose it entirely.
+        selectSecret(dialog);
+      });
+      dialog.querySelector('[data-ch-lk-done]')?.addEventListener('click', () => {
+        void this.loadLinks(opts.channelId).then(() => this.paintRail());
+      });
+    });
+    this.announce('Your hosted access link is ready and is shown once.');
+  }
+
+  /**
+   * Rotate. The organizer must SAY what happens to the buyers already inside —
+   * the confirm stays disabled until one of the two choices is picked, because
+   * the gentle branch and the destructive branch are both real decisions and the
+   * server refuses (422 `end_active_sessions_required`) to guess either.
+   */
+  private renderLinkRotateDialog(state: DialogState): void {
+    const link = this.linkById(state.linkId);
+    if (!link || !this.caps.manage) { this.closeDialog(); return; }
+    const sessions = link.activeSessions ?? 0;
+    const warning = sessions
+      ? `<div class="slm-ch-alert warn"><span>⚠</span>
+          <span><b>${sessions.toLocaleString()} buyer${sessions === 1 ? '' : 's'}</b> got in with the current link
+          and still ${sessions === 1 ? 'has' : 'have'} active access.</span></div>`
+      : '';
+    this.renderScrim(`
+      <h3 id="slm-ch-dlg-title">Rotate the ${esc(link.label || 'hosted')} link?</h3>
+      <p class="sub">The current link stops opening immediately and cannot be restored. You will get a new
+        link to copy — shown once.</p>
+      ${warning}
+      <label class="slm-ch-radio">
+        <input type="radio" name="slm-ch-rot" value="keep" data-ch-rot />
+        <span><b>Let them finish</b><span class="why">Access already handed out expires on its own; seats in
+          checkout are untouched. Every new visit needs the new link.</span></span>
+      </label>
+      <label class="slm-ch-radio">
+        <input type="radio" name="slm-ch-rot" value="end" data-ch-rot />
+        <span><b>End their access now</b><span class="why">All access from the old link ends immediately.
+          Buyers part-way through choosing seats lose access.</span></span>
+      </label>
+      <p class="slm-note">Choose one — SeatLayer will not decide this for you.</p>
+      <p class="slm-ch-err" data-ch-error ${state.error ? '' : 'hidden'}>${esc(state.error ?? '')}</p>
+      <div class="foot">
+        <button type="button" class="quiet" data-ch-close>Cancel</button>
+        <button type="button" class="slm-btn" data-ch-lk-rotate disabled>Rotate and copy new link</button>
+      </div>`, (dialog) => {
+      const confirm = dialog.querySelector<HTMLButtonElement>('[data-ch-lk-rotate]')!;
+      dialog.querySelectorAll<HTMLInputElement>('[data-ch-rot]').forEach((radio) => {
+        radio.addEventListener('change', () => { confirm.disabled = false; });
+      });
+      confirm.addEventListener('click', () => {
+        const picked = [...dialog.querySelectorAll<HTMLInputElement>('[data-ch-rot]')]
+          .find((radio) => radio.checked);
+        // Belt and braces: the button is disabled until a choice exists, and a
+        // programmatic path still cannot skip the decision.
+        if (!picked) {
+          this.showDialogError(accessLinkErrorCopy({ code: 'end_active_sessions_required' }));
+          return;
+        }
+        void this.rotateLink(state.channelId!, link.id, picked.value === 'end');
+      });
+    });
+  }
+
+  private async rotateLink(channelId: string, linkId: string, endActiveSessions: boolean): Promise<void> {
+    try {
+      const reveal = await this.host.api.rotateAccessLink(
+        this.host.eventKey, channelId, linkId, endActiveSessions,
+      );
+      this.revealLink(reveal, { channelId, rotated: true });
+    } catch (err) {
+      this.showDialogError(accessLinkErrorCopy(err instanceof ManageApiError ? err : undefined));
+      if (!(err instanceof ManageApiError)) this.host.onError(err);
+    }
+  }
+
+  private renderLinkRevokeDialog(state: DialogState): void {
+    const link = this.linkById(state.linkId);
+    if (!link || !this.caps.manage) { this.closeDialog(); return; }
+    const sessions = link.activeSessions ?? 0;
+    this.renderScrim(`
+      <h3 id="slm-ch-dlg-title">Revoke the ${esc(link.label || 'hosted')} link?</h3>
+      <p class="sub">It stops opening immediately and cannot be restored — there is no undo, and no way to
+        bring the same URL back. Seats already bought through it keep their sale.</p>
+      ${sessions ? `<label class="slm-ch-radio">
+        <input type="checkbox" data-ch-lk-endsessions />
+        <span><b>Also end access for the ${sessions.toLocaleString()}
+          buyer${sessions === 1 ? '' : 's'} already inside</b><span class="why">Leave this off and they can
+          finish what they started; new visits are refused either way.</span></span>
+      </label>` : ''}
+      <p class="slm-ch-err" data-ch-error ${state.error ? '' : 'hidden'}>${esc(state.error ?? '')}</p>
+      <div class="foot">
+        <button type="button" class="quiet" data-ch-close>Cancel</button>
+        <button type="button" class="slm-btn danger" data-ch-lk-revoke>Revoke link</button>
+      </div>`, (dialog) => {
+      dialog.querySelector('[data-ch-lk-revoke]')?.addEventListener('click', () => {
+        const end = dialog.querySelector<HTMLInputElement>('[data-ch-lk-endsessions]')?.checked ?? false;
+        void this.revokeLink(state.channelId!, link.id, end);
+      });
+    });
+  }
+
+  private async revokeLink(channelId: string, linkId: string, endActiveSessions: boolean): Promise<void> {
+    try {
+      const res = await this.host.api.revokeAccessLink(
+        this.host.eventKey, channelId, linkId, endActiveSessions,
+      );
+      this.closeDialog();
+      await this.loadLinks(channelId);
+      await this.refresh({ quiet: true });
+      this.paintRail();
+      this.host.toast(res.endedSessions
+        ? `Link revoked. ${res.endedSessions.toLocaleString()} buyer${res.endedSessions === 1 ? '' : 's'} lost access.`
+        : 'Link revoked. It no longer opens for anyone.', 'ok');
+    } catch (err) {
+      this.showDialogError(accessLinkErrorCopy(err instanceof ManageApiError ? err : undefined));
+      if (!(err instanceof ManageApiError)) this.host.onError(err);
+    }
   }
 
   // ---- compact detents ------------------------------------------------------

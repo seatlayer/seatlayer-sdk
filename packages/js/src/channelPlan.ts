@@ -440,6 +440,167 @@ export function accessIntentLabel(intent: ChannelAccessIntent): string {
         : 'No buyer access yet — the allocation is just protected';
 }
 
+// ---------------------------------------------------------------------------
+// Hosted access links (M8)
+// ---------------------------------------------------------------------------
+
+/** Lifecycle the server stores. `rotated` means a newer link replaced this one. */
+export type AccessLinkState = 'active' | 'revoked' | 'rotated';
+
+/** What the organizer surface renders: `state`, unless an active link has run
+ *  out of time or out of redemptions. Never a capability, never a hash. */
+export type AccessLinkStatus = AccessLinkState | 'expired' | 'exhausted';
+
+/**
+ * One hosted link, exactly as `GET …/access-links` projects it.
+ *
+ * There is deliberately NO `url` and NO `capability` field here — the listing
+ * route does not return them, no other route returns them, and this type must
+ * not tempt a caller into believing otherwise. The secret exists in exactly one
+ * place for exactly one moment: the create/rotate response (`AccessLinkReveal`).
+ */
+export interface AccessLinkRecord {
+  id: string;
+  channelId: string;
+  label: string | null;
+  includePublic: boolean;
+  expiresAt: number;
+  maxRedemptions: number;
+  redemptions: number;
+  /** Guest-weighted per-buyer ceiling handed to every session this link mints. */
+  maxQuantity: number;
+  sessionTtlSeconds: number;
+  state: AccessLinkState;
+  status: AccessLinkStatus;
+  createdAt: number;
+  createdBy: string | null;
+  revokedAt: number | null;
+  lastRedeemedAt: number | null;
+  /** Rotation lineage: the link this replaced, and the one that replaced it. */
+  rotatedFrom: string | null;
+  rotatedTo: string | null;
+}
+
+/** A listed link, with the live session count the rotate dialog needs to state
+ *  "N buyers got in with this link and still have access". */
+export interface AccessLinkStatusRecord extends AccessLinkRecord {
+  activeSessions?: number;
+}
+
+/**
+ * The ONE-TIME reveal. `url` and `capability` are on the wire exactly once, in
+ * the create/rotate response, and are unrecoverable afterwards: SeatLayer stores
+ * only a hash. Nothing may persist this — see `ChannelsMode.revealLink`.
+ */
+export interface AccessLinkReveal {
+  link: AccessLinkRecord;
+  url: string;
+  capability: string;
+  revealedOnce: true;
+  /** Rotation only: the link that just stopped working, and how many live buyer
+   *  sessions from it were ended (0 when the organizer let them finish). */
+  previous?: AccessLinkRecord;
+  endedSessions?: number;
+}
+
+/**
+ * Owner-set defaults for a new link. Expiry is NOT here: "when the event starts"
+ * is the server's own default (it knows `starts_at`; the cockpit does not), so
+ * the create form expresses that choice by omitting `expiresAt` entirely rather
+ * than by guessing a timestamp the server would then have to correct.
+ */
+export const ACCESS_LINK_DEFAULTS = {
+  maxRedemptions: 100,
+  maxQuantity: 4,
+} as const;
+
+/** Plain-language state badge for a hosted link (§9: no internal vocabulary). */
+export function accessLinkBadge(link: Pick<AccessLinkRecord, 'status' | 'state'>): {
+  text: string; kind: 'active' | 'paused' | 'archived';
+} {
+  switch (link.status ?? link.state) {
+    case 'active': return { text: 'Active', kind: 'active' };
+    case 'expired': return { text: 'Expired', kind: 'archived' };
+    case 'exhausted': return { text: 'All used', kind: 'paused' };
+    case 'rotated': return { text: 'Replaced', kind: 'archived' };
+    default: return { text: 'Revoked', kind: 'archived' };
+  }
+}
+
+/** Only an `active` link can be rotated or revoked; the server agrees (409
+ *  `access_link_not_active`), so the buttons are absent rather than failing. */
+export function accessLinkIsLive(link: Pick<AccessLinkRecord, 'status' | 'state'>): boolean {
+  return link.state === 'active' && link.status === 'active';
+}
+
+function formatMoment(ms: number): string {
+  if (!Number.isFinite(ms)) return '—';
+  return new Date(ms).toLocaleString(undefined, {
+    day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+/**
+ * The policy an organizer is agreeing to, in one list. Used by BOTH the reveal
+ * (what you just created) and the status card (what is live), so the two can
+ * never drift into describing the same link differently.
+ */
+export function accessLinkPolicyLines(link: AccessLinkRecord): Array<{ k: string; v: string }> {
+  return [
+    { k: 'Expires', v: formatMoment(link.expiresAt) },
+    {
+      k: 'Redemptions',
+      v: `${link.redemptions.toLocaleString()} of ${link.maxRedemptions.toLocaleString()} used`,
+    },
+    {
+      k: 'Seats per buyer',
+      v: `${link.maxQuantity.toLocaleString()} seat${link.maxQuantity === 1 ? '' : 's'} maximum`,
+    },
+    {
+      k: 'Covers',
+      v: link.includePublic
+        ? "This channel's allocation and Public sale seats"
+        : "This channel's allocation only",
+    },
+  ];
+}
+
+/**
+ * Plain language for a refused hosted-link call.
+ *
+ * The PLATFORM BOUNDS live on the server (60s–180d expiry, 1–10 000 redemptions,
+ * 1–100 seats per buyer, 20 live links per channel) and the server states them
+ * in `message`. We surface that sentence rather than re-encoding the numbers
+ * here, so the client can never disagree with the rule it is reporting.
+ */
+export function accessLinkErrorCopy(
+  err: { code?: string; serverMessage?: string; status?: number } | null | undefined,
+): string {
+  const fromServer = err?.serverMessage?.trim();
+  switch (err?.code) {
+    case 'invalid_expiry':
+    case 'invalid_max_redemptions':
+    case 'invalid_max_quantity':
+    case 'invalid_session_ttl':
+    case 'invalid_label':
+      return fromServer || 'That setting is outside what a hosted link allows. Adjust it and try again.';
+    case 'too_many_access_links':
+      return fromServer
+        || 'This channel already has as many live links as it can hold. Revoke one before creating another.';
+    case 'access_link_not_active':
+      return 'That link is no longer active, so it cannot be rotated or revoked.';
+    case 'channel_unavailable':
+      return 'This channel is paused or archived, so it cannot let new buyers in. Resume it first.';
+    case 'end_active_sessions_required':
+      return 'Choose what happens to the buyers who already came in through this link.';
+    case 'not_found':
+      return 'That link is no longer here. Refresh and try again.';
+    default:
+      if (err?.status === 403) return 'Hosted access links need channel-management permission.';
+      return fromServer || 'That did not go through. Try again.';
+  }
+}
+
 /**
  * The chart-update refusal `channel_assignment_would_drop` (409) deliberately
  * mirrors the Apply skipped buckets, so ONE review component renders both.
