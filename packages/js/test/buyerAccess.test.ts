@@ -285,16 +285,19 @@ describe('expiry and refresh (guide §9, §10)', () => {
 });
 
 describe('the error contract (guide §10) is typed, not collapsed', () => {
-  const table: Array<[number, string, string]> = [
-    [401, 'buyer_access_invalid', 'invalid'],
-    [403, 'buyer_access_origin_mismatch', 'origin_mismatch'],
-    [403, 'buyer_access_event_mismatch', 'event_mismatch'],
-    [403, 'buyer_access_mode_mismatch', 'mode_mismatch'],
-    [403, 'channel_access_denied', 'channel_denied'],
-    [422, 'invalid_channel_scope', 'invalid_scope'],
+  // The last column is `retryable`: false means the reason latches the context
+  // terminal. `channel_access_denied` is the one 403 that describes a SEAT
+  // rather than the session, so it reports and lets the buyer carry on.
+  const table: Array<[number, string, string, boolean]> = [
+    [401, 'buyer_access_invalid', 'invalid', false],
+    [403, 'buyer_access_origin_mismatch', 'origin_mismatch', false],
+    [403, 'buyer_access_event_mismatch', 'event_mismatch', false],
+    [403, 'buyer_access_mode_mismatch', 'mode_mismatch', false],
+    [403, 'channel_access_denied', 'channel_denied', true],
+    [422, 'invalid_channel_scope', 'invalid_scope', false],
   ];
 
-  it.each(table)('maps %s %s to a typed unavailable state', async (status, code, reason) => {
+  it.each(table)('maps %s %s to a typed unavailable state', async (status, code, reason, retryable) => {
     const unavailable: BuyerAccessUnavailableEvent[] = [];
     const provider = vi.fn(async () => ({ token: BEARER }));
     const api = new PubApi(BASE, {
@@ -303,7 +306,7 @@ describe('the error contract (guide §10) is typed, not collapsed', () => {
     respond = () => json(status, { error: code });
 
     await expect(api.objects('ev_1')).rejects.toMatchObject({ status, code });
-    expect(unavailable).toEqual([{ reason, code, status, retryable: false }]);
+    expect(unavailable).toEqual([{ reason, code, status, retryable }]);
     // Not an expiry: the provider is never asked to mint a second session.
     expect(provider).toHaveBeenCalledTimes(1);
     expect(calls).toHaveLength(1);
@@ -355,5 +358,69 @@ describe('the error contract (guide §10) is typed, not collapsed', () => {
 
     await expect(api.objects('ev_1')).rejects.toMatchObject({ status: 404, code: 'not_found' });
     expect(unavailable).toEqual([]);
+  });
+});
+
+describe('a one-shot token never degrades into the public picker', () => {
+  // Found in the M9 live pass against a real worker. `configured` used to be
+  // derived from `!!#provider || !!#token`, and `#fail()` clears `#token`; a
+  // host that passed `buyerAccessToken` with no provider therefore became
+  // "unconfigured" the moment the server refused it, and the NEXT request went
+  // out with no Authorization header at all — answered with the anonymous
+  // Public sale projection. The provider path always hid this.
+  it('stays configured after a terminal refusal, and refuses instead of going anonymous', async () => {
+    const unavailable: BuyerAccessUnavailableEvent[] = [];
+    const access = new BuyerAccessContext({
+      token: BEARER,
+      onUnavailable: (e) => unavailable.push(e),
+    });
+    const api = new PubApi(BASE, { access });
+
+    respond = () => json(401, { error: 'buyer_access_invalid', code: 'buyer_access_invalid' });
+    await expect(api.objects('ev_1')).rejects.toMatchObject({ status: 401, code: 'buyer_access_invalid' });
+    expect(unavailable).toEqual([
+      { reason: 'invalid', code: 'buyer_access_invalid', status: 401, retryable: false },
+    ]);
+    expect(access.configured).toBe(true);
+    expect(access.unavailable).not.toBeNull();
+
+    // The second call must never reach the network unauthenticated.
+    const before = calls.length;
+    respond = () => json(200, { seats: { 'A-1': 'free' } });
+    await expect(api.objects('ev_1')).rejects.toBeInstanceOf(BuyerAccessUnavailableError);
+    expect(calls.length).toBe(before);
+  });
+
+  it('a genuinely tokenless context is still the public picker', async () => {
+    const access = new BuyerAccessContext({});
+    expect(access.configured).toBe(false);
+    expect(await access.authorization()).toBeNull();
+  });
+});
+
+describe('a refused seat is not a dead session (guide §10, channel_access_denied)', () => {
+  it('reports channel_denied, keeps the session usable, and lets the buyer release', async () => {
+    const unavailable: BuyerAccessUnavailableEvent[] = [];
+    const access = new BuyerAccessContext({
+      token: BEARER,
+      onUnavailable: (e) => unavailable.push(e),
+    });
+    const api = new PubApi(BASE, { access });
+
+    respond = () => json(403, { error: 'channel_access_denied', code: 'channel_access_denied' });
+    await expect(api.hold('ev_1', [{ label: 'Z-9' }])).rejects.toMatchObject({
+      status: 403, code: 'channel_access_denied',
+    });
+    expect(unavailable).toEqual([
+      { reason: 'channel_denied', code: 'channel_access_denied', status: 403, retryable: true },
+    ]);
+    // Not terminal, and the bearer survives.
+    expect(access.unavailable).toBeNull();
+    expect(access.hasToken).toBe(true);
+
+    // The seat the buyer legitimately holds can still be released.
+    respond = () => json(200, { ok: true, released: ['A-1'] });
+    await expect(api.release('ev_1', ['A-1'], 'hold_1')).resolves.toMatchObject({ ok: true });
+    expect(authOf(calls.at(-1)!)).toBe(`Bearer ${BEARER}`);
   });
 });

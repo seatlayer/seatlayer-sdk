@@ -149,6 +149,23 @@ export class BuyerAccessUnavailableError extends Error {
 const EXPIRED_CODES = new Set(['buyer_access_expired']);
 
 /**
+ * Reasons that describe ONE request, not the session behind it. They report to
+ * the host but never latch the context terminal and never discard the bearer.
+ *
+ * `channel_denied` is here on the guide's own reading: §10 answers a 403
+ * `channel_access_denied` with "return buyer to permitted inventory" — the
+ * buyer asked for a seat outside their allocation, which is a mis-click, not a
+ * dead session. Latching it meant one wrong seat permanently killed a live
+ * buyer's access, including their ability to RELEASE the hold they already
+ * legitimately owned. Found against a live worker in the M9 pass.
+ */
+const RECOVERABLE = new Set<BuyerAccessUnavailableReason>([
+  'paused',
+  'provider_failed',
+  'channel_denied',
+]);
+
+/**
  * Guide §10 error table → an unavailable reason. Anything not in the table is
  * not an access failure and must stay an ordinary error, so this returns null.
  */
@@ -201,6 +218,8 @@ export class BuyerAccessContext {
   #lastFailure: BuyerAccessUnavailableEvent | null = null;
   #onExpired?: (event: BuyerAccessExpiredEvent) => void;
   #onUnavailable?: (event: BuyerAccessUnavailableEvent) => void;
+  /** Decided once, at construction. See the `configured` getter. */
+  #configured = false;
 
   constructor(options: BuyerAccessContextOptions) {
     this.#provider = options.provider;
@@ -211,12 +230,24 @@ export class BuyerAccessContext {
       const seed = typeof options.token === 'string' ? { token: options.token } : options.token;
       this.#accept(seed);
     }
+    this.#configured = !!this.#provider || !!this.#token;
   }
 
-  /** True when this picker is access-scoped at all. A false here is the
-   *  tokenless public picker, which must behave exactly as it always has. */
+  /**
+   * True when this picker is access-scoped at all. A false here is the
+   * tokenless public picker, which must behave exactly as it always has.
+   *
+   * Answered from what the HOST asked for, never from live token state. It used
+   * to be `!!#provider || !!#token`, which quietly inverted this file's central
+   * rule for a one-shot `buyerAccessToken` host: `#fail()` clears `#token`, so
+   * the first refusal turned a configured context into an "unconfigured" one,
+   * `authorization()` then returned null instead of throwing, and the very next
+   * call went out with no bearer — the anonymous Public sale fallback this
+   * module exists to prevent. A provider host never saw it, because `#provider`
+   * held `configured` true. Found against a live worker in the M9 pass.
+   */
   get configured(): boolean {
-    return !!this.#provider || !!this.#token;
+    return this.#configured;
   }
 
   /** Set once a state arrives that refreshing cannot clear. */
@@ -366,14 +397,19 @@ export class BuyerAccessContext {
       reason,
       code,
       status,
-      retryable: reason === 'paused',
+      // Unchanged: `retryable` means "the SAME request may succeed later".
+      // `provider_failed` is recoverable but not retryable — the host must fix
+      // its mint endpoint first — so the two sets are deliberately different.
+      retryable: reason === 'paused' || reason === 'channel_denied',
     };
-    // `paused` and `provider_failed` are recoverable: a later refresh may work,
-    // so they do not latch the context into a terminal state.
     this.#lastFailure = event;
-    if (reason !== 'paused' && reason !== 'provider_failed') this.#terminal = event;
-    this.#token = null;
-    this.#expiresAt = 0;
+    // A recoverable reason says nothing about the SESSION, so it must not latch
+    // the context terminal and must not throw the bearer away.
+    if (!RECOVERABLE.has(reason)) {
+      this.#terminal = event;
+      this.#token = null;
+      this.#expiresAt = 0;
+    }
     this.#onUnavailable?.(event);
     return event;
   }
