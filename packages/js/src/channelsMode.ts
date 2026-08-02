@@ -486,6 +486,16 @@ export class ChannelsMode {
   private linksChannelId: string | null = null;
   private linksState: 'idle' | 'loading' | 'ready' | 'unsupported' | 'error' = 'idle';
 
+  /**
+   * Monotonic read generations — one for the channel list + allocation, one for
+   * the open channel's links. Reads are concurrent (a 10s poll versus a
+   * mutation's own reload), and the network does not promise to answer them in
+   * order. Only the NEWEST read of each kind may write to state; an older
+   * answer that arrives late is dropped, never painted.
+   */
+  private listSeq = 0;
+  private linksSeq = 0;
+
   private previewAudience: string[] = [];
   private previewIncludePublic = false;
   private previewProjection: ChannelPreviewProjection | null = null;
@@ -603,24 +613,34 @@ export class ChannelsMode {
 
   private async refresh(opts: { quiet?: boolean } = {}): Promise<void> {
     if (!this.caps.view) return;
+    // A ten-second poll runs alongside every mutation, so two refreshes are
+    // routinely in flight at once. Without a generation the slower FIRST one
+    // lands last and repaints the panel with what the channel looked like
+    // BEFORE the mutation — the create/rotate/revoke result silently reverts.
+    const seq = ++this.listSeq;
+    const superseded = (): boolean => seq !== this.listSeq;
     try {
       const list = await this.host.api.channels(this.host.eventKey, { includeArchived: this.showArchived });
+      if (superseded()) return;
       this.list = list;
       this.assignmentVersion = list.assignmentVersion;
       this.loadError = null;
       if (!this.targetChannelId) {
         this.targetChannelId = list.channels.find((c) => c.state === 'active')?.id ?? PUBLIC_CHANNEL_ID;
       }
-      await this.loadAllocation();
+      await this.loadAllocation(seq);
+      if (superseded()) return;
       // Redemptions and live-session counts move on their own, so the open
       // channel's link status rides the same clock as its seat counts.
       if (this.detailChannelId) await this.loadLinks(this.detailChannelId);
+      if (superseded()) return;
       this.loading = false;
       if (this.active) {
         this.paintRail();
         this.paintOverlay();
       }
     } catch (err) {
+      if (superseded()) return;
       this.loading = false;
       // A 403 on a mutation route means the token lost manage authority; a 403
       // here means it lost view. Either way, fail closed rather than guess.
@@ -635,10 +655,12 @@ export class ChannelsMode {
 
   /** Walk every allocation page. Bounded by the event's seat count, and the
    *  server caps each page, so an arena is a handful of round trips. */
-  private async loadAllocation(): Promise<void> {
+  private async loadAllocation(seq?: number): Promise<void> {
     const next = new Map<string, string>();
     let afterLabel: string | undefined;
     for (let page = 0; page < 200; page += 1) {
+      // A superseded walk stops paging rather than finishing a read nobody will use.
+      if (seq !== undefined && seq !== this.listSeq) return;
       const res: ChannelAllocationPage = await this.host.api.channelAllocation(this.host.eventKey, {
         afterLabel, limit: 1000,
       });
@@ -651,6 +673,7 @@ export class ChannelsMode {
       if (!res.nextAfterLabel) break;
       afterLabel = res.nextAfterLabel;
     }
+    if (seq !== undefined && seq !== this.listSeq) return;
     this.allocation = next;
   }
 
@@ -1138,6 +1161,10 @@ export class ChannelsMode {
    */
   private async loadLinks(channelId: string): Promise<void> {
     if (!this.caps.view) return;
+    const seq = ++this.linksSeq;
+    // Superseded by a newer read of the same channel — a poll that started
+    // before the mutation must not overwrite the mutation's own answer.
+    const superseded = (): boolean => seq !== this.linksSeq || this.linksChannelId !== channelId;
     if (this.linksChannelId !== channelId) {
       this.links = [];
       this.linksChannelId = channelId;
@@ -1145,11 +1172,11 @@ export class ChannelsMode {
     }
     try {
       const res = await this.host.api.accessLinks(this.host.eventKey, channelId);
-      if (this.linksChannelId !== channelId) return; // the organizer moved on
+      if (superseded()) return; // the organizer moved on, or a fresher read won
       this.links = res.links ?? [];
       this.linksState = 'ready';
     } catch (err) {
-      if (this.linksChannelId !== channelId) return;
+      if (superseded()) return;
       const status = err instanceof ManageApiError ? err.status : 0;
       this.links = [];
       this.linksState = status === 404 || status === 405 || status === 501 ? 'unsupported' : 'error';
@@ -1898,6 +1925,27 @@ export class ChannelsMode {
     this.paintRail();
   }
 
+  /**
+   * The reload EVERY link mutation owes the panel.
+   *
+   * A create/rotate/revoke changes two things the detail panel renders: the
+   * channel's access line (the server sets `access.intent` on create, and clears
+   * it when the last live link goes) and the link status list. Both are re-read
+   * here and the rail repainted, so the panel the organizer is already looking
+   * at is current the moment the mutation lands — no reload, and no dependence
+   * on HOW the one-time reveal was dismissed (the button, Escape, or never).
+   */
+  private async reloadAfterLinkChange(channelId: string): Promise<void> {
+    // `refresh` re-reads the links of the OPEN channel as part of its pass, so
+    // the common case is one round of reads, not two.
+    if (this.detailChannelId === channelId) {
+      await this.refresh({ quiet: true });
+      return;
+    }
+    await this.loadLinks(channelId);
+    if (this.active) this.paintRail();
+  }
+
   private linkById(linkId: string | undefined): AccessLinkStatusRecord | null {
     return this.links.find((link) => link.id === linkId) ?? null;
   }
@@ -1996,9 +2044,7 @@ export class ChannelsMode {
     try {
       const reveal = await this.host.api.createAccessLink(this.host.eventKey, channelId, input);
       this.revealLink(reveal, { channelId });
-      // Creating a link declares the channel's access intent server-side, so the
-      // rail's access line and the self-service warning both need re-reading.
-      await this.refresh({ quiet: true });
+      await this.reloadAfterLinkChange(channelId);
     } catch (err) {
       this.showDialogError(accessLinkErrorCopy(err instanceof ManageApiError ? err : undefined));
       if (!(err instanceof ManageApiError)) this.host.onError(err);
@@ -2064,9 +2110,9 @@ export class ChannelsMode {
         // the organizer can copy it by hand rather than lose it entirely.
         selectSecret(dialog);
       });
-      dialog.querySelector('[data-ch-lk-done]')?.addEventListener('click', () => {
-        void this.loadLinks(opts.channelId).then(() => this.paintRail());
-      });
+      // Dismissal only dismisses. The mutation that opened this sheet already
+      // owns the reload (`reloadAfterLinkChange`), so the panel behind the scrim
+      // is current whichever way the organizer leaves — including Escape.
     });
     this.announce('Your hosted access link is ready and is shown once.');
   }
@@ -2131,6 +2177,7 @@ export class ChannelsMode {
         this.host.eventKey, channelId, linkId, endActiveSessions,
       );
       this.revealLink(reveal, { channelId, rotated: true });
+      await this.reloadAfterLinkChange(channelId);
     } catch (err) {
       this.showDialogError(accessLinkErrorCopy(err instanceof ManageApiError ? err : undefined));
       if (!(err instanceof ManageApiError)) this.host.onError(err);
@@ -2169,9 +2216,7 @@ export class ChannelsMode {
         this.host.eventKey, channelId, linkId, endActiveSessions,
       );
       this.closeDialog();
-      await this.loadLinks(channelId);
-      await this.refresh({ quiet: true });
-      this.paintRail();
+      await this.reloadAfterLinkChange(channelId);
       this.host.toast(res.endedSessions
         ? `Link revoked. ${res.endedSessions.toLocaleString()} buyer${res.endedSessions === 1 ? '' : 's'} lost access.`
         : 'Link revoked. It no longer opens for anyone.', 'ok');
