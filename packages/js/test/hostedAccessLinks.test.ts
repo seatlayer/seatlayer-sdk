@@ -91,6 +91,68 @@ function makeClient(over: Partial<ChannelsClient> = {}): ChannelsClient {
   };
 }
 
+/**
+ * A client backed by MUTABLE state, so a mutation changes what the NEXT read
+ * returns — exactly like the worker. The fixed doubles above can never catch a
+ * panel that forgets to re-read, because they answer the same thing forever.
+ */
+function statefulServer(opts: { seeded?: boolean } = {}): {
+  client: ChannelsClient;
+  /** Make the NEXT link read hang, holding the answer it computed at call time.
+   *  This is the poll that was already in flight when the organizer mutated. */
+  holdNextLinksRead(): { release(): void };
+} {
+  const links: AccessLinkStatusRecord[] = opts.seeded ? [linkFixture()] : [];
+  const live = (): boolean => links.some(accessLinkIsLive);
+  let held: (() => void) | null = null;
+  let holding = false;
+  const client = makeClient({
+    channels: vi.fn(async () => {
+      const list = listFixture();
+      // The worker sets `hosted_link` on create; the access line follows the
+      // links that are actually live.
+      list.channels[0].access = { intent: live() ? 'hosted_link' : 'none', hasActiveGrants: live(), lastMintAt: null };
+      return list;
+    }),
+    accessLinks: vi.fn(async () => {
+      // Snapshot FIRST: a held read answers with the state it saw, not the state
+      // the world reached while it was in flight.
+      const answer = { links: links.map((link) => ({ ...link })) };
+      if (held === null && holding) {
+        holding = false;
+        await new Promise<void>((resolve) => { held = resolve; });
+      }
+      return answer;
+    }),
+    createAccessLink: vi.fn(async () => {
+      const link = linkFixture({ id: `alk_${links.length + 1}`, redemptions: 0, activeSessions: 0 });
+      links.push(link);
+      return revealFixture({ ...link } as Partial<AccessLinkRecord>);
+    }),
+    rotateAccessLink: vi.fn(async (_key: string, _channelId: string, linkId: string) => {
+      const previous = links.find((link) => link.id === linkId)!;
+      previous.state = 'rotated';
+      previous.status = 'rotated';
+      const replacement = linkFixture({ id: `alk_${links.length + 1}`, redemptions: 0, activeSessions: 0 });
+      links.push(replacement);
+      return { ...revealFixture({ ...replacement } as Partial<AccessLinkRecord>), previous, endedSessions: 0 };
+    }),
+    revokeAccessLink: vi.fn(async (_key: string, _channelId: string, linkId: string) => {
+      const link = links.find((entry) => entry.id === linkId)!;
+      link.state = 'revoked';
+      link.status = 'revoked';
+      return { ok: true as const, link, endedSessions: 0 };
+    }),
+  });
+  return {
+    client,
+    holdNextLinksRead: () => {
+      holding = true;
+      return { release: () => { held?.(); held = null; } };
+    },
+  };
+}
+
 interface Harness {
   mode: ChannelsMode;
   root: HTMLElement;
@@ -416,6 +478,98 @@ describe('ChannelsMode hosted access links', () => {
     expect(reveal.textContent).toContain('The old link has stopped working');
     expect(reveal.textContent).toContain('7 buyers lost access immediately');
     expect(reveal.querySelector('[data-ch-lk-url]')?.textContent).toBe(REVEALED_URL);
+  });
+
+  /**
+   * The panel the organizer is ALREADY LOOKING AT must be current the moment a
+   * link mutation lands. Two things broke that on 0.36.3, and both are here:
+   *
+   *   - the only post-create link read hung off the reveal sheet's "I've copied
+   *     it" button, so Escape (or rotate, which had no reload at all) left the
+   *     panel showing the pre-link state until a browser reload;
+   *   - the 10s poll routinely has a read in flight when the mutation fires, and
+   *     without a read generation that older answer lands last and repaints the
+   *     channel as it was BEFORE the mutation.
+   */
+  it('shows the link status card as soon as the one-time reveal is dismissed', async () => {
+    const server = statefulServer();
+    const harness = mount({ view: true, manage: true }, server.client);
+    await openDetail(harness);
+    // Pre-link state: the access explainer, and no card.
+    expect(harness.rail.textContent).toContain('No buyer access is configured yet');
+
+    // A poll read is already in flight, as it is for six seconds out of every
+    // ten, and it will answer with the pre-create truth.
+    const stale = server.holdNextLinksRead();
+    harness.mode.applyRealtimeHint();
+    await flush();
+
+    (harness.rail.querySelector('[data-ch-act="link-create"]') as HTMLElement).click();
+    (harness.root.querySelector('[data-ch-lk-create]') as HTMLElement).click();
+    await flush();
+    expect(harness.root.querySelector('[data-ch-lk-url]')?.textContent).toBe(REVEALED_URL);
+    // Dismissed with Escape — the reload cannot depend on which control closed it.
+    (harness.root.querySelector('[role="dialog"]') as HTMLElement)
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flush();
+    await flush();
+    stale.release();
+    await flush();
+    await flush();
+
+    // No browser reload: this is the panel as the organizer sees it.
+    expect(harness.rail.textContent).not.toContain('No buyer access is configured yet');
+    expect(harness.rail.textContent).toContain('VIP list Nov 14');
+    expect(harness.rail.querySelector('[data-ch-rotate="alk_1"]')).toBeTruthy();
+    expect(harness.rail.querySelector('[data-ch-revoke="alk_1"]')).toBeTruthy();
+    expect(harness.rail.textContent).toContain('Create another hosted link');
+  });
+
+  it('shows the replacement link after a rotation reveal is dismissed', async () => {
+    const server = statefulServer({ seeded: true });
+    const harness = mount({ view: true, manage: true }, server.client);
+    await openDetail(harness);
+    expect(harness.rail.querySelector('[data-ch-rotate="alk_1"]')).toBeTruthy();
+
+    (harness.rail.querySelector('[data-ch-rotate="alk_1"]') as HTMLElement).click();
+    const dialog = harness.root.querySelector('[role="dialog"]') as HTMLElement;
+    const keep = dialog.querySelectorAll<HTMLInputElement>('[data-ch-rot]')[0];
+    keep.checked = true;
+    keep.dispatchEvent(new Event('change'));
+    (dialog.querySelector('[data-ch-lk-rotate]') as HTMLElement).click();
+    await flush();
+    (harness.root.querySelector('[role="dialog"]') as HTMLElement)
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flush();
+    await flush();
+
+    // The replaced link stays listed as history; only the new one is live.
+    expect(harness.rail.querySelector('[data-ch-rotate="alk_2"]')).toBeTruthy();
+    expect(harness.rail.querySelector('[data-ch-rotate="alk_1"]')).toBeNull();
+    expect(harness.rail.textContent).toContain('Replaced');
+    expect(harness.rail.textContent).not.toContain('No buyer access is configured yet');
+  });
+
+  it('drops back to the pre-link explainer when the last link is revoked', async () => {
+    const server = statefulServer({ seeded: true });
+    const harness = mount({ view: true, manage: true }, server.client);
+    await openDetail(harness);
+    const stale = server.holdNextLinksRead();
+    harness.mode.applyRealtimeHint();
+    await flush();
+
+    (harness.rail.querySelector('[data-ch-revoke="alk_1"]') as HTMLElement).click();
+    (harness.root.querySelector('[data-ch-lk-revoke]') as HTMLElement).click();
+    await flush();
+    await flush();
+    stale.release();
+    await flush();
+    await flush();
+
+    expect(harness.rail.querySelector('[data-ch-rotate="alk_1"]')).toBeNull();
+    expect(harness.rail.textContent).toContain('Revoked');
+    expect(harness.rail.textContent).toContain('No buyer access is configured yet');
+    expect(harness.rail.textContent).toContain('Create hosted access link');
   });
 
   it('confirms a revoke before calling the server, and can cascade the sessions', async () => {
