@@ -1,7 +1,11 @@
 /**
  * i18n core — deliberately tiny and framework-free so the embed SDK can share
- * it without dragging in a runtime library (the 150KB-gzipped complete CDN budget is a
- * product contract).
+ * it without dragging in a runtime library — every KB here lands in the complete
+ * CDN bundle every buyer downloads, which is ~207 KB gzipped as of 0.37.0+.
+ * (This used to cite a "150 KB product contract". That number was never true of
+ * any shipped bundle — the dashboard advertised it while the artifact measured
+ * 215 KB — so it is stated as the measured figure now, not as a budget nobody
+ * was holding. See docs/hosted-checkout-programme-2026-08-03.md §W4.)
  *
  * Scope: the buyer surface (picker, public event
  * page, SDK) ships fully translated in en/es/de/fr; dashboard pages route

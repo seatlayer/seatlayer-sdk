@@ -1,7 +1,9 @@
 /**
  * Locale bundle loader — keeps non-English translations OUT of the initial
- * bundle (the 150 KB complete CDN budget is a product contract) and code-splits each
- * locale so a page/SDK only downloads the language it actually uses.
+ * bundle — they are ~2.5 KB gzipped of the complete CDN artifact — and
+ * code-splits each locale so a page/SDK only downloads the language it actually
+ * uses. (The "150 KB product contract" this used to cite was never true of a
+ * shipped bundle; see docs/hosted-checkout-programme-2026-08-03.md §W4.)
  *
  * `loadLocale('de')` dynamic-imports the German dictionary, registers it via
  * setLocale(), and resolves once it's active. English is built in, so
