@@ -194,6 +194,38 @@ interface BestAvailableResponse extends HoldResponse {
   labels: string[];
 }
 
+/** One unit's status as the realtime wire words it (`free`/`held`/`booked`/`blocked`/…). */
+export interface PickerStatusChange {
+  label: string;
+  status: string;
+}
+
+/**
+ * Where a transport-owned realtime client pushes reconstructed inventory.
+ *
+ * Structurally identical to the SDK's `RealtimeSink` on purpose: this file is
+ * mirrored byte-for-byte into `@seatlayer/core`, which the SDK's `@seatlayer/js`
+ * depends on — so it can never import BuyerRealtimeClient without inverting that
+ * dependency. Structural typing lets the SDK hand its client this object with no
+ * import in either direction.
+ */
+export interface PickerRealtimeSink {
+  /** Apply a batch of label→status changes as ONE paint pass, not one per label. */
+  applyStatuses(changes: PickerStatusChange[]): void;
+  /** Re-pull authoritative state over HTTP (a frame that cannot be diffed). */
+  resync(): void | Promise<void>;
+  /** Section availability changed (hidden = stripped, closed = greyed). */
+  onSections?(hidden: string[], closed: string[]): void;
+  /** Scope-projected presence counters. Unused by the picker today. */
+  onPresence?(counts: { shoppingSessions: number; activeHolds: number }): void;
+}
+
+/** The live feed itself, owned by the transport. */
+export interface PickerRealtimeConnection {
+  start(): void;
+  stop(): void;
+}
+
 /** Swappable public-surface transport (SDK PubApi or a dashboard `api.pub.*` adapter). */
 export interface PickerTransport {
   chart(key: string): Promise<{
@@ -215,6 +247,17 @@ export interface PickerTransport {
    *  subscribe ticket via `Sec-WebSocket-Protocol`, realtime-protocol v1).
    *  Absent or empty means today's plain connection. */
   socketProtocols?(key: string): string[];
+  /**
+   * Optional — the transport owns the live feed and hands back a client that
+   * speaks the compact `seatlayer.v1` protocol (snapshot diffing, `sv.<n>`
+   * resume, ping/pong liveness, jittered reconnect).
+   *
+   * When this returns a connection the controller does NOT open its own socket:
+   * one socket client, one reconnect/backoff/resume implementation. Returning
+   * null (or omitting the method) keeps the plain-WebSocket path below, which is
+   * what a transport with no realtime client of its own still gets.
+   */
+  createRealtime?(key: string, sink: PickerRealtimeSink): PickerRealtimeConnection | null;
 }
 
 export interface PickerCallbacks extends RendererCallbacks {
@@ -340,6 +383,8 @@ export class PickerController {
 
   // realtime socket
   private ws: WebSocket | null = null;
+  /** Transport-owned v1 client; mutually exclusive with `ws`. */
+  private realtime: PickerRealtimeConnection | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private closed = false;
@@ -1544,6 +1589,14 @@ export class PickerController {
       clearTimeout(this.expiryTimer);
       this.expiryTimer = null;
     }
+    if (this.realtime) {
+      try {
+        this.realtime.stop();
+      } catch {
+        /* ignore */
+      }
+      this.realtime = null;
+    }
     if (this.ws) {
       try {
         this.ws.close();
@@ -1875,12 +1928,101 @@ export class PickerController {
     this.onVisibilityChange = null;
   }
 
+  /**
+   * The sink a transport-owned v1 client pushes into.
+   *
+   * Deliberately byte-compatible with the inline socket handler below: the same
+   * liveStatuses bookkeeping (which the hold-expiry verification reads), the
+   * same one-call-per-status paint, the same free→taken flash rule that skips
+   * the buyer's OWN just-held seats, the same keepLiveWhileHidden forceDraw, the
+   * same clearBookedHoldIfSettled + onStatusChange ordering. Hosts see the same
+   * callbacks in the same order whichever path is live.
+   */
+  private realtimeSink(): PickerRealtimeSink {
+    return {
+      applyStatuses: (changes) => this.applyStatusChanges(changes),
+      resync: () => this.resnapshot(),
+      onSections: (hidden, closed) => {
+        // Hidden sections STRIP seats, so the chart is rebuilt and repainted
+        // from an authoritative snapshot; closed sections are a cheap grey
+        // restyle. Same reconciliation the inline handler does — an
+        // access-scoped picker only repaints statuses here, this one restructures.
+        const rebuilt = this.syncHidden(hidden);
+        const restyled = this.syncClosed(closed);
+        if (rebuilt) void this.resnapshot();
+        if (rebuilt || restyled) this.opts.onStatusChange?.();
+      },
+    };
+  }
+
+  /** Paint one delta batch. Shared by the v1 sink and the plain-socket handler. */
+  private applyStatusChanges(changes: PickerStatusChange[]): void {
+    const r = this.renderer;
+    if (!r) return;
+    for (const ch of changes) {
+      this.liveStatuses.set(ch.label, ch.status);
+      const ids = this.idsForLabel(ch.label);
+      if (!ids.length) continue;
+      const next = mapStatus(ch.status);
+      // Flash a live free→taken change — but not the buyer's OWN just-held
+      // seats (a manual hold leaves them 'free' locally, so the server's
+      // held-delta would otherwise flash them as if someone else grabbed them).
+      if (
+        this.opts.flashOnLiveChange &&
+        next !== 'free' &&
+        ids.some((id) => r.getStatus(id) === 'free') &&
+        !this.hold_?.labels.includes(ch.label)
+      ) {
+        // Pulse color mirrors the manager board's status language:
+        // amber for a hold landing, red for a booking.
+        ids.forEach((id) => r.flashSeat(id, next === 'held' ? '#f4b740' : '#f43f5e'));
+      }
+      r.setStatus(ids, next);
+    }
+    // Stay-live-while-hidden (opt-in, default OFF). setStatus paints via
+    // batchDraw (rAF), which Chrome pauses on a hidden tab — so an always-on
+    // board (the future organizer control room) would freeze while
+    // backgrounded. When enabled, force a synchronous repaint so a hidden
+    // board keeps painting. The buyer widget leaves this off and relies on
+    // the visibilitychange catch-up instead.
+    if (
+      this.opts.keepLiveWhileHidden &&
+      typeof document !== 'undefined' &&
+      document.visibilityState === 'hidden'
+    ) {
+      r.forceDraw();
+    }
+    this.clearBookedHoldIfSettled();
+    this.opts.onStatusChange?.();
+  }
+
   private connect(): void {
     if (this.closed) return;
     // A transport may be fully local (demo/mock) — an empty socketUrl means
     // "no live feed"; skip the connection instead of retrying forever.
     const url = this.api.socketUrl(this.key);
     if (!url) return;
+
+    // Preferred path: the transport owns a `seatlayer.v1` client. An anonymous
+    // buyer gets exactly what a private-channel one gets — a compact snapshot
+    // instead of every unit of the event, and a resume on reconnect instead of
+    // a fresh full snapshot. The client also owns the reconnect, so nothing
+    // below runs and there is no second backoff to keep in step.
+    if (!this.realtime && this.api.createRealtime) {
+      let connection: PickerRealtimeConnection | null = null;
+      try {
+        connection = this.api.createRealtime(this.key, this.realtimeSink());
+      } catch {
+        connection = null; // fall through to the plain socket
+      }
+      if (connection) {
+        this.realtime = connection;
+        connection.start();
+        return;
+      }
+    }
+    if (this.realtime) return;
+
     let ws: WebSocket;
     try {
       const protocols = this.api.socketProtocols?.(this.key);
@@ -1920,41 +2062,7 @@ export class PickerController {
       if (m.seats && typeof m.seats === 'object') {
         this.applySeatsMap(m.seats);
       } else if (Array.isArray(m.changes)) {
-        for (const ch of m.changes) {
-          this.liveStatuses.set(ch.label, ch.status);
-          const ids = this.idsForLabel(ch.label);
-          if (!ids.length) continue;
-          const next = mapStatus(ch.status);
-          // Flash a live free→taken change — but not the buyer's OWN just-held
-          // seats (a manual hold leaves them 'free' locally, so the server's
-          // held-delta would otherwise flash them as if someone else grabbed them).
-          if (
-            this.opts.flashOnLiveChange &&
-            next !== 'free' &&
-            ids.some((id) => r.getStatus(id) === 'free') &&
-            !this.hold_?.labels.includes(ch.label)
-          ) {
-            // Pulse color mirrors the manager board's status language:
-            // amber for a hold landing, red for a booking.
-            ids.forEach((id) => r.flashSeat(id, next === 'held' ? '#f4b740' : '#f43f5e'));
-          }
-          r.setStatus(ids, next);
-        }
-        // Stay-live-while-hidden (opt-in, default OFF). setStatus paints via
-        // batchDraw (rAF), which Chrome pauses on a hidden tab — so an always-on
-        // board (the future organizer control room) would freeze while
-        // backgrounded. When enabled, force a synchronous repaint so a hidden
-        // board keeps painting. The buyer widget leaves this off and relies on
-        // the visibilitychange catch-up instead.
-        if (
-          this.opts.keepLiveWhileHidden &&
-          typeof document !== 'undefined' &&
-          document.visibilityState === 'hidden'
-        ) {
-          r.forceDraw();
-        }
-        this.clearBookedHoldIfSettled();
-        this.opts.onStatusChange?.();
+        this.applyStatusChanges(m.changes);
       }
     };
     ws.onclose = () => {
@@ -1970,10 +2078,18 @@ export class PickerController {
     };
   }
 
+  /**
+   * Backoff for the PLAIN-socket fallback (a transport with no v1 client of its
+   * own). Full jitter, for the same reason BuyerRealtimeClient uses it: a
+   * deterministic `2**attempt` schedule brings every browser that lost the same
+   * socket back in the same millisecond, and an on-sale crowd reconnecting in
+   * lockstep turns one blip into a thundering herd. The ceiling still doubles,
+   * so a sustained outage still backs off.
+   */
   private scheduleReconnect(): void {
     if (this.closed || this.reconnectTimer) return;
     const attempt = Math.min(this.attempt++, 5);
-    const delay = Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
+    const delay = Math.random() * Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
