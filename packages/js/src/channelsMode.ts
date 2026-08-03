@@ -162,6 +162,12 @@ export interface ChannelsModeHost {
   worldToScreen(point: { x: number; y: number }): { x: number; y: number } | null;
   /** Approximate on-screen seat size in CSS pixels, for the overlay marks. */
   seatPixelSize(): number;
+  /** Whether the live renderer is currently showing individual seats. */
+  isSeatDetail(): boolean;
+  /** Return a sectional venue to its section-only overview. */
+  showSectionOverview(): void;
+  /** Focus one section using the renderer's real camera transition. */
+  focusSection(sectionId: string): void;
   isCompact(): boolean;
   /** Make the canvas non-interactive behind a full-detent sheet (§13). */
   setMapInert(inert: boolean): void;
@@ -176,6 +182,20 @@ export interface ChannelsModeHost {
 const POLL_MS = 10_000;
 const MAX_FLAGS = 8;
 const SEAT_LIST_PAGE = 300;
+
+/**
+ * Buyer-preview colours are deliberately independent of a chart's category
+ * palette. A channel is an access scope, not a price category: retaining the
+ * underlying category colour made a buyer's eligible seats indistinguishable
+ * from the rest of a section, while a square grey overlay left a coloured rim
+ * around unavailable seats. The two explicit states below make the scope
+ * readable without disclosing which other channel owns an unavailable seat.
+ */
+const PREVIEW_ELIGIBLE_FILL = '#6e7bff';
+const PREVIEW_ELIGIBLE_STROKE = '#b9c0ff';
+const PREVIEW_UNAVAILABLE_FILL = '#303846';
+const PREVIEW_UNAVAILABLE_STROKE = '#4b5669';
+const ALLOCATION_STROKE = '#101723';
 
 /**
  * Motion tokens (motion-system §2) plus Channels choreography (§3). Declared on
@@ -195,6 +215,8 @@ export const CHANNELS_CSS = `
   background:rgba(14,16,23,.88);border:1px solid var(--slm-line);font-size:10px;font-weight:800;letter-spacing:.04em;
   transform:translate(-50%,-50%);white-space:nowrap}
 .slm-ch-flag .mk{width:14px;height:14px;border-radius:4px;display:grid;place-items:center;font-size:8.5px;font-weight:800;color:#0e1017}
+.slm-ch-section-target{position:absolute;pointer-events:auto;padding:0;border:0;border-radius:8px;background:transparent;cursor:zoom-in}
+.slm-ch-section-target:focus-visible{outline:2px solid var(--slm-accent);outline-offset:-3px;background:color-mix(in srgb,var(--slm-accent) 12%,transparent)}
 
 /* preview banner — raised with the organizer chrome dim, as one transition */
 .slm-ch-banner{position:absolute;left:50%;top:14px;z-index:6;display:flex;align-items:center;gap:9px;padding:8px 14px;
@@ -214,7 +236,7 @@ export const CHANNELS_CSS = `
   transition:transform var(--slm-mo-slow) var(--slm-mo-out),opacity var(--slm-mo-base) var(--slm-mo-out)}
 .slm-ch-staged.on{transform:none;opacity:1}
 .slm-ch-staged.done{background:rgba(31,122,77,.96);border-color:#1f7a4d}
-.slm-ch-staged.shake{animation:slm-ch-shake 320ms var(--slm-mo-in-out) 2}
+.slm-ch-staged.shake{animation:slm-ch-shake var(--slm-mo-slow) var(--slm-mo-in-out) 2}
 .slm-ch-staged b{font-variant-numeric:tabular-nums}
 .slm-ch-staged .grow{flex:1}
 .slm-ch-staged .go{padding:9px 16px;min-height:44px;display:inline-flex;align-items:center;border-radius:9px;
@@ -231,6 +253,11 @@ export const CHANNELS_CSS = `
 .slm-ch-viewseg button{flex:1;padding:6px 8px;min-height:34px;border-radius:7px;font-size:11px;font-weight:800;color:var(--slm-muted)}
 .slm-ch-viewseg button.on{background:var(--slm-accent);color:var(--slm-accent-ink)}
 .slm-ch-viewseg button:disabled{opacity:.5;cursor:not-allowed}
+.slm-ch-mapnav{margin:-2px 0 12px;padding:10px;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface)}
+.slm-ch-mapnav-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--slm-muted)}
+.slm-ch-mapnav-head button{color:var(--slm-accent);font-size:11px;font-weight:800;letter-spacing:0;text-transform:none;min-height:30px}
+.slm-ch-mapnav .slm-ch-viewseg{margin:8px 0 5px}
+.slm-ch-mapnav p{margin:0;font-size:11px;line-height:1.45;color:var(--slm-muted)}
 .slm-ch-list{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
 .slm-ch-row{padding:10px 11px;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface);
   text-align:left;width:100%;display:block;transition:border-color var(--slm-mo-quick) var(--slm-mo-out)}
@@ -251,7 +278,7 @@ export const CHANNELS_CSS = `
   font-variant-numeric:tabular-nums}
 .slm-ch-counts b{color:var(--slm-text);font-weight:800}
 .slm-ch-counts .free b{color:#5bd39b}
-.slm-ch-counts b.bump{animation:slm-ch-bump .58s var(--slm-mo-spring)}
+.slm-ch-counts b.bump{animation:slm-ch-bump var(--slm-mo-base) var(--slm-mo-spring)}
 @keyframes slm-ch-bump{0%,100%{transform:none}35%{transform:translateY(-2px) scale(1.08)}}
 .slm-ch-access{margin-top:6px;font-size:10.5px;color:var(--slm-muted)}
 .slm-ch-more{flex:none;color:var(--slm-muted);font-weight:800;padding:0 4px;min-height:28px}
@@ -261,12 +288,13 @@ export const CHANNELS_CSS = `
   font-weight:800;color:#0e1017}
 .slm-ch-selsrc-row b{min-width:30px;text-align:right;font-weight:800}
 .slm-ch-selsrc-row span{color:var(--slm-muted)}
-.slm-ch-selnum.bump{animation:slm-ch-bump .58s var(--slm-mo-spring)}
+.slm-ch-selnum.bump{animation:slm-ch-bump var(--slm-mo-base) var(--slm-mo-spring)}
 .slm-ch-row2{display:flex;gap:8px;margin-top:8px}
 .slm-ch-row2 .slm-btn{flex:1;min-width:0}
 .slm-ch-alert{display:flex;align-items:flex-start;gap:9px;padding:11px 13px;border-radius:10px;font-size:12.5px;
   line-height:1.5;margin-bottom:12px}
 .slm-ch-alert.warn{background:rgba(244,183,64,.1);border:1px solid rgba(244,183,64,.4);color:#f4d58a}
+.slm-ch-alert.info{background:rgba(110,123,255,.12);border:1px solid rgba(110,123,255,.44);color:#c5cbff}
 .slm-ch-alert.err{background:rgba(229,72,77,.1);border:1px solid rgba(229,72,77,.45);color:#f1a4a6}
 .slm-ch-alert b{color:#fff}
 .slm-ch-alert button{display:block;margin-top:6px;color:#fff;font-weight:800;min-height:36px}
@@ -468,6 +496,10 @@ export class ChannelsMode {
   private loading = true;
 
   private view: 'inspect' | 'preview' = 'inspect';
+  /** Pan is intentionally the initial desktop interaction. Assignment's
+   * marquee is powerful, but must never make an organizer lose map navigation. */
+  private mapIntent: 'pan' | 'assign' = 'pan';
+  private focusedSectionId: string | null = null;
   private showArchived = false;
   private detailChannelId: string | null = null;
   private targetChannelId = '';
@@ -485,6 +517,16 @@ export class ChannelsMode {
   private links: AccessLinkStatusRecord[] = [];
   private linksChannelId: string | null = null;
   private linksState: 'idle' | 'loading' | 'ready' | 'unsupported' | 'error' = 'idle';
+
+  /**
+   * Monotonic read generations — one for the channel list + allocation, one for
+   * the open channel's links. Reads are concurrent (a 10s poll versus a
+   * mutation's own reload), and the network does not promise to answer them in
+   * order. Only the NEWEST read of each kind may write to state; an older
+   * answer that arrives late is dropped, never painted.
+   */
+  private listSeq = 0;
+  private linksSeq = 0;
 
   private previewAudience: string[] = [];
   private previewIncludePublic = false;
@@ -516,10 +558,16 @@ export class ChannelsMode {
   enter(): void {
     if (this.active) return;
     this.active = true;
+    this.mapIntent = 'pan';
+    this.focusedSectionId = null;
     this.ensureLayer();
     this.host.root.classList.add('ch-mode');
     this.applySheetClasses();
+    // A sectioned venue begins at semantic overview. The renderer owns the
+    // camera and turns this into a real section-only rung, not a fake card UI.
+    if (this.host.sections().length > 1) this.host.showSectionOverview();
     this.paintRail();
+    this.onInteractionChange?.();
     void this.refresh();
     this.pollTimer = setInterval(() => { void this.refresh({ quiet: true }); }, POLL_MS);
   }
@@ -571,6 +619,19 @@ export class ChannelsMode {
     return this.caps.manage && this.view === 'inspect';
   }
 
+  /** Bulk seat assignment is explicit. In Pan map, clicks can still inspect a
+   * single seat, while a primary-button drag always moves the camera. */
+  usesMarqueeSelection(): boolean {
+    return this.canSelect() && this.mapIntent === 'assign';
+  }
+
+  /** The renderer calls this when the organizer opens a section from overview. */
+  handleSectionFocus(sectionId: string): void {
+    if (!this.active) return;
+    this.focusedSectionId = sectionId;
+    this.paintRail();
+  }
+
   /**
    * Organizer realtime integration point. M5 ships a per-scope socket for
    * buyers; the organizer channel-count stream is a later milestone. When it
@@ -603,24 +664,34 @@ export class ChannelsMode {
 
   private async refresh(opts: { quiet?: boolean } = {}): Promise<void> {
     if (!this.caps.view) return;
+    // A ten-second poll runs alongside every mutation, so two refreshes are
+    // routinely in flight at once. Without a generation the slower FIRST one
+    // lands last and repaints the panel with what the channel looked like
+    // BEFORE the mutation — the create/rotate/revoke result silently reverts.
+    const seq = ++this.listSeq;
+    const superseded = (): boolean => seq !== this.listSeq;
     try {
       const list = await this.host.api.channels(this.host.eventKey, { includeArchived: this.showArchived });
+      if (superseded()) return;
       this.list = list;
       this.assignmentVersion = list.assignmentVersion;
       this.loadError = null;
       if (!this.targetChannelId) {
         this.targetChannelId = list.channels.find((c) => c.state === 'active')?.id ?? PUBLIC_CHANNEL_ID;
       }
-      await this.loadAllocation();
+      await this.loadAllocation(seq);
+      if (superseded()) return;
       // Redemptions and live-session counts move on their own, so the open
       // channel's link status rides the same clock as its seat counts.
       if (this.detailChannelId) await this.loadLinks(this.detailChannelId);
+      if (superseded()) return;
       this.loading = false;
       if (this.active) {
         this.paintRail();
         this.paintOverlay();
       }
     } catch (err) {
+      if (superseded()) return;
       this.loading = false;
       // A 403 on a mutation route means the token lost manage authority; a 403
       // here means it lost view. Either way, fail closed rather than guess.
@@ -635,10 +706,12 @@ export class ChannelsMode {
 
   /** Walk every allocation page. Bounded by the event's seat count, and the
    *  server caps each page, so an arena is a handful of round trips. */
-  private async loadAllocation(): Promise<void> {
+  private async loadAllocation(seq?: number): Promise<void> {
     const next = new Map<string, string>();
     let afterLabel: string | undefined;
     for (let page = 0; page < 200; page += 1) {
+      // A superseded walk stops paging rather than finishing a read nobody will use.
+      if (seq !== undefined && seq !== this.listSeq) return;
       const res: ChannelAllocationPage = await this.host.api.channelAllocation(this.host.eventKey, {
         afterLabel, limit: 1000,
       });
@@ -651,6 +724,7 @@ export class ChannelsMode {
       if (!res.nextAfterLabel) break;
       afterLabel = res.nextAfterLabel;
     }
+    if (seq !== undefined && seq !== this.listSeq) return;
     this.allocation = next;
   }
 
@@ -729,9 +803,10 @@ export class ChannelsMode {
    * Repaint the allocation (or preview) overlay in ONE canvas pass.
    *
    * Channel identity on the map is a fill in the administrative color PLUS the
-   * letter flags below — never color alone. Physical status keeps its own cue:
-   * only FREE units take a channel fill, so sold/held/blocked seats still read
-   * exactly as they do in every other tool.
+   * letter flags below — never color alone. In buyer preview the map instead
+   * uses two explicit, channel-neutral access states. Physical status keeps its
+   * own cue: only FREE units are repainted, so sold/held/blocked seats still
+   * read exactly as they do in every other tool.
    */
   private paintOverlay(): void {
     const canvas = this.canvas;
@@ -756,6 +831,7 @@ export class ChannelsMode {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
+    const seatDetail = this.host.isSeatDetail();
     const size = Math.max(3, this.host.seatPixelSize());
     const half = size / 2;
     // A paused/archived audience answers `available:false`: nothing is buyable
@@ -766,6 +842,15 @@ export class ChannelsMode {
       ? new Set(projection.available === false ? [] : projection.eligible ?? [])
       : null;
     const clusters = new Map<string, { x: number; y: number; n: number }>();
+    const sectionTargets = !seatDetail && this.host.sections().length > 1
+      ? new Map<string, { label: string; minX: number; minY: number; maxX: number; maxY: number }>()
+      : null;
+    // At a wide zoom the renderer centres section names over the seat field.
+    // Re-draw those names above the access marks so visual availability never
+    // competes with the section identity the organizer needs to navigate.
+    const previewSections = this.view === 'preview' && seatDetail && size <= 15
+      ? new Map<string, { label: string; minX: number; minY: number; maxX: number; maxY: number }>()
+      : null;
 
     for (const seat of this.host.seats()) {
       const status = this.host.statusOf(seat.label) ?? 'free';
@@ -775,25 +860,179 @@ export class ChannelsMode {
         cluster.x += seat.x; cluster.y += seat.y; cluster.n += 1;
         clusters.set(channelId, cluster);
       }
+      // The base renderer presents named section shells at the overview rung.
+      // Do not redraw thousands of seat dots above those shells; click a
+      // section to enter its seats, where the precise allocation paint resumes.
+      if (!seatDetail) {
+        const section = this.host.sectionOfLabel(seat.label);
+        const point = section ? this.host.worldToScreen({ x: seat.x, y: seat.y }) : null;
+        if (sectionTargets && section && point) {
+          const bounds = sectionTargets.get(section.id) ?? {
+            label: section.label, minX: point.x, minY: point.y, maxX: point.x, maxY: point.y,
+          };
+          bounds.minX = Math.min(bounds.minX, point.x);
+          bounds.minY = Math.min(bounds.minY, point.y);
+          bounds.maxX = Math.max(bounds.maxX, point.x);
+          bounds.maxY = Math.max(bounds.maxY, point.y);
+          sectionTargets.set(section.id, bounds);
+        }
+        continue;
+      }
       if (status !== 'free') continue; // physical state always wins the paint
       let fill: string | null = null;
+      let stroke: string | null = null;
       if (this.view === 'preview') {
         // ONE neutral unavailable state for everything this audience can't buy —
-        // preview must never leak which private channel holds a seat.
-        fill = eligible ? (eligible.has(seat.label) ? null : '#3a4051') : null;
+        // preview must never leak which private channel holds a seat. Both
+        // states are painted, rather than leaving eligible seats in their
+        // category colour: the exact allocation must be obvious at a glance.
+        if (eligible?.has(seat.label)) {
+          fill = PREVIEW_ELIGIBLE_FILL;
+          stroke = PREVIEW_ELIGIBLE_STROKE;
+        } else {
+          fill = PREVIEW_UNAVAILABLE_FILL;
+          stroke = PREVIEW_UNAVAILABLE_STROKE;
+        }
       } else if (channelId !== PUBLIC_CHANNEL_ID) {
         fill = this.markerFor(channelId).color;
+        stroke = ALLOCATION_STROKE;
       }
       if (!fill) continue;
       const point = this.host.worldToScreen({ x: seat.x, y: seat.y });
       if (!point) continue;
       if (point.x < -size || point.y < -size || point.x > width + size || point.y > height + size) continue;
+      if (previewSections) {
+        const section = this.host.sectionOfLabel(seat.label);
+        if (section) {
+          const bounds = previewSections.get(section.id) ?? {
+            label: section.label, minX: point.x, minY: point.y, maxX: point.x, maxY: point.y,
+          };
+          bounds.minX = Math.min(bounds.minX, point.x);
+          bounds.minY = Math.min(bounds.minY, point.y);
+          bounds.maxX = Math.max(bounds.maxX, point.x);
+          bounds.maxY = Math.max(bounds.maxY, point.y);
+          previewSections.set(section.id, bounds);
+        }
+      }
       ctx.fillStyle = fill;
-      ctx.globalAlpha = this.view === 'preview' ? 0.9 : 0.85;
-      ctx.fillRect(point.x - half, point.y - half, size, size);
+      if (this.view === 'preview' || channelId !== PUBLIC_CHANNEL_ID) {
+        // Seats in the shared 2D renderer are circular. A generously covering
+        // circular paint keeps Inspect allocation's channel colour independent
+        // of the chart category, and replaces preview's former inner square so
+        // there is no coloured rim or distracting grey-box effect.
+        // `seatPixelSize` is the renderer's actual seat diameter. Match that
+        // geometry (with only the stroke allowance), rather than inflating a
+        // little status marker. That preserves the chart's configured row and
+        // column gaps at every zoom and prevents category-colour rims leaking
+        // through around a buyer-preview state.
+        const radius = Math.max(2, half + Math.min(1.5, half * 0.06));
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = stroke ?? fill;
+        ctx.lineWidth = this.view === 'preview'
+          ? Math.max(1, Math.min(1.75, size * 0.13))
+          : Math.max(1, Math.min(1.5, size * 0.1));
+        ctx.stroke();
+        // The overlay sits above the renderer, so it must restore the chart's
+        // real label after painting an eligible buyer seat. Use the source
+        // label verbatim and only when it remains legible inside the seat.
+        if (this.view === 'preview' && eligible?.has(seat.label) && size >= 22) {
+          this.paintPreviewSeatLabel(ctx, seat.label, point.x, point.y, radius);
+        }
+      } else {
+        ctx.globalAlpha = 0.85;
+        ctx.fillRect(point.x - half, point.y - half, size, size);
+      }
     }
     ctx.globalAlpha = 1;
+    if (previewSections) this.paintPreviewSectionLabels(ctx, previewSections);
+    this.paintSectionTargets(sectionTargets);
     this.paintFlags(clusters);
+  }
+
+  /** Draw an eligible seat's actual chart label without inventing a new buyer
+   * identifier. Long labels scale down and are omitted rather than overflowing
+   * into an adjacent seat. */
+  private paintPreviewSeatLabel(
+    ctx: CanvasRenderingContext2D,
+    label: string,
+    x: number,
+    y: number,
+    radius: number,
+  ): void {
+    const maxWidth = radius * 1.55;
+    let fontSize = Math.min(13, Math.max(7, radius * 0.55));
+    const minFontSize = 6;
+    while (fontSize >= minFontSize) {
+      ctx.font = `800 ${fontSize}px var(--slm-font, system-ui, sans-serif)`;
+      if (ctx.measureText(label).width <= maxWidth) break;
+      fontSize -= 0.5;
+    }
+    if (fontSize < minFontSize) return;
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x, y);
+  }
+
+  /** A section overview is a navigation map. These transparent, keyboardable
+   * hit areas sit over the renderer's section shells so both mouse and keyboard
+   * always take the organizer into the real focused-section camera state. */
+  private paintSectionTargets(
+    sections: Map<string, { label: string; minX: number; minY: number; maxX: number; maxY: number }> | null,
+  ): void {
+    const layer = this.layer;
+    if (!layer) return;
+    layer.querySelectorAll('.slm-ch-section-target').forEach((el) => el.remove());
+    if (!sections) return;
+    for (const [id, section] of sections) {
+      const width = section.maxX - section.minX;
+      const height = section.maxY - section.minY;
+      if (width < 20 || height < 20) continue;
+      const target = document.createElement('button');
+      target.type = 'button';
+      target.className = 'slm-ch-section-target';
+      target.style.left = `${section.minX - 8}px`;
+      target.style.top = `${section.minY - 8}px`;
+      target.style.width = `${width + 16}px`;
+      target.style.height = `${height + 16}px`;
+      target.setAttribute('aria-label', `Open ${section.label} seats`);
+      target.addEventListener('click', () => {
+        this.focusedSectionId = id;
+        this.host.focusSection(id);
+        this.paintRail();
+      });
+      layer.appendChild(target);
+    }
+  }
+
+  /** Keep renderer section names legible over a dense, zoomed-out preview. */
+  private paintPreviewSectionLabels(
+    ctx: CanvasRenderingContext2D,
+    sections: Map<string, { label: string; minX: number; minY: number; maxX: number; maxY: number }>,
+  ): void {
+    for (const section of sections.values()) {
+      const width = section.maxX - section.minX;
+      const height = section.maxY - section.minY;
+      // A single row/seat has no overlaid central renderer label to protect.
+      if (width < 52 || height < 26) continue;
+      const centerX = (section.minX + section.maxX) / 2;
+      const centerY = (section.minY + section.maxY) / 2;
+      const fontSize = Math.max(11, Math.min(15, height * 0.16));
+      ctx.font = `800 ${fontSize}px var(--slm-font, system-ui, sans-serif)`;
+      const labelWidth = Math.min(width - 8, ctx.measureText(section.label).width + 18);
+      const labelHeight = fontSize + 10;
+      // This small backplate deliberately covers the renderer's original
+      // label before the high-contrast replacement is drawn above it.
+      ctx.fillStyle = 'rgba(11, 16, 28, .88)';
+      ctx.fillRect(centerX - labelWidth / 2, centerY - labelHeight / 2, labelWidth, labelHeight);
+      ctx.fillStyle = '#f8fafc';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(section.label, centerX, centerY);
+    }
   }
 
   /** Letter flags at each channel's centroid — the non-color identity cue. */
@@ -860,7 +1099,7 @@ export class ChannelsMode {
     });
   }
 
-  private setBanner(on: boolean, name = ''): void {
+  private setBanner(on: boolean, name = '', eligibleSeats?: number): void {
     const banner = this.bannerEl;
     if (!banner) return;
     this.host.root.classList.toggle('ch-preview', on);
@@ -868,8 +1107,11 @@ export class ChannelsMode {
     const marker = this.previewAudience.length === 1
       ? this.markerFor(this.previewAudience[0])
       : { color: 'var(--slm-accent)', letter: '' };
+    const availability = eligibleSeats == null
+      ? ''
+      : ` · ${eligibleSeats.toLocaleString()} ${eligibleSeats === 1 ? 'seat' : 'seats'} available now`;
     banner.innerHTML = `<span class="dot" style="background:${esc(marker.color)}"></span>
-      Previewing buyer access · ${esc(name)} · read-only
+      Previewing buyer access · ${esc(name)}${availability} · read-only
       <button type="button" data-ch-act="exit-preview">Exit preview</button>`;
     banner.classList.add('on');
     banner.querySelector('[data-ch-act="exit-preview"]')
@@ -911,6 +1153,13 @@ export class ChannelsMode {
         includePublic: this.previewIncludePublic || audience.some(isPublicChannelId),
       });
       this.previewSupported = true;
+      // `eligible` is the server's exact current buyer scope. Older workers may
+      // omit its redundant aggregate count, so use the returned label count
+      // rather than hiding the organiser's most useful confirmation.
+      const eligibleSeats = this.previewProjection.available === false
+        ? undefined
+        : this.previewProjection.counts?.eligible ?? this.previewProjection.eligible?.length;
+      this.setBanner(true, names, eligibleSeats);
     } catch (err) {
       // 404/405 = the projection endpoint has not shipped on this worker yet.
       // Say so plainly; never substitute a local approximation for a server view.
@@ -971,6 +1220,29 @@ export class ChannelsMode {
         aria-pressed="${this.view === 'inspect'}">Inspect allocation</button>
       <button type="button" class="${previewOn.trim()}" data-ch-view="preview"
         aria-pressed="${this.view === 'preview'}">Preview buyer access</button>
+    </div>${this.mapNavigationHtml()}`;
+  }
+
+  private mapNavigationHtml(): string {
+    if (this.host.sections().length < 2) return '';
+    const focused = this.focusedSectionId
+      ? this.host.sections().find((section) => section.id === this.focusedSectionId)?.label ?? 'section'
+      : null;
+    const panOn = this.mapIntent === 'pan' ? ' on' : '';
+    const assignOn = this.mapIntent === 'assign' ? ' on' : '';
+    const intent = this.view === 'inspect' && this.caps.manage
+      ? `<div class="slm-ch-viewseg" role="group" aria-label="Map interaction">
+          <button type="button" class="${panOn.trim()}" data-ch-map="pan" aria-pressed="${this.mapIntent === 'pan'}">Pan map</button>
+          <button type="button" class="${assignOn.trim()}" data-ch-map="assign" aria-pressed="${this.mapIntent === 'assign'}">Assign seats</button>
+        </div>
+        <p>${this.mapIntent === 'pan'
+          ? 'Drag to explore. Click a section to open its seats.'
+          : 'Drag across seats to select them for allocation.'}</p>`
+      : '<p>Drag to explore. Click a section to open its seats.</p>';
+    return `<div class="slm-ch-mapnav">
+      <div class="slm-ch-mapnav-head"><span>${focused ? `Viewing ${esc(focused)}` : 'Section overview'}</span>
+        <button type="button" data-ch-act="sections">All sections</button></div>
+      ${intent}
     </div>`;
   }
 
@@ -1138,6 +1410,10 @@ export class ChannelsMode {
    */
   private async loadLinks(channelId: string): Promise<void> {
     if (!this.caps.view) return;
+    const seq = ++this.linksSeq;
+    // Superseded by a newer read of the same channel — a poll that started
+    // before the mutation must not overwrite the mutation's own answer.
+    const superseded = (): boolean => seq !== this.linksSeq || this.linksChannelId !== channelId;
     if (this.linksChannelId !== channelId) {
       this.links = [];
       this.linksChannelId = channelId;
@@ -1145,11 +1421,11 @@ export class ChannelsMode {
     }
     try {
       const res = await this.host.api.accessLinks(this.host.eventKey, channelId);
-      if (this.linksChannelId !== channelId) return; // the organizer moved on
+      if (superseded()) return; // the organizer moved on, or a fresher read won
       this.links = res.links ?? [];
       this.linksState = 'ready';
     } catch (err) {
-      if (this.linksChannelId !== channelId) return;
+      if (superseded()) return;
       const status = err instanceof ManageApiError ? err.status : 0;
       this.links = [];
       this.linksState = status === 404 || status === 405 || status === 501 ? 'unsupported' : 'error';
@@ -1259,11 +1535,11 @@ export class ChannelsMode {
             .join('; ') || 'The audience cannot buy right now')}.
           A buyer arriving with this access sees this message, not these seats.</span></div>`
       : '';
-    const counts = this.previewProjection?.counts;
-    const summary = counts?.eligible != null && this.previewProjection?.available !== false
-      ? `<div class="slm-ch-alert warn"><span>ℹ</span><span>${counts.eligible.toLocaleString()} seats are buyable
-          through this access.${this.previewProjection?.includePublic === false
-            ? ' Public sale seats are <b>not</b> included in this grant.' : ''}</span></div>`
+    const eligibleSeats = this.previewProjection?.counts?.eligible ?? this.previewProjection?.eligible?.length;
+    const summary = eligibleSeats != null && this.previewProjection?.available !== false
+      ? `<div class="slm-ch-alert info"><span>✓</span><span><b>${eligibleSeats.toLocaleString()} ${eligibleSeats === 1 ? 'seat is' : 'seats are'} available now.</b>
+          This is the exact buyer-visible allocation.${this.previewProjection?.includePublic === false
+            ? ' Public sale seats are <b>not</b> included in this access.' : ''}</span></div>`
       : '';
     const includePublic = isPublicChannelId(current) ? '' : `
       <label class="slm-note" style="display:flex;gap:8px;align-items:center;margin:10px 0">
@@ -1298,6 +1574,13 @@ export class ChannelsMode {
     const rail = this.host.rail;
     rail.querySelectorAll<HTMLElement>('[data-ch-view]').forEach((button) => {
       button.addEventListener('click', () => this.setView(button.dataset.chView as 'inspect' | 'preview'));
+    });
+    rail.querySelectorAll<HTMLElement>('[data-ch-map]').forEach((button) => {
+      button.addEventListener('click', () => {
+        this.mapIntent = button.dataset.chMap === 'assign' ? 'assign' : 'pan';
+        this.paintRail();
+        this.onInteractionChange?.();
+      });
     });
     rail.querySelectorAll<HTMLElement>('[data-ch-detail]').forEach((button) => {
       button.addEventListener('click', () => {
@@ -1346,6 +1629,11 @@ export class ChannelsMode {
 
   private railAction(action: string): void {
     switch (action) {
+      case 'sections':
+        this.focusedSectionId = null;
+        this.host.showSectionOverview();
+        this.paintRail();
+        break;
       case 'create': this.openDialog({ kind: 'create' }); break;
       case 'review': this.openDialog({ kind: 'review' }); break;
       case 'rename': this.openDialog({ kind: 'rename', channelId: this.detailChannelId! }); break;
@@ -1506,7 +1794,7 @@ export class ChannelsMode {
         <label>Marker</label>
         <div style="display:flex;gap:8px;align-items:center">
           <span class="slm-ch-mk" data-ch-marker style="background:${esc(suggestion.color)};width:28px;height:28px;font-size:13px">${esc(suggestion.letter)}</span>
-          <span class="slm-note" style="margin:0">Letter + colour suggested from the name. Buyers never see either.</span>
+          <span class="slm-note" style="margin:0">Letter comes from the name; colour is chosen automatically from the next available palette. Buyers never see either.</span>
         </div>
       </div>
       <div class="slm-field">
@@ -1898,6 +2186,27 @@ export class ChannelsMode {
     this.paintRail();
   }
 
+  /**
+   * The reload EVERY link mutation owes the panel.
+   *
+   * A create/rotate/revoke changes two things the detail panel renders: the
+   * channel's access line (the server sets `access.intent` on create, and clears
+   * it when the last live link goes) and the link status list. Both are re-read
+   * here and the rail repainted, so the panel the organizer is already looking
+   * at is current the moment the mutation lands — no reload, and no dependence
+   * on HOW the one-time reveal was dismissed (the button, Escape, or never).
+   */
+  private async reloadAfterLinkChange(channelId: string): Promise<void> {
+    // `refresh` re-reads the links of the OPEN channel as part of its pass, so
+    // the common case is one round of reads, not two.
+    if (this.detailChannelId === channelId) {
+      await this.refresh({ quiet: true });
+      return;
+    }
+    await this.loadLinks(channelId);
+    if (this.active) this.paintRail();
+  }
+
   private linkById(linkId: string | undefined): AccessLinkStatusRecord | null {
     return this.links.find((link) => link.id === linkId) ?? null;
   }
@@ -1996,9 +2305,7 @@ export class ChannelsMode {
     try {
       const reveal = await this.host.api.createAccessLink(this.host.eventKey, channelId, input);
       this.revealLink(reveal, { channelId });
-      // Creating a link declares the channel's access intent server-side, so the
-      // rail's access line and the self-service warning both need re-reading.
-      await this.refresh({ quiet: true });
+      await this.reloadAfterLinkChange(channelId);
     } catch (err) {
       this.showDialogError(accessLinkErrorCopy(err instanceof ManageApiError ? err : undefined));
       if (!(err instanceof ManageApiError)) this.host.onError(err);
@@ -2064,9 +2371,9 @@ export class ChannelsMode {
         // the organizer can copy it by hand rather than lose it entirely.
         selectSecret(dialog);
       });
-      dialog.querySelector('[data-ch-lk-done]')?.addEventListener('click', () => {
-        void this.loadLinks(opts.channelId).then(() => this.paintRail());
-      });
+      // Dismissal only dismisses. The mutation that opened this sheet already
+      // owns the reload (`reloadAfterLinkChange`), so the panel behind the scrim
+      // is current whichever way the organizer leaves — including Escape.
     });
     this.announce('Your hosted access link is ready and is shown once.');
   }
@@ -2131,6 +2438,7 @@ export class ChannelsMode {
         this.host.eventKey, channelId, linkId, endActiveSessions,
       );
       this.revealLink(reveal, { channelId, rotated: true });
+      await this.reloadAfterLinkChange(channelId);
     } catch (err) {
       this.showDialogError(accessLinkErrorCopy(err instanceof ManageApiError ? err : undefined));
       if (!(err instanceof ManageApiError)) this.host.onError(err);
@@ -2169,9 +2477,7 @@ export class ChannelsMode {
         this.host.eventKey, channelId, linkId, endActiveSessions,
       );
       this.closeDialog();
-      await this.loadLinks(channelId);
-      await this.refresh({ quiet: true });
-      this.paintRail();
+      await this.reloadAfterLinkChange(channelId);
       this.host.toast(res.endedSessions
         ? `Link revoked. ${res.endedSessions.toLocaleString()} buyer${res.endedSessions === 1 ? '' : 's'} lost access.`
         : 'Link revoked. It no longer opens for anyone.', 'ok');
