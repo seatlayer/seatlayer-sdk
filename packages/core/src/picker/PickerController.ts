@@ -1804,8 +1804,12 @@ export class PickerController {
     (['held', 'booked', 'not_for_sale'] as SeatStatus[]).forEach((st) => {
       if (byStatus[st].length) r.setStatus(byStatus[st], st);
     });
-    this.opts.onStatusChange?.();
+    // Clear a completed checkout hold before notifying the widget. `onStatusChange`
+    // is where SeatPicker detects a booking; notifying first left the hosted
+    // buyer stranded on "Continue to checkout" even though the API had booked
+    // the seats successfully.
     this.clearBookedHoldIfSettled();
+    this.opts.onStatusChange?.();
   }
 
   private clearBookedHoldIfSettled(): void {

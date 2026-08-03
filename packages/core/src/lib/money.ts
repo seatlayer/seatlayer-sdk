@@ -54,6 +54,43 @@ export function formatMoney(
   return formatter(currency, digits).format(amount);
 }
 
+/**
+ * How many decimal places a currency has — 2 for USD/EUR, 0 for JPY/KRW/VND,
+ * 3 for KWD/BHD/JOD.
+ *
+ * Derived from Intl rather than from a table, because ICU already carries ISO
+ * 4217's exponents and a second hand-maintained list is a second thing to get
+ * wrong. (`workers/api/src/payments/money.ts` DOES keep a table, on purpose: it
+ * must THROW for a currency checkout cannot transact. Display has no such duty
+ * — it renders whatever the ledger already recorded, including a currency
+ * checkout would refuse.)
+ *
+ * Falls back to 2 for a code Intl rejects, so a bad row cannot blank a chart.
+ */
+export function currencyExponent(currency: string = DEFAULT_CURRENCY): number {
+  try {
+    return formatter(currency, undefined).resolvedOptions().maximumFractionDigits ?? 2;
+  } catch {
+    return 2;
+  }
+}
+
+/**
+ * Minor units → major units. `9000` USD cents is `90`; `9000` JPY is `9000`.
+ *
+ * Every money field the API returns is an integer in the currency's smallest
+ * unit (`grossMinor`, `total_minor`). Dividing by 100 at a call site is right
+ * for most currencies and silently wrong for the rest — 100x wrong for yen.
+ */
+export function fromMinorUnits(minor: number, currency: string = DEFAULT_CURRENCY): number {
+  return minor / 10 ** currencyExponent(currency);
+}
+
+/** "$90" / "¥9,000" — a minor-unit integer rendered for display. */
+export function formatMinor(minor: number, currency: string = DEFAULT_CURRENCY): string {
+  return formatMoney(fromMinorUnits(minor, currency), currency);
+}
+
 /** Bare symbol for input adornments ("€", "$", "₹"). */
 export function currencySymbol(currency: string = DEFAULT_CURRENCY): string {
   const part = formatter(currency, 0)

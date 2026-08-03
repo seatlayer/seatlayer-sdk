@@ -880,7 +880,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private catOrder: string[] = [];
 
   private selection = new Set<string>();
-  /** Whole-seat/block selection markers: outline + non-colour check cue. */
+  /** Seat-contained selection markers: outline + non-colour check cue. */
   private selectionMarkers = new Map<string, Group>();
   /** Held by this picker instance, not by another buyer. */
   private ownedHold = new Set<string>();
@@ -4717,11 +4717,20 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         }));
       }
     } else {
-      marker.add(new Circle({ ...common, radius: this.seatR + (candidate ? 4.5 : 2.5), strokeWidth: candidate ? 3.5 : 2.5 }));
+      // Keep a committed selection inside the authored seat footprint. Charts
+      // commonly place adjacent seats only a small gap apart, so an outside
+      // selection ring made neighbouring secured seats appear to merge.
+      marker.add(new Circle({
+        ...common,
+        radius: Math.max(1, this.seatR - 1.25),
+        strokeWidth: Math.min(2.5, Math.max(1.8, this.seatR * 0.22)),
+      }));
       if (candidate) {
+        // The pre-add confirmation may extend just beyond the seat, but stays
+        // compact enough to respect the original chart's row/column spacing.
         marker.add(new Circle({
           ...common,
-          radius: this.seatR + 8,
+          radius: this.seatR + 2,
           strokeWidth: 2,
           opacity: 0.55,
         }));
