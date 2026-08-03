@@ -12,6 +12,7 @@ import type {
   BuyerAccessContext,
   SelectedObjectUnavailableEvent,
 } from './buyerAccess';
+import { BuyerRealtimeClient, SEATLAYER_V1, type RealtimeSink } from './buyerRealtime';
 
 export interface HoldConflict {
   label: string;
@@ -34,15 +35,63 @@ export class ApiError extends Error {
   conflicts?: HoldConflict[];
   /** Present when best-available 409s ('not_enough_together' | 'sold_out'). */
   reason?: string;
+  /**
+   * Seconds the server asked the caller to wait, off a 429's `Retry-After`.
+   *
+   * Present ONLY on a rate-limit error, and it is the server's number — never a
+   * guess. A widget that catches this can say "try again in N seconds" instead
+   * of rendering the blank map a swallowed 429 used to produce.
+   */
+  retryAfterS?: number;
 
-  constructor(status: number, message: string, code?: string, conflicts?: HoldConflict[], reason?: string) {
+  constructor(
+    status: number,
+    message: string,
+    code?: string,
+    conflicts?: HoldConflict[],
+    reason?: string,
+    retryAfterS?: number,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.conflicts = conflicts;
     this.reason = reason;
+    this.retryAfterS = retryAfterS;
   }
+}
+
+/**
+ * Longest advertised delay we will sit out inside a request.
+ *
+ * A rate limit the buyer can wait through invisibly is worth absorbing; one
+ * that is 30 seconds long is not — sleeping that long inside `chart()` looks
+ * like a hung widget, and the retry would very likely 429 again anyway. Past
+ * the cap the error is thrown WITH `retryAfterS`, so the host decides.
+ */
+const MAX_RATE_LIMIT_WAIT_S = 10;
+/** What to assume when a 429 names no delay at all. */
+const DEFAULT_RATE_LIMIT_WAIT_S = 1;
+
+/**
+ * `Retry-After` in seconds. RFC 9110 allows either a delta-seconds integer or
+ * an HTTP-date; the API sends the integer, and the date form is handled so a
+ * proxy that rewrites it cannot turn a well-formed 429 into an untyped one.
+ * Returns undefined when neither the header nor the body says anything.
+ */
+export function parseRetryAfter(header: string | null, bodyValue?: unknown): number | undefined {
+  const raw = (header ?? '').trim();
+  if (raw) {
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds);
+    const at = Date.parse(raw);
+    if (Number.isFinite(at)) return Math.max(0, Math.ceil((at - Date.now()) / 1000));
+  }
+  if (typeof bodyValue === 'number' && Number.isFinite(bodyValue) && bodyValue >= 0) {
+    return Math.ceil(bodyValue);
+  }
+  return undefined;
 }
 
 export interface PubChartResult {
@@ -181,7 +230,7 @@ export class PubApi {
   private async request<T>(
     path: string,
     init: { method?: 'GET' | 'POST'; body?: unknown; labels?: string[] } = {},
-    retried = false,
+    retried: { auth?: boolean; rateLimit?: boolean } = {},
   ): Promise<T> {
     const method = init.method ?? 'GET';
     const headers: Record<string, string> = {};
@@ -193,7 +242,7 @@ export class PubApi {
     // Throws BuyerAccessUnavailableError rather than returning undefined when a
     // configured session cannot produce a bearer — the request must not go out
     // anonymous, because anonymous means Public sale.
-    const authorization = await this.access?.authorization(retried ? 'unauthorized' : 'initial');
+    const authorization = await this.access?.authorization(retried.auth ? 'unauthorized' : 'initial');
     if (authorization) headers.Authorization = authorization;
 
     const res = await fetch(`${this.base}${path}`, { method, headers, body, credentials: 'omit' });
@@ -203,7 +252,10 @@ export class PubApi {
 
     if (!res.ok) {
       const err = data as
-        | { error?: string; code?: string; conflicts?: HoldConflict[]; reason?: string }
+        | {
+          error?: string; code?: string; conflicts?: HoldConflict[]; reason?: string;
+          retryAfterSeconds?: number;
+        }
         | null;
       // The public API names its machine code in `error` (`conflict`, `event_closed`,
       // …); older/other routes may send `code`. Carry whichever into ApiError.code so
@@ -217,12 +269,34 @@ export class PubApi {
         // Exactly one retry, and only for an expiry the provider just renewed.
         // A refresh returns the same or a narrower scope; it never widens, and
         // a second failure is reported rather than looped.
-        if (refreshed && !retried) return this.request<T>(path, init, true);
+        if (refreshed && !retried.auth) return this.request<T>(path, init, { ...retried, auth: true });
       }
       if (res.status === 409) {
         const reason = code ? OBJECT_UNAVAILABLE_CODES[code] : undefined;
         const labels = err?.conflicts?.map((c) => c.label) ?? init.labels ?? [];
         if (reason) this.onObjectUnavailable?.({ labels, reason, code });
+      }
+
+      let retryAfterS: number | undefined;
+      if (res.status === 429) {
+        retryAfterS = parseRetryAfter(res.headers.get('Retry-After'), err?.retryAfterSeconds)
+          ?? DEFAULT_RATE_LIMIT_WAIT_S;
+        // One automatic retry, and only for a READ.
+        //
+        // A rate-limited `chart()`/`objects()` is what turns an on-sale spike
+        // into a blank widget, and re-reading is free of consequence — the same
+        // GET twice is the same GET. A hold, a best-available, a checkout or an
+        // extend is NOT: replaying one can take a second seat, start a second
+        // payment, or burn an extend allowance, so a 429 on those is reported to
+        // the caller with the server's delay attached and never replayed here.
+        if (
+          method === 'GET'
+          && !retried.rateLimit
+          && retryAfterS <= MAX_RATE_LIMIT_WAIT_S
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, retryAfterS! * 1000));
+          return this.request<T>(path, init, { ...retried, rateLimit: true });
+        }
       }
 
       throw new ApiError(
@@ -231,6 +305,7 @@ export class PubApi {
         code,
         err?.conflicts,
         err?.reason,
+        retryAfterS,
       );
     }
     return data as T;
@@ -361,5 +436,47 @@ export class PubApi {
    */
   socketUrl(key: string): string {
     return this.accessScoped ? '' : this.subscribeUrl(key);
+  }
+
+  /**
+   * The subprotocol list a PLAIN `new WebSocket(url, protocols)` must offer for
+   * this transport — `PickerTransport.socketProtocols`, which PickerController
+   * calls optionally and which nothing implemented until now.
+   *
+   * Offering `seatlayer.v1` is the whole point: without it the DO answers an
+   * anonymous socket with the LEGACY verbose frame — every unit of a 10k-seat
+   * event, on connect and on every reconnect — instead of the compact
+   * `{default, exceptions}` form. Empty for an access-scoped client, which
+   * authenticates with a one-use ticket a URL-only constructor cannot carry and
+   * whose socket BuyerRealtimeClient owns instead (see `socketUrl`).
+   *
+   * `createRealtime` below is the preferred path and supersedes this for any
+   * host that can use it; this stays the correct answer for a host that builds
+   * the socket itself from the transport contract.
+   */
+  socketProtocols(key: string): string[] {
+    void key; // same answer for every event; the parameter is the interface's
+    return this.accessScoped ? [] : [SEATLAYER_V1];
+  }
+
+  /**
+   * Hand PickerController the v1 realtime client instead of letting it open a
+   * bare socket — `PickerTransport.createRealtime`.
+   *
+   * This is what puts an ANONYMOUS buyer (the on-sale case) on the same wire as
+   * a private-channel one: compact snapshots, `sv.<n>` resume so a reconnect
+   * inside the ring costs a delta rather than a full re-snapshot, ping/pong
+   * liveness, and one jittered backoff implementation shared by both. The
+   * anonymous case simply passes no `mintTicket` — the `/pub/events/:key/
+   * subscribe` upgrade requires no ticket, and the DO resolves a ticketless
+   * socket to the public scope.
+   *
+   * Null when access-scoped: that socket is owned by the widget's own
+   * BuyerRealtimeClient (with the ticket exchange), and `socketUrl()` already
+   * returns '' so the controller opens nothing.
+   */
+  createRealtime(key: string, sink: RealtimeSink): BuyerRealtimeClient | null {
+    if (this.accessScoped) return null;
+    return new BuyerRealtimeClient({ url: this.subscribeUrl(key), sink });
   }
 }

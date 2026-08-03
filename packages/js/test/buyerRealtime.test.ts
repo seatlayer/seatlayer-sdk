@@ -374,6 +374,66 @@ describe('revocation (protocol §3)', () => {
     client.stop();
   });
 
+  /**
+   * Full jitter, not a deterministic ladder. On-sale traffic loses sockets in
+   * correlated batches (a worker deploy, a DO eviction), and a fixed 2**attempt
+   * schedule brings the whole batch back in the same millisecond.
+   */
+  it('spreads reconnects across the whole backoff window instead of a fixed ladder', async () => {
+    vi.useFakeTimers();
+    // random() = 0 must reconnect promptly rather than never; the ceiling is a
+    // ceiling, not a floor.
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const { client } = makeClient();
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    latest().accept(SEATLAYER_V1);
+    latest().close(1006);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(MockSocket.opened).toHaveLength(2);
+    client.stop();
+    random.mockRestore();
+  });
+
+  it('scales the drawn delay by the ceiling — jitter can only shorten the wait', async () => {
+    vi.useFakeTimers();
+    // Half the 1s first-attempt ceiling: the wait is real, and it is bounded by
+    // the deterministic delay this replaces.
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const { client } = makeClient();
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    latest().accept(SEATLAYER_V1);
+    latest().close(1006);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(MockSocket.opened).toHaveLength(1); // not yet —500ms was drawn
+    await vi.advanceTimersByTimeAsync(2);
+    expect(MockSocket.opened).toHaveLength(2);
+    client.stop();
+    random.mockRestore();
+  });
+
+  it('keeps doubling the ceiling as attempts pile up', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const { client } = makeClient();
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    latest().accept(SEATLAYER_V1);
+    // First close: ceiling 1s, drawn 500ms. The retry never opens (accept() is
+    // never called), so `attempt` climbs and the next ceiling is 2s → 1000ms.
+    latest().close(1006);
+    await vi.advanceTimersByTimeAsync(501);
+    expect(MockSocket.opened).toHaveLength(2);
+    latest().close(1006);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(MockSocket.opened).toHaveLength(2); // still inside the 2s window
+    await vi.advanceTimersByTimeAsync(2);
+    expect(MockSocket.opened).toHaveLength(3);
+    client.stop();
+    random.mockRestore();
+  });
+
   it('restart() resumes from scratch after the host re-authorizes', async () => {
     vi.useFakeTimers();
     const seen: Array<{ reason: string }> = [];

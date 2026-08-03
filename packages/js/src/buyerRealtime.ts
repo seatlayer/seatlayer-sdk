@@ -454,10 +454,24 @@ export class BuyerRealtimeClient {
     }, PING_INTERVAL_MS);
   }
 
+  /**
+   * FULL jitter, not plain exponential backoff.
+   *
+   * A deterministic `2**attempt` schedule makes every browser that lost the same
+   * socket — a worker redeploy, a DO eviction, a flaky edge PoP — come back in
+   * the same millisecond, and an on-sale crowd reconnecting in lockstep is the
+   * thing that turns one blip into a self-sustaining thundering herd. Full
+   * jitter (`random() * ceiling`) spreads the same crowd across the whole
+   * window; the ceiling still doubles, so a persistent outage still backs off.
+   *
+   * `Math.random` is correct here: this is client code choosing a delay, not a
+   * Workflow step that has to replay deterministically.
+   */
   private scheduleReconnect(): void {
     if (this.stopped || this.reconnectTimer) return;
     const attempt = Math.min(this.attempt++, 5);
-    const delay = Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
+    const ceiling = Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
+    const delay = Math.random() * ceiling;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       void this.connect();
