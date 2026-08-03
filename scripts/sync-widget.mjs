@@ -49,16 +49,23 @@ const FILES = [
   ['packages/js/src/buyerRealtime.ts', 'src/picker/widget/buyerRealtime.ts'],
 ];
 
-// Two deterministic import rewrites for the app's vendored copy:
+// Three deterministic import rewrites for the app's vendored copy:
 //   '@seatlayer/core/view3d' → '../../view3d'  (the app owns the view3d source;
 //        matches both the `import type … from` and the lazy `import(...)` forms)
 //   from '@seatlayer/core'    → from './core'   (the hand-written engine barrel)
+//   import('@seatlayer/core') → import('./core')
 // The view3d rewrite MUST run first — its specifier is a superset of the general
 // one, and its closing quote sits after `/view3d` so the general rule never
 // matches it, but ordering keeps the intent obvious.
+// The third rule exists because the `from ` rule cannot see a dynamic import:
+// SeatPicker lazy-loads the panorama generator with `import('@seatlayer/core')`
+// — a module it also imports statically, so no bundler actually splits it — and
+// without this rule the vendored copy would ship a bare specifier the app cannot
+// resolve. `./core` re-exports view/generatePanorama, so the name is there.
 const rewrite = (text) => text
   .replaceAll("'@seatlayer/core/view3d'", "'../../view3d'")
-  .replaceAll("from '@seatlayer/core'", "from './core'");
+  .replaceAll("from '@seatlayer/core'", "from './core'")
+  .replaceAll("import('@seatlayer/core')", "import('./core')");
 
 function sdkGit(...args) {
   return execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8' }).trim();

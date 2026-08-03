@@ -22,7 +22,7 @@ import {
   PickerController,
   ACCESSIBILITY_TYPES,
   expandChart,
-  generateSeatPanorama,
+  // generateSeatPanorama is deliberately NOT here — see loadPanorama().
   generateSeatThumb,
   loadLocale,
   setStringOverrides,
@@ -32,6 +32,7 @@ import {
   type ChartTheme,
   type ExpandedSeat,
   type LodRung,
+  type PanoramaResult,
   type PickerSeat,
   type PickerTransport,
   type RendererViewMode,
@@ -384,8 +385,9 @@ type Venue3DModule = typeof import('@seatlayer/core/view3d');
 declare const __SEATLAYER_CDN__: boolean | undefined;
 
 /**
- * This bundle's own URL, used only in the CDN build to locate the sibling 3D
- * chunk `./seatlayer-view3d.mjs`. `import.meta.url` resolves to the module URL in
+ * This bundle's own URL, used only in the CDN build to locate its sibling lazy
+ * chunks (`./seatlayer-view3d.mjs`, `./seatlayer-panorama.mjs`).
+ * `import.meta.url` resolves to the module URL in
  * the ESM CDN output (`…/seatlayer.mjs`), and Rollup auto-shims it to a
  * `document.currentScript.src` expression in the IIFE output (`…/seatlayer.js`),
  * so both CDN formats find the chunk next to them. Guarded so no environment
@@ -425,6 +427,13 @@ function hasWebGL2(): boolean {
   return _webgl2Cache;
 }
 
+/** Absolute URL of a sibling lazy chunk in this bundle's pinned CDN directory. */
+function cdnChunkUrl(fileName: string): string {
+  const base = SEATLAYER_MODULE_URL ?? (typeof location !== 'undefined' ? location.href : undefined);
+  if (!base) throw new Error(`seatlayer: cannot resolve the ${fileName} chunk URL`);
+  return new URL(`./${fileName}`, base).href;
+}
+
 /**
  * Dynamically load the view3d module. Two build targets, one source:
  * - CDN/IIFE (cannot code-split): load the sibling ESM asset by absolute URL
@@ -435,12 +444,33 @@ function hasWebGL2(): boolean {
  */
 async function loadVenue3d(): Promise<Venue3DModule> {
   if (typeof __SEATLAYER_CDN__ !== 'undefined' && __SEATLAYER_CDN__) {
-    const base = SEATLAYER_MODULE_URL ?? (typeof location !== 'undefined' ? location.href : undefined);
-    if (!base) throw new Error('seatlayer: cannot resolve the 3D view chunk URL');
-    const url = new URL('./seatlayer-view3d.mjs', base).href;
-    return import(/* @vite-ignore */ url) as Promise<Venue3DModule>;
+    return import(/* @vite-ignore */ cdnChunkUrl('seatlayer-view3d.mjs')) as Promise<Venue3DModule>;
   }
   return import('@seatlayer/core/view3d');
+}
+
+/** Just the generator, so the type does not drag the rest of the engine in. */
+type PanoramaModule = Pick<typeof import('@seatlayer/core'), 'generateSeatPanorama'>;
+
+/**
+ * Dynamically load the view-from-seat panorama generator, on exactly the same
+ * pattern as {@link loadVenue3d}. It is ~25 KB of drawing code that runs only
+ * when a buyer asks to see the view from a seat, so it stays out of the bytes
+ * every buyer downloads to look at a seat map.
+ *
+ * Its own chunk rather than a fold into the 3D one: the 2D "View from here"
+ * button does not enter 3D, so folding would make that tap pull the whole OGL
+ * scene — 74 KB gzipped, unrunnable without WebGL2 — to draw a 2D canvas.
+ *
+ * On npm and in the vendored app copy this is a dynamic import of a module the
+ * widget ALREADY imports statically, so every bundler resolves it out of the
+ * chunk that is loaded anyway: same bytes, same behaviour, no extra request.
+ */
+async function loadPanorama(): Promise<PanoramaModule> {
+  if (typeof __SEATLAYER_CDN__ !== 'undefined' && __SEATLAYER_CDN__) {
+    return import(/* @vite-ignore */ cdnChunkUrl('seatlayer-panorama.mjs')) as Promise<PanoramaModule>;
+  }
+  return import('@seatlayer/core');
 }
 
 /**
@@ -3423,7 +3453,7 @@ export class SeatPicker {
     this.els.map.appendChild(el);
     this.confirmEl = el;
     this.reanchorConfirm();
-    el.querySelector('.sl-confirm-view')?.addEventListener('click', () => this.openSeatView(seat));
+    el.querySelector('.sl-confirm-view')?.addEventListener('click', () => void this.openSeatView(seat));
     el.querySelector('.sl-confirm-3d')?.addEventListener('click', () => {
       if (this.buyerView === 'venue3d') {
         // Already immersed — just fly the cinematic to this seat.
@@ -3507,10 +3537,13 @@ export class SeatPicker {
    * uploaded photo (seat.viewUrl) when present, else a panorama generated from
    * the chart geometry — the stage placed at this seat's true bearing + size.
    * Zero extra dependencies: an equirectangular image panned with `repeat-x`.
+   *
+   * Async only because the generator is a lazy chunk (see `loadPanorama`); an
+   * organizer photo needs no generator and never waits on it. The two callers
+   * are click handlers, so nothing observes the promise.
    */
-  private openSeatView(seat: ExpandedSeat): void {
+  private async openSeatView(seat: ExpandedSeat): Promise<void> {
     if (!this.root || !this.seatViewEnabled()) return;
-    this.closeSeatView();
 
     const doc = this.controller.doc;
     const activeId = this.controller.getActiveFloorId();
@@ -3526,10 +3559,26 @@ export class SeatPicker {
       caption = t('picker.panorama360');
       real = true;
     } else {
-      const pano = generateSeatPanorama(seat, focal, this.allSeats());
+      let pano: PanoramaResult;
+      try {
+        const { generateSeatPanorama } = await loadPanorama();
+        pano = generateSeatPanorama(seat, focal, this.allSeats());
+      } catch (err) {
+        // The chunk failed to fetch, or the draw threw. Report it and leave the
+        // buyer on the map rather than opening an empty viewer.
+        this.opts.onError?.(err);
+        return;
+      }
+      // Torn down (or another view opened) while the chunk loaded.
+      if (!this.root || !this.seatViewEnabled()) return;
       panoUrl = pano.url;
       caption = t('picker.illustrationCaption', { m: pano.distanceM });
     }
+
+    // Retire any open view HERE, not before the await: two quick taps would
+    // otherwise each close nothing and then leave the first viewer orphaned in
+    // the DOM. It also means the current view stays up while the chunk loads.
+    this.closeSeatView();
 
     const el = document.createElement('div');
     el.className = 'sl-view';
@@ -4109,7 +4158,7 @@ export class SeatPicker {
     this.els.tray.querySelectorAll<HTMLElement>('.sl-chip .view[data-view-label]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const seat = this.controller.seatByLabel(btn.dataset.viewLabel!);
-        if (seat) this.openSeatView(seat);
+        if (seat) void this.openSeatView(seat);
       });
     });
     // Card ↔ map linkage: hovering (or keyboard-focusing) a ticket card pulses
@@ -4752,7 +4801,7 @@ export class SeatPicker {
 
   /** Build the view-from-seat panorama the cinematic dissolves into — reuses the
    *  exact input path as the 2D `openSeatView` (organizer photo, else generated). */
-  private seatViewFor3d(seatId: string): View3DSeatView | null {
+  private async seatViewFor3d(seatId: string): Promise<View3DSeatView | null> {
     const seat = this.allSeats().find((s) => s.id === seatId);
     if (!seat) return null;
     if (seat.viewUrl) return { url: seat.viewUrl };
@@ -4764,6 +4813,9 @@ export class SeatPicker {
       ?? doc.focalPoint
       ?? { x: 0, y: 0 };
     try {
+      // Async only for the lazy generator chunk; by the time a cinematic asks
+      // for a view the buyer has already been in 3D for a second or more.
+      const { generateSeatPanorama } = await loadPanorama();
       return { url: generateSeatPanorama(seat, focal, this.allSeats()).url };
     } catch {
       return null;
@@ -4925,9 +4977,10 @@ export class SeatPicker {
         getSeatView: (id) =>
           new Promise((resolve, reject) => {
             const run = () => {
-              const view = this.seatViewFor3d(id);
-              if (view) resolve(view);
-              else reject(new Error('seat_view_unavailable'));
+              void this.seatViewFor3d(id).then((view) => {
+                if (view) resolve(view);
+                else reject(new Error('seat_view_unavailable'));
+              });
             };
             const ric = (globalThis as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
             if (typeof ric === 'function') ric(run, { timeout: 1500 });

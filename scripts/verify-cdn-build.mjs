@@ -14,12 +14,23 @@ const version = releaseVersion();
 const releaseDir = resolve(repoRoot, `cdn/dist/seatlayer-js@${version}`);
 const indexDir = resolve(repoRoot, 'cdn/dist/-');
 const manifest = JSON.parse(readFileSync(resolve(releaseDir, 'release.json'), 'utf8'));
+// The lazy chunks are DELIBERATE and enumerated — CDN bundles can't code-split,
+// so each is its own build (cdn/vite.view3d.config.ts, cdn/vite.panorama.config.ts)
+// that the widget loads by URL at the gesture needing it. Each also has a byte
+// floor, because a chunk that quietly stops bundling its dependencies still
+// produces a plausible-looking file.
+const LAZY_CHUNKS = {
+  // The 3D venue view (ogl + earcut bundled in), loaded at 3D-open time.
+  'seatlayer-view3d.mjs': 200_000,
+  // The view-from-seat panorama generator, loaded when a buyer asks for the view.
+  'seatlayer-panorama.mjs': 15_000,
+};
+const ARTIFACTS = { 'seatlayer.js': 500_000, 'seatlayer.mjs': 500_000, ...LAZY_CHUNKS };
+
 assert.deepEqual(
   readdirSync(releaseDir).sort(),
-  // seatlayer-view3d.mjs is the ONE intentional lazy chunk — the 3D venue view,
-  // loaded by URL at 3D-open time (CDN bundles can't code-split). Any OTHER
-  // unexpected file here means an accidental split leaked out.
-  ['release.json', 'seatlayer-view3d.mjs', 'seatlayer.js', 'seatlayer.mjs'],
+  // Any OTHER file here means an accidental split leaked out.
+  ['release.json', ...Object.keys(ARTIFACTS)].sort(),
   'CDN releases must be self-contained; unexpected lazy chunks were emitted',
 );
 
@@ -29,9 +40,9 @@ assert.deepEqual(manifest.packages, Object.fromEntries(releasePackages().map((pk
 assert.deepEqual(manifest.source.engine, engineSource());
 assert.match(manifest.source.commit, /^[0-9a-f]{40}$/);
 
-for (const name of ['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs']) {
+for (const [name, floor] of Object.entries(ARTIFACTS)) {
   const releaseBytes = readFileSync(resolve(releaseDir, name));
-  assert.ok(releaseBytes.byteLength > 50_000, `${name} unexpectedly small`);
+  assert.ok(releaseBytes.byteLength > floor, `${name} unexpectedly small`);
   assert.equal(sha256(releaseBytes), manifest.files[name].sha256);
   assert.equal(releaseBytes.byteLength, manifest.files[name].bytes);
 }
@@ -112,6 +123,10 @@ const store = {
   [`sdk/v${legacyOnlyVersion}/release.json`]: releaseJson,
   'sdk/v1/seatmap.js': releaseJson,
   '-/versions.json': versionsJson,
+  // One key per emitted artifact, so the Worker's filename allowlist is checked
+  // against what this release actually produces rather than against a list that
+  // was true when it was written.
+  ...Object.fromEntries(Object.keys(ARTIFACTS).map((name) => [`seatlayer-js@${version}/${name}`, releaseJson])),
 };
 const env = {
   SDK_RELEASES: {
@@ -127,6 +142,18 @@ assert.equal(pinned.status, 200);
 assert.equal(pinned.headers.get('access-control-allow-origin'), '*');
 assert.equal(pinned.headers.get('cache-control'), 'public, s-maxage=31536000, max-age=3600, immutable');
 assert.equal((await pinned.json()).version, version);
+
+// 1b. EVERY emitted artifact must be on the Worker's filename allowlist. Adding
+// a lazy chunk to the build without adding it to FILE_NAMES ships a release
+// whose widget 404s the moment a buyer reaches for the feature it holds.
+for (const name of Object.keys(ARTIFACTS)) {
+  const served = await fetchWorker(`/seatlayer-js@${version}/${name}`);
+  assert.equal(
+    served.status,
+    200,
+    `the CDN Worker will not serve ${name} — add it to FILE_NAMES in cdn/src/worker.mjs`,
+  );
+}
 
 // 2. Pre-reshape versions resolve at the canonical URL via the legacy fallback.
 const fallback = await fetchWorker(`/seatlayer-js@${legacyOnlyVersion}/release.json`);
