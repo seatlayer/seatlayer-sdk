@@ -80,10 +80,10 @@ The workflow is safely retryable: an existing npm version is skipped only after
 its unpacked payload matches the local package byte-for-byte, while an existing
 immutable CDN object must match the local SHA-256 or the release stops.
 
-### The lazy chunks (`seatlayer-view3d.mjs`, `seatlayer-panorama.mjs`)
+### The lazy chunks (`seatlayer-view3d.mjs`, `seatlayer-panorama.mjs`, `seatlayer-checkout.mjs`)
 
-Two pieces of the widget cost real bytes and run only if a buyer asks for them,
-so neither may sit in the main bundle. On npm they chunk-split automatically. On
+Three pieces of the widget cost real bytes and run only if a buyer asks for them,
+so none may sit in the main bundle. On npm they chunk-split automatically. On
 the CDN — where IIFE bundles can't code-split — each is built as a **separate
 self-contained ESM asset** that lands beside the pinned files:
 
@@ -93,23 +93,38 @@ self-contained ESM asset** that lands beside the pinned files:
 - `seatlayer-panorama.mjs` — `generateSeatPanorama`, which draws the 2048×1024
   view-from-seat texture (`cdn/vite.panorama.config.ts`). Imported when a buyer
   taps "View from here", or when a 3D cinematic asks for a seat view.
+- `seatlayer-checkout.mjs` — the hosted-checkout card
+  (`packages/js/src/hostedCheckout.ts`; `cdn/vite.checkout.config.ts`). Imported
+  when a buyer presses the CTA in a picker mounted with `checkout: 'hosted'` —
+  so there are zero payment bytes for every integration on the default
+  `'handoff'` path, and zero for a hosted one until someone actually pays.
 
-The widget resolves both by URL relative to its own script (`import.meta.url` in
-the ESM output; `document.currentScript` in the IIFE) — see `cdnChunkUrl` in
-`SeatPicker.ts`.
+The widget resolves all three by URL relative to its own script
+(`import.meta.url` in the ESM output; `document.currentScript` in the IIFE) —
+see `cdnChunkUrl` in `SeatPicker.ts`.
 
 The panorama is deliberately NOT folded into the 3D chunk even though 3D also
 asks for panoramas: the 2D "View from here" button never enters 3D, so folding
 would make that tap pull 74 KB gzipped of OGL scene code — unrunnable without
 WebGL2 — to draw a 2D canvas.
 
-Both are pinned immutable objects like the main artifacts: `finalize-cdn.mjs`
-records their SHA-256/size in `release.json`, `verify-cdn-build.mjs` gates them
-(including a per-file byte floor), `upload-cdn.mjs` ships them,
-`verify-cdn-deployment.mjs` checks them live, and the CDN Worker's filename
-allowlist serves them. These are the ONLY intentional lazy chunks; any other
-file in the release dir fails the build check. **Adding a third means editing
-every one of those five places plus `build:cdn` in `package.json`.**
+`hostedCheckout.ts` imports **nothing at runtime** — not the engine, not the
+SDK's own api client, not even a type from `SeatPicker` — and takes its two API
+calls as functions instead. That is what keeps the asset a few KB rather than a
+second copy of the renderer, since a standalone CDN asset shares no chunk with
+the main bundle. `verify-cdn-build.mjs` therefore gates this one with a **byte
+ceiling as well as a floor**: a stray engine import would otherwise produce a
+release that looks perfectly healthy.
+
+All three are pinned immutable objects like the main artifacts:
+`finalize-cdn.mjs` records their SHA-256/size in `release.json`,
+`verify-cdn-build.mjs` gates them (including a per-file byte floor),
+`upload-cdn.mjs` ships them, `verify-cdn-deployment.mjs` checks them live, and
+the CDN Worker's filename allowlist serves them. These are the ONLY intentional
+lazy chunks; any other file in the release dir fails the build check. **Adding a
+fourth means editing every one of those five places plus `build:cdn` in
+`package.json`** — and, if the new module is one the main app vendors, its entry
+in `scripts/sync-widget.mjs` too.
 
 ### Release infrastructure prerequisites
 

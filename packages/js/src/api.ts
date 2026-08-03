@@ -83,6 +83,60 @@ export interface BestAvailableResult {
   zoneId?: string;
 }
 
+/** A gateway the organizer can be connected to. */
+export type PaymentProviderName = 'stripe' | 'razorpay';
+
+/**
+ * Why `payment-options` came back with an empty list.
+ *
+ * The three are NOT interchangeable and two of them give opposite advice:
+ * `not_configured` means the organizer takes payment somewhere else,
+ * `payments_off_for_event` means they deliberately do not sell THIS event
+ * online, and `unavailable_for_event` means they switched it on and it is
+ * broken. Collapsing them makes the widget blame a working integration for a
+ * decision that was made on purpose.
+ */
+export type PaymentOptionsReason =
+  | 'not_configured'
+  | 'payments_off_for_event'
+  | 'unavailable_for_event';
+
+/**
+ * What this event can take money through. Since the per-event gateway column
+ * landed, `providers` holds AT MOST ONE entry — the gateway the organizer
+ * assigned — so no browser can choose which one charges.
+ *
+ * `reason` is optional on the wire: a widget pinned against an older worker
+ * still parses, and its absence means what that worker meant by an empty list.
+ */
+export interface PaymentOptionsResult {
+  providers: PaymentProviderName[];
+  currency: string | null;
+  reason?: PaymentOptionsReason | null;
+}
+
+/** A started payment. Exactly one of the two handoffs comes back. */
+export interface CheckoutSessionResult {
+  orderId: string;
+  totalMinor: number;
+  currency: string;
+  expiresAt: number;
+  /** Hosted gateway page — navigate to it. */
+  redirectUrl?: string;
+  /** In-page modal gateway — open it without leaving the page. */
+  clientPayload?: Record<string, unknown>;
+}
+
+/** An order's state while its gateway webhook is in flight. */
+export interface OrderStatusResult {
+  orderId: string;
+  status: string;
+  totalMinor: number;
+  currency: string;
+  amountFormatted: string;
+  seatCount: number;
+}
+
 /** Codes a 409 uses to say "the unit you picked is no longer yours to pick". */
 const OBJECT_UNAVAILABLE_CODES: Record<string, SelectedObjectUnavailableEvent['reason']> = {
   seat_conflict: 'taken',
@@ -229,6 +283,47 @@ export class PubApi {
       method: 'POST',
       body: { holdId, ...(ttlMs ? { ttlMs } : {}) },
     });
+  }
+
+  /**
+   * Which gateways this event can actually take money through — the question
+   * `checkout: 'hosted'` has to answer BEFORE it shows a buyer a Pay button, so
+   * the answer is never discovered by failing a payment.
+   *
+   * Anonymous, and it discloses no account, key, mode or currency for a gateway
+   * that did not match.
+   */
+  paymentOptions(key: string): Promise<PaymentOptionsResult> {
+    return this.request(`/pub/events/${encodeURIComponent(key)}/payment-options`);
+  }
+
+  /**
+   * Turn a live hold into an order and start a payment.
+   *
+   * The amount is NOT sent: the server recomputes it from the hold's own items,
+   * which is the only reason a browser cannot alter what it pays. Nor is the
+   * PROVIDER — the event row decides which gateway charges, and a `provider` in
+   * the body is checked rather than obeyed (409 `provider_mismatch`). Omitting
+   * it is the shape that cannot disagree.
+   */
+  startCheckout(
+    key: string,
+    input: { holdId: string; buyerEmail: string; buyerName?: string },
+  ): Promise<CheckoutSessionResult> {
+    return this.request(`/pub/events/${encodeURIComponent(key)}/checkout`, {
+      method: 'POST',
+      body: input,
+    });
+  }
+
+  /**
+   * Poll an order while its gateway webhook lands. The order id is an
+   * unguessable token the buyer already holds, so it acts as the capability —
+   * which is also why a buyer returning from a gateway page can be told what
+   * happened with nothing but the id in the return URL.
+   */
+  orderStatus(orderId: string): Promise<OrderStatusResult> {
+    return this.request(`/pub/orders/${encodeURIComponent(orderId)}/status`);
   }
 
   /**

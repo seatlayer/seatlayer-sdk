@@ -15,16 +15,26 @@ const releaseDir = resolve(repoRoot, `cdn/dist/seatlayer-js@${version}`);
 const indexDir = resolve(repoRoot, 'cdn/dist/-');
 const manifest = JSON.parse(readFileSync(resolve(releaseDir, 'release.json'), 'utf8'));
 // The lazy chunks are DELIBERATE and enumerated — CDN bundles can't code-split,
-// so each is its own build (cdn/vite.view3d.config.ts, cdn/vite.panorama.config.ts)
-// that the widget loads by URL at the gesture needing it. Each also has a byte
-// floor, because a chunk that quietly stops bundling its dependencies still
-// produces a plausible-looking file.
+// so each is its own build (cdn/vite.view3d.config.ts, cdn/vite.panorama.config.ts,
+// cdn/vite.checkout.config.ts) that the widget loads by URL at the gesture
+// needing it. Each also has a byte floor, because a chunk that quietly stops
+// bundling its dependencies still produces a plausible-looking file.
 const LAZY_CHUNKS = {
   // The 3D venue view (ogl + earcut bundled in), loaded at 3D-open time.
   'seatlayer-view3d.mjs': 200_000,
   // The view-from-seat panorama generator, loaded when a buyer asks for the view.
   'seatlayer-panorama.mjs': 15_000,
+  // The hosted-checkout card, loaded when a buyer in a `checkout: 'hosted'`
+  // picker presses the CTA.
+  'seatlayer-checkout.mjs': 6_000,
 };
+// A CEILING, and only on the checkout chunk, because it is the one artifact
+// whose whole justification is being small. The floors above catch a chunk that
+// stopped bundling what it needs; this catches the opposite failure — a single
+// value import from @seatlayer/core would pull a second copy of the renderer
+// into an asset that is meant to be a few KB of payment UI, and the release
+// would otherwise look entirely healthy.
+const CHECKOUT_CEILING = 40_000;
 const ARTIFACTS = { 'seatlayer.js': 500_000, 'seatlayer.mjs': 500_000, ...LAZY_CHUNKS };
 
 assert.deepEqual(
@@ -46,6 +56,12 @@ for (const [name, floor] of Object.entries(ARTIFACTS)) {
   assert.equal(sha256(releaseBytes), manifest.files[name].sha256);
   assert.equal(releaseBytes.byteLength, manifest.files[name].bytes);
 }
+
+assert.ok(
+  readFileSync(resolve(releaseDir, 'seatlayer-checkout.mjs')).byteLength < CHECKOUT_CEILING,
+  `seatlayer-checkout.mjs is over ${CHECKOUT_CEILING} bytes — something now imports the engine `
+  + 'from packages/js/src/hostedCheckout.ts, and every buyer who reaches checkout pays for it',
+);
 
 // The mutable channel must never be a byte copy — nothing but the version index
 // may sit outside the pinned directory.

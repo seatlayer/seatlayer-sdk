@@ -27,11 +27,12 @@ const indexDir = resolve(repoRoot, 'cdn/dist/-');
 const ledgerPath = resolve(repoRoot, 'cdn/versions.json');
 const files = {};
 
-// Two lazy chunks are built alongside the main bundle and ship as pinned
+// Three lazy chunks are built alongside the main bundle and ship as pinned
 // immutable objects the widget loads by URL at the gesture that needs them:
-// seatlayer-view3d.mjs, the 3D venue view (cdn/vite.view3d.config.ts), and
-// seatlayer-panorama.mjs, the view-from-seat generator (cdn/vite.panorama.config.ts).
-for (const name of ['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs', 'seatlayer-panorama.mjs']) {
+// seatlayer-view3d.mjs, the 3D venue view (cdn/vite.view3d.config.ts);
+// seatlayer-panorama.mjs, the view-from-seat generator (cdn/vite.panorama.config.ts);
+// and seatlayer-checkout.mjs, the hosted-checkout card (cdn/vite.checkout.config.ts).
+for (const name of ['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs', 'seatlayer-panorama.mjs', 'seatlayer-checkout.mjs']) {
   const bytes = readFileSync(resolve(releaseDir, name));
   files[name] = { sha256: sha256(bytes), bytes: bytes.byteLength };
 }

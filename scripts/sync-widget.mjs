@@ -47,6 +47,13 @@ const FILES = [
   // export to keep the vendored widget compiling.
   ['packages/js/src/buyerAccess.ts', 'src/picker/widget/buyerAccess.ts'],
   ['packages/js/src/buyerRealtime.ts', 'src/picker/widget/buyerRealtime.ts'],
+  // Hosted checkout (`checkout: 'hosted'`). SeatPicker lazy-loads it with
+  // `import('./hostedCheckout')`, and THAT specifier is already relative — the
+  // file lands as a sibling in the vendored tree, so unlike the panorama chunk
+  // it needs no rewrite rule below, only to actually be vendored. Leaving it out
+  // of this list would hand the app a dynamic import of a file that is not there.
+  // It imports nothing at runtime, so none of the rewrites can apply to it.
+  ['packages/js/src/hostedCheckout.ts', 'src/picker/widget/hostedCheckout.ts'],
 ];
 
 // Three deterministic import rewrites for the app's vendored copy:

@@ -42,7 +42,16 @@ import {
   type TableSelectionDetails,
 } from '@seatlayer/core';
 import type { Venue3DHandle, SeatView as View3DSeatView } from '@seatlayer/core/view3d';
-import { PubApi, type HoldLineItem, type HoldResult } from './api';
+import {
+  PubApi,
+  type HoldLineItem,
+  type HoldResult,
+  type OrderStatusResult,
+  type PaymentOptionsReason,
+  type PaymentOptionsResult,
+} from './api';
+// mountCheckout is deliberately NOT imported here — see loadHostedCheckout().
+import type { CheckoutHandle, CheckoutState } from './hostedCheckout';
 import {
   createBuyerAccessContext,
   type BuyerAccessContext,
@@ -303,12 +312,81 @@ export interface SeatPickerOptions {
    */
   seatView?: boolean;
   /**
+   * WHERE the buyer goes once their seats are held. Default `'handoff'`.
+   *
+   *   'handoff'  (default, and every integration that has ever existed) the
+   *              widget fires {@link onCheckout} with a holdId and priced line
+   *              items, and YOUR server takes the money. Nothing about this path
+   *              changes, and no payment code is even downloaded.
+   *   'hosted'   the widget takes the money through the gateway the ORGANIZER
+   *              connected, on their account — the "sell tickets with no
+   *              backend" path. Requires the org to be on hosted checkout and
+   *              the event to have a gateway assigned; when it does not, this
+   *              falls back to `'handoff'` for that buyer rather than dead-ending
+   *              them, and reports why through {@link onCheckoutUnavailable}.
+   *
+   * Named for the destination rather than as a boolean flag because there is a
+   * real third answer coming and `hostedCheckout: true` would have no room for
+   * it; spelling the default out also makes a host's intent legible in their own
+   * source instead of hiding it in an absent option.
+   *
+   * TWO THINGS ARE WORTH KNOWING BEFORE YOU SWITCH THIS ON:
+   *
+   * 1. It needs the widget's own transport. A host-supplied `transport` owns its
+   *    credentials and its backend, so hosted checkout stays off there (with one
+   *    console warning) rather than reaching past it to api.seatlayer.io.
+   * 2. WHERE A HOSTED GATEWAY RETURNS THE BUYER IS THE SERVER'S CHOICE. The
+   *    checkout session's return URL is built from the deployment's own allowed
+   *    origins, so a buyer paying by card from an embed on your domain comes back
+   *    to SeatLayer's buyer page and is confirmed THERE, not in this widget. The
+   *    widget resumes in place only when it is mounted on a page that actually
+   *    receives `?order=…&status=success` (a page on an allowed origin, and the
+   *    in-page gateways, which never navigate away at all). Until the server
+   *    accepts a caller-supplied return URL, treat a card payment from a
+   *    third-party embed as "the buyer finishes on our page".
+   */
+  checkout?: 'handoff' | 'hosted';
+  /**
    * Buyer pressed the CTA and the hold succeeded — hand off to YOUR checkout.
    * `hold` and `seats` are the legacy args (unchanged since 0.6). `handoff` (P4)
    * is the stable, self-contained {@link CheckoutHandoff} to build your order
    * against — holdId, expiry, currency and priced line items. Prefer it.
+   *
+   * Under `checkout: 'hosted'` this fires ONLY when hosted checkout cannot run
+   * for this event, so a host can keep one code path for both. It never fires
+   * alongside a payment the widget is taking itself.
    */
   onCheckout?: (hold: HoldResult, seats: PickerSeat[], handoff: CheckoutHandoff) => void;
+  /**
+   * `checkout: 'hosted'` was asked for and this event cannot take money.
+   * The seats ARE held — the buyer is mid-journey — so this is a routing
+   * decision, not an error, and it is never collapsed into {@link onError}.
+   *
+   * `reason` carries the server's three-way answer verbatim, because two of the
+   * three give opposite advice: `payments_off_for_event` means the organizer
+   * deliberately does not sell this event online (nothing is wrong), while
+   * `unavailable_for_event` means they switched it on and it is broken. Anything
+   * unreadable — a failed lookup, an older worker — reads as `not_configured`,
+   * which asserts the least about them.
+   *
+   * `onCheckout` fires immediately after this with the same hold. Supply either
+   * (or both) and you own the next screen; supply NEITHER and the widget shows
+   * the buyer an honest card of its own rather than swallowing the press.
+   */
+  onCheckoutUnavailable?: (event: {
+    reason: PaymentOptionsReason;
+    handoff: CheckoutHandoff;
+  }) => void;
+  /**
+   * `checkout: 'hosted'` only — the gateway's webhook landed and the order is
+   * PAID. The one signal a host with no backend actually needs, and the only
+   * place a receipt can come from on a page that has no server of its own.
+   *
+   * Distinct from {@link onBooked}, which reports the same sale seen from the
+   * seat map over the realtime channel and cannot fire at all for a buyer whose
+   * widget was torn down by a redirect to the gateway.
+   */
+  onOrderConfirmed?: (order: OrderStatusResult) => void;
   /**
    * The held seats were BOOKED (P4) — your server completed payment and the
    * booking landed over the realtime channel while the widget was still open.
@@ -471,6 +549,43 @@ async function loadPanorama(): Promise<PanoramaModule> {
     return import(/* @vite-ignore */ cdnChunkUrl('seatlayer-panorama.mjs')) as Promise<PanoramaModule>;
   }
   return import('@seatlayer/core');
+}
+
+/** Just the mount function, so the type does not drag the module's DOM in. */
+type HostedCheckoutModule = Pick<typeof import('./hostedCheckout'), 'mountCheckout'>;
+
+/**
+ * Dynamically load the hosted-checkout card, on the same pattern as
+ * {@link loadVenue3d} and {@link loadPanorama}, and for a stronger reason than
+ * either: this is payment UI, and the overwhelming majority of buyers who load
+ * a seat map never reach it. Most integrations never enable it at all —
+ * `checkout` defaults to `'handoff'`, where these bytes are unreachable code.
+ *
+ * So there are ZERO payment bytes on the wire until a buyer presses the CTA in
+ * a picker whose host opted into `checkout: 'hosted'`. Unlike the panorama
+ * chunk, `./hostedCheckout` is NOT imported statically anywhere, so on npm this
+ * is a genuine code split rather than a free reference into a module that was
+ * loading anyway — which is exactly what we want here.
+ */
+async function loadHostedCheckout(): Promise<HostedCheckoutModule> {
+  if (typeof __SEATLAYER_CDN__ !== 'undefined' && __SEATLAYER_CDN__) {
+    return import(/* @vite-ignore */ cdnChunkUrl('seatlayer-checkout.mjs')) as Promise<HostedCheckoutModule>;
+  }
+  return import('./hostedCheckout');
+}
+
+/**
+ * Read the wire's reason, failing to the least-accusing one.
+ *
+ * Anything unrecognised — a failed read, an older worker that sent nothing, a
+ * newer one naming a reason this build has never heard of — becomes
+ * `not_configured`, which asserts the least about the organizer. A story
+ * invented from a missing field is worse than the coarse truth.
+ */
+export function paymentsOffReason(reason: string | null | undefined): PaymentOptionsReason {
+  return reason === 'unavailable_for_event' || reason === 'payments_off_for_event'
+    ? reason
+    : 'not_configured';
 }
 
 /**
@@ -1306,6 +1421,20 @@ export class SeatPicker {
   private handedOff = false;
   /** Guards single onBooked + single success overlay per hold. */
   private bookedShown = false;
+  /**
+   * `'hosted'` only when the host asked for it AND the widget owns its own
+   * transport. Resolved once in the constructor so every later read is a field
+   * comparison rather than a re-derivation that could drift.
+   */
+  private readonly checkoutMode: 'handoff' | 'hosted';
+  /**
+   * In-flight or settled `payment-options` for this event, started at render in
+   * hosted mode. One request, kicked off while the buyer is still choosing, so
+   * pressing Pay does not wait on a lookup whose answer never changes mid-session.
+   */
+  private paymentOptions: Promise<PaymentOptionsResult> | null = null;
+  /** The mounted payment card, while one is up. */
+  private checkoutPanel: CheckoutHandle | null = null;
   private extendEl: HTMLDivElement | null = null;
   private bookedEl: HTMLDivElement | null = null;
   private gaQty = new Map<string, number>();
@@ -1757,6 +1886,17 @@ export class SeatPicker {
         onObjectUnavailable: (event) => this.opts.onSelectedObjectUnavailable?.(event),
       });
     this.api = options.transport ?? this.pubApi!;
+    // Hosted checkout talks to OUR /pub routes with OUR client. A host that
+    // injected a transport owns its backend and its credentials, and quietly
+    // reaching past it to api.seatlayer.io would be the widget deciding where a
+    // buyer's money goes. Refuse out loud, once, and stay on the default.
+    if (options.checkout === 'hosted' && !this.pubApi) {
+      console.warn(
+        'seatlayer: checkout: "hosted" needs the widget\'s own transport — a custom `transport` '
+        + 'owns its backend, so the picker is staying on onCheckout for this mount.',
+      );
+    }
+    this.checkoutMode = options.checkout === 'hosted' && this.pubApi ? 'hosted' : 'handoff';
     this.maxTickets = Math.max(1, Math.floor(options.maxSelection ?? DEFAULT_MAX_SELECTION));
     // Colorblind preference: the stored (cross-surface) value wins over the
     // option; the option is only the initial default when nothing is stored.
@@ -1855,6 +1995,13 @@ export class SeatPicker {
     ensureStyle();
     await loadLocale(this.opts.locale);
     if (this.opts.messages) setStringOverrides(this.opts.messages);
+
+    // Hosted checkout asks the server what this event can charge through while
+    // the buyer is still looking at the map. The answer cannot change mid-
+    // session, and asking now means pressing Pay is not gated on a round trip.
+    // A rejection is caught at the point of use, not here — a widget must not
+    // die because a payment lookup failed.
+    if (this.checkoutMode === 'hosted') this.paymentOptions = this.pubApi!.paymentOptions(this.opts.event);
 
     const mount = resolveContainer(this.opts.container!);
     const root = document.createElement('div');
@@ -2238,7 +2385,44 @@ export class SeatPicker {
     if (this.salesClosed) this.applySalesClosed();
     this.syncPrices();
     this.syncTray();
+    // Last, so a buyer coming back from a gateway sees a finished map behind the
+    // confirmation rather than a skeleton.
+    this.resumeHostedOrder();
     return this;
+  }
+
+  /**
+   * A hosted gateway returned this buyer to a page that runs the widget, with
+   * `?order=…&status=…` in the URL. Pick the order up and finish the story.
+   *
+   * Only `success` resumes. `cancelled` means the buyer backed out at the
+   * gateway and their seats are still held — the map they are looking at IS the
+   * right screen, and opening a card to say "you cancelled" would be noise.
+   *
+   * The two parameters are then stripped with `replaceState`, because they are a
+   * one-shot instruction: leaving them in place would re-open the confirmation
+   * on every later navigation, and would carry an order id into browser history
+   * and any Referer this page later sends. `status` is only ever removed
+   * alongside an `order` we actually consumed, so a host page that uses a
+   * `status` parameter of its own keeps it.
+   */
+  private resumeHostedOrder(): void {
+    if (this.checkoutMode !== 'hosted' || typeof location === 'undefined') return;
+    const params = new URLSearchParams(location.search);
+    const orderId = params.get('order');
+    if (!orderId) return;
+    const status = params.get('status');
+    params.delete('order');
+    params.delete('status');
+    try {
+      const query = params.toString();
+      history.replaceState(history.state, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`);
+    } catch {
+      // A sandboxed frame can refuse replaceState. Losing the tidy-up is not a
+      // reason to lose the confirmation.
+    }
+    if (status !== 'success') return;
+    void this.openCheckoutPanel({ kind: 'resume', orderId });
   }
 
   /**
@@ -4339,7 +4523,7 @@ export class SeatPicker {
       const seats = this.hold.seats ?? committed;
       this.handedOff = true;
       this.setCtaPhase('checkout');
-      this.opts.onCheckout?.(this.hold, seats, this.buildHandoff(this.hold));
+      this.checkoutHandoff(this.hold, seats);
       return;
     }
     this.holdingLabels = new Set(committed.map((seat) => seat.label));
@@ -4373,7 +4557,7 @@ export class SeatPicker {
       // The replacement hold can combine an earlier best-available set with
       // newly selected seats. Hand the host the complete held seat set; the
       // server-priced line items remain authoritative for GA and totals.
-      this.opts.onCheckout?.(hold, hold.seats ?? chosenSeats, this.buildHandoff(hold));
+      this.checkoutHandoff(hold, hold.seats ?? chosenSeats);
     } catch (err) {
       this.opts.onError?.(err);
       const problem = err as { reason?: string; conflicts?: Array<{ label?: string }> };
@@ -4495,6 +4679,121 @@ export class SeatPicker {
     }
     this.bookedEl?.classList.add('on');
     this.opts.onBooked?.(handoff);
+  }
+
+  /**
+   * The seats are held. Send the buyer wherever this picker's `checkout` option
+   * says they go.
+   *
+   * The default branch is the literal call that stood here before hosted
+   * checkout existed, unchanged, so nothing about an existing integration moves.
+   */
+  private checkoutHandoff(hold: HoldResult, seats: PickerSeat[]): void {
+    if (this.checkoutMode === 'hosted') {
+      void this.startHostedCheckout(hold, seats);
+      return;
+    }
+    this.opts.onCheckout?.(hold, seats, this.buildHandoff(hold));
+  }
+
+  /**
+   * Take the money ourselves, through the organizer's own gateway.
+   *
+   * Order of operations matters: ASK FIRST, load second. `payment-options` is
+   * already in flight from render, and its answer decides whether any payment
+   * code is fetched at all — an event that cannot charge never downloads the
+   * card that would have charged it.
+   *
+   * An empty list is not a failure and never dead-ends the buyer. It routes them
+   * to whatever the host has: `onCheckoutUnavailable` (with the server's reason,
+   * so the host can say the right one of three very different sentences), then
+   * `onCheckout` with the ordinary handoff. A host that supplied neither gets
+   * the widget's own honest card instead of a press that did nothing.
+   */
+  private async startHostedCheckout(hold: HoldResult, seats: PickerSeat[]): Promise<void> {
+    const handoff = this.buildHandoff(hold);
+    let options: PaymentOptionsResult | null = null;
+    try {
+      options = await (this.paymentOptions ??= this.pubApi!.paymentOptions(this.opts.event));
+    } catch (err) {
+      // A failed lookup is not evidence about the organizer's setup, so it falls
+      // through to the reason that asserts the least about them.
+      this.opts.onError?.(err);
+    }
+    if (this.destroyed) return;
+
+    const provider = options?.providers?.[0];
+    if (!provider) {
+      const reason = paymentsOffReason(options?.reason);
+      const handled = !!this.opts.onCheckoutUnavailable || !!this.opts.onCheckout;
+      this.opts.onCheckoutUnavailable?.({ reason, handoff });
+      this.opts.onCheckout?.(hold, seats, handoff);
+      if (!handled) {
+        void this.openCheckoutPanel({
+          kind: 'unavailable',
+          reason,
+          seatCount: handoff.lineItems.reduce((sum, item) => sum + item.quantity, 0),
+        });
+      }
+      return;
+    }
+
+    await this.openCheckoutPanel({
+      kind: 'pay',
+      provider,
+      order: {
+        holdId: handoff.holdId,
+        expiresAt: handoff.expiresAt,
+        currency: handoff.currency,
+        total: handoff.total,
+        labels: handoff.lineItems.map((item) => item.displayLabel ?? item.label),
+      },
+    });
+  }
+
+  /**
+   * Fetch the checkout chunk and put its card over the map.
+   *
+   * Every failure here lands the buyer back on a map with their seats still
+   * held, which is a place they can act from — a blocked chunk request must not
+   * leave them staring at a CTA that no longer does anything.
+   */
+  private async openCheckoutPanel(state: CheckoutState): Promise<void> {
+    let mountCheckout: HostedCheckoutModule['mountCheckout'];
+    try {
+      ({ mountCheckout } = await loadHostedCheckout());
+    } catch (err) {
+      this.opts.onError?.(err);
+      this.toast('Checkout could not be opened. Your seats are still held — please try again.', 'error');
+      this.setCtaPhase('idle');
+      return;
+    }
+    if (this.destroyed || !this.root) return;
+    this.closeCheckoutPanel();
+    this.checkoutPanel = mountCheckout({
+      root: this.root,
+      state,
+      startSession: (input) => this.pubApi!.startCheckout(this.opts.event, input),
+      orderStatus: (orderId) => this.pubApi!.orderStatus(orderId),
+      onCancel: () => {
+        this.checkoutPanel = null;
+        // The hold is untouched by cancelling — the buyer goes back to a map
+        // that still has their seats, and the CTA still says checkout.
+        if (!this.hold) this.setCtaPhase('idle');
+      },
+      onConfirmed: (order) => {
+        this.opts.onOrderConfirmed?.(order);
+        // The seats are sold. Re-read the map so they repaint as booked for this
+        // buyer immediately rather than whenever the next realtime frame lands.
+        void this.controller.refresh();
+      },
+      onError: (err) => this.opts.onError?.(err),
+    });
+  }
+
+  private closeCheckoutPanel(): void {
+    this.checkoutPanel?.destroy();
+    this.checkoutPanel = null;
   }
 
   /** Assemble the stable {@link CheckoutHandoff} from a hold's server line items. */
@@ -5296,6 +5595,9 @@ export class SeatPicker {
     this.closeConfirm();
     this.dismissTableDialog(false);
     this.closeSeatView();
+    // A payment card outlives its own mount node (it listens on the document for
+    // ESC), so it is torn down explicitly rather than left to root.remove().
+    this.closeCheckoutPanel();
     this.exit3d(); // dispose GL + remove the 3D overlay if it's up
     this.stopHoldTimer();
     if (this.toastTimer) clearTimeout(this.toastTimer);

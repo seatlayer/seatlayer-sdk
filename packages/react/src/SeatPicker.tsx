@@ -50,7 +50,7 @@ export interface SeatPickerProps extends Omit<SeatPickerOptions, 'container'> {
  */
 export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
   function SeatPicker(props, ref) {
-    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView } = props;
+    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView, checkout } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const pickerRef = useRef<CoreSeatPicker | null>(null);
@@ -89,6 +89,11 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         onAccessUnavailable: (state) => callbacks.current.onAccessUnavailable?.(state),
         onSelectedObjectUnavailable: (state) =>
           callbacks.current.onSelectedObjectUnavailable?.(state),
+        // Hosted checkout. Read through the ref like every other callback — the
+        // spread above would freeze an inline arrow at construction, and these
+        // two fire long after it (a payment webhook can land minutes later).
+        onCheckoutUnavailable: (state) => callbacks.current.onCheckoutUnavailable?.(state),
+        onOrderConfirmed: (order) => callbacks.current.onOrderConfirmed?.(order),
       });
       pickerRef.current = picker;
       void picker.render();
@@ -102,7 +107,7 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
       // pass them as inline literals, so a new identity every render would tear
       // the widget down mid-selection. They are read fresh at construction.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView]);
+    }, [event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView, checkout]);
 
     useImperativeHandle(
       ref,

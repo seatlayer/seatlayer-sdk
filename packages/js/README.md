@@ -201,6 +201,39 @@ checkout navigation and lets the buyer remove individual held tickets. Set
 The browser **holds**; your **server books** with a secret key. See
 [how the integration works](https://docs.seatlayer.io/start/how-it-works/).
 
+### Hosted checkout (`checkout: 'hosted'`)
+
+Opt-in, and off by default. With it, `SeatPicker` takes the payment itself
+through the gateway the **organizer** connected on their own account, so a host
+with no backend can sell tickets:
+
+```js
+new SeatPicker({
+  container: '#seats',
+  event: 'ev_xxx',
+  checkout: 'hosted',
+  onOrderConfirmed: (order) => showReceipt(order.orderId),
+  // Still called, but ONLY when this event cannot take payment — so one code
+  // path covers both.
+  onCheckout: (hold, seats, handoff) => myServerTakesPayment(handoff),
+  onCheckoutUnavailable: ({ reason }) => console.info('hosted checkout off:', reason),
+});
+```
+
+Without the option nothing changes and **no payment code is downloaded** — the
+card that takes the payment is a lazy chunk, fetched at the moment a buyer
+presses the CTA in a hosted picker and never otherwise.
+
+Two limits worth knowing before switching it on:
+
+- It needs the widget's own transport. A host-supplied `transport` owns its
+  backend, so hosted checkout stays off there.
+- **Where a card gateway returns the buyer is the server's choice.** The return
+  URL is built from the deployment's own allowed origins, so a buyer paying by
+  card from an embed on your domain is confirmed on SeatLayer's buyer page
+  rather than back in your embed. In-page gateways never navigate away and
+  confirm in place, as does an embed running on an allowed origin.
+
 ## Related resources
 
 - [Buyer SDK documentation](https://docs.seatlayer.io/buyer-sdk/install/)

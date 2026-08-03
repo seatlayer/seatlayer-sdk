@@ -8,6 +8,16 @@ export { SeatingChart } from './SeatingChart';
 export type { SeatingChartOptions, SelectedSeat, GAAreaAvailability } from './SeatingChart';
 export { ApiError } from './api';
 export type { HoldResult, ResumedHoldResult, HoldConflict, HoldLineItem, BestAvailableResult, PubApiOptions } from './api';
+// Hosted checkout (SeatPicker's `checkout: 'hosted'`). TYPES ONLY — the card
+// that takes the payment is a lazy chunk and never enters this entry's graph,
+// so importing these costs a host nothing at runtime.
+export type {
+  PaymentProviderName,
+  PaymentOptionsReason,
+  PaymentOptionsResult,
+  CheckoutSessionResult,
+  OrderStatusResult,
+} from './api';
 // Sales Channels — buyer access sessions (private channel inventory).
 export { BuyerAccessContext, BuyerAccessUnavailableError, createBuyerAccessContext } from './buyerAccess';
 export type {
