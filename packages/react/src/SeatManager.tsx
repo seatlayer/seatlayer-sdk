@@ -12,6 +12,7 @@ import {
   type SeatManagerTallies,
   type SeatManagerActivity,
   type SeatManagerActionResult,
+  type SeatManagerConnection,
   type ReportResult,
   type ControlRoomSnapshot,
   type LogEntry,
@@ -24,6 +25,7 @@ export type {
   SeatManagerTallies,
   SeatManagerActivity,
   SeatManagerActionResult,
+  SeatManagerConnection,
 } from '@seatlayer/js';
 
 /** Imperative handle for the organizer manage board. */
@@ -49,6 +51,14 @@ export interface SeatManagerHandle {
   getControlRoomSnapshot(windowMinutes?: number): Promise<ControlRoomSnapshot>;
   getLog(opts?: { limit?: number; before?: number }): Promise<{ entries: LogEntry[]; nextBefore: number | null }>;
   setHoldTtl(ms: number | null): Promise<void>;
+  /**
+   * Realtime link state plus the "as of" behind the numbers on screen.
+   *
+   * Null only before the manager has mounted. Pair with the `onConnectionChange`
+   * prop: the callback gives the edges, this gives the answer on demand — which
+   * is what a host needs on tab focus, when no transition is coming.
+   */
+  getConnection(): SeatManagerConnection | null;
   zoomToFit(): void;
 }
 
@@ -102,6 +112,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         onFollowLiveChange: (enabled) => callbacks.current.onFollowLiveChange?.(enabled),
         onSelectionChange: (s: ExpandedSeat[]) => callbacks.current.onSelectionChange?.(s),
         onActionComplete: (r: SeatManagerActionResult) => callbacks.current.onActionComplete?.(r),
+        onConnectionChange: (s: SeatManagerConnection) => callbacks.current.onConnectionChange?.(s),
         onError: (e: unknown) => callbacks.current.onError?.(e),
       });
       managerRef.current = manager;
@@ -154,6 +165,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         getControlRoomSnapshot: (windowMinutes) => managerRef.current?.getControlRoomSnapshot(windowMinutes)
           ?? Promise.reject(new Error('not ready')),
         getLog: (opts) => managerRef.current?.getLog(opts) ?? Promise.resolve({ entries: [], nextBefore: null }),
+        getConnection: () => managerRef.current?.getConnection() ?? null,
         setHoldTtl: (ms) => managerRef.current?.setHoldTtl(ms) ?? Promise.resolve(),
         zoomToFit: () => managerRef.current?.zoomToFit(),
       }),

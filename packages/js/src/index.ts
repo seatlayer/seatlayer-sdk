@@ -53,6 +53,7 @@ export type {
   SeatManagerTallies,
   SeatManagerActivity,
   SeatManagerActionResult,
+  SeatManagerConnection,
 } from './SeatManager';
 // Sales channels — the cockpit's Channels mode and its pure planning helpers.
 // Exported so a host can reuse the review-bucket renderer (Apply results AND

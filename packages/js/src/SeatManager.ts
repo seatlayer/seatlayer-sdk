@@ -211,7 +211,31 @@ export interface SeatManagerOptions {
   onSelectionChange?: (seats: ExpandedSeat[]) => void;
   /** A block/unblock/cancel action completed successfully. */
   onActionComplete?: (result: SeatManagerActionResult) => void;
+  /**
+   * The realtime link connected or dropped, with the moment the numbers on
+   * screen were last known good.
+   *
+   * A host embedding this cockpit renders its own chrome around it, and until
+   * now had no way to know the board had gone stale: the manager tracked the
+   * drop internally (its own LIVE/RECONNECTING pill) and told nobody. A host
+   * that polls on a timer and pauses while the tab is hidden therefore showed
+   * arbitrarily old numbers that looked exactly like fresh ones.
+   */
+  onConnectionChange?: (state: SeatManagerConnection) => void;
   onError?: (err: unknown) => void;
+}
+
+/** Realtime link state, as reported to the embedding host. */
+export interface SeatManagerConnection {
+  /** `live` while the socket is open; `reconnecting` from drop until reopen. */
+  status: 'live' | 'reconnecting';
+  /**
+   * `Date.now()` of the last snapshot or delta accepted from the server, or
+   * null before the first one. This is the honest "as of" for whatever the host
+   * is displaying — NOT the time the connection dropped, which is later and
+   * would overstate freshness.
+   */
+  lastMessageAt: number | null;
 }
 
 function resolveContainer(container: string | HTMLElement): HTMLElement {
@@ -244,9 +268,19 @@ const LEGEND: { key: 'free' | 'held' | 'booked' | 'blocked'; label: string; colo
   { key: 'blocked', label: 'Blocked', color: '#8b94ac' },
 ];
 
-const CSS = `
+/** Exported so the motion contract can be asserted without a real browser —
+ *  see `SeatManagerMotion.test.ts`. Not part of the public package surface. */
+export const MANAGER_CSS = `
 .slm{position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-height:480px;overflow:hidden;
-  background:var(--slm-bg);color:var(--slm-text);font-family:var(--slm-font);border-radius:var(--slm-radius)}
+  background:var(--slm-bg);color:var(--slm-text);font-family:var(--slm-font);border-radius:var(--slm-radius);
+  /* Motion tokens (motion-system §2), declared by the cockpit ROOT rather than
+     borrowed from CHANNELS_CSS. The base cockpit animates whether or not
+     Channels mode is in use, so owning its own tokens is what stops a token
+     edit from silently changing only half the surface. Channels mode declares
+     the identical values so an embed of it stays self-contained. */
+  --slm-mo-instant:80ms;--slm-mo-quick:140ms;--slm-mo-base:200ms;--slm-mo-slow:320ms;--slm-mo-ambient:2000ms;
+  --slm-mo-out:cubic-bezier(.2,.8,.2,1);--slm-mo-in-out:cubic-bezier(.4,0,.2,1);--slm-mo-exit:cubic-bezier(.4,0,1,1);
+  --slm-mo-spring:cubic-bezier(.34,1.3,.64,1)}
 .slm *{box-sizing:border-box;margin:0;padding:0}
 .slm button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .slm input{font:inherit}
@@ -259,7 +293,8 @@ const CSS = `
 .slm-mode.on{background:var(--slm-accent);color:var(--slm-accent-ink)}
 .slm-live{display:inline-flex;align-items:center;gap:6px;font-size:11px;letter-spacing:.12em;font-weight:800;color:var(--slm-muted)}
 .slm-live-dot{width:8px;height:8px;border-radius:50%;background:#8b94ac}
-.slm.live .slm-live-dot{background:#22a06b;box-shadow:0 0 0 0 rgba(34,160,107,.55);animation:slm-pulse 2s infinite}
+.slm.live .slm-live-dot{background:#22a06b;box-shadow:0 0 0 0 rgba(34,160,107,.55);
+  animation:slm-pulse var(--slm-mo-ambient) infinite}
 @keyframes slm-pulse{0%{box-shadow:0 0 0 0 rgba(34,160,107,.5)}70%{box-shadow:0 0 0 7px rgba(34,160,107,0)}100%{box-shadow:0 0 0 0 rgba(34,160,107,0)}}
 .slm-kpis{grid-column:1/-1;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));width:100%;padding-top:10px;
   border-top:1px solid var(--slm-line)}
@@ -268,7 +303,11 @@ const CSS = `
   font-variant-numeric:tabular-nums;white-space:nowrap}
 .slm-kpi span{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--slm-muted);font-weight:700}
 .slm-kpi .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:baseline}
-.slm-kpi.changed b{animation:slm-kpi-bump .58s cubic-bezier(.2,.8,.2,1)}
+/* The one playful moment this surface is allowed (§2 --mo-spring). It ran at
+   .58s against a 200ms catalog, which read as a different design language from
+   the dashboard tile it mirrors; Channels mode's own count bump is the same
+   pattern and must stay in step with it. */
+.slm-kpi.changed b{animation:slm-kpi-bump var(--slm-mo-base) var(--slm-mo-spring)}
 .slm-kpidelta{position:absolute;right:4px;top:-12px;padding:2px 5px;border-radius:999px;background:rgba(34,160,107,.17);
   color:#5bd39b!important;font-size:9px!important;letter-spacing:0!important;text-transform:none!important;white-space:nowrap;
   animation:slm-kpi-delta 1.45s ease-out both;pointer-events:none}
@@ -287,12 +326,14 @@ const CSS = `
 .slm-hud-chip{padding:6px 11px;border-radius:999px;font-size:12px;font-weight:700;background:var(--slm-surface);
   border:1px solid var(--slm-line);color:var(--slm-text)}
 .slm-zoomhint{position:absolute;left:50%;top:14px;transform:translateX(-50%);padding:6px 13px;border-radius:999px;
-  background:rgba(0,0,0,.55);color:#fff;font-size:12px;font-weight:700;pointer-events:none;opacity:0;transition:opacity .2s}
+  background:rgba(0,0,0,.55);color:#fff;font-size:12px;font-weight:700;pointer-events:none;opacity:0;
+  transition:opacity var(--slm-mo-base) var(--slm-mo-out)}
 .slm-zoomhint.on{opacity:1}
 .slm-liveevent{position:absolute;left:50%;top:14px;z-index:4;display:flex;align-items:center;gap:8px;max-width:min(560px,calc(100% - 32px));
   padding:8px 12px;border:1px solid var(--slm-line);border-radius:999px;background:color-mix(in srgb,var(--slm-surface) 92%,transparent);
   box-shadow:0 10px 34px rgba(0,0,0,.32);opacity:0;transform:translate(-50%,-8px);pointer-events:none;
-  transition:opacity .18s ease,transform .24s ease;backdrop-filter:blur(10px)}
+  transition:opacity var(--slm-mo-quick) var(--slm-mo-out),transform var(--slm-mo-base) var(--slm-mo-out);
+  backdrop-filter:blur(10px)}
 .slm-liveevent.on{opacity:1;transform:translate(-50%,0)}
 .slm.block-mode .slm-liveevent{top:52px}
 .slm-liveeventdot{width:8px;height:8px;border-radius:50%;flex:none}.slm-liveeventcopy{min-width:0;overflow:hidden;text-overflow:ellipsis;
@@ -312,7 +353,8 @@ const CSS = `
 /* activity feed */
 .slm-feed{display:flex;flex-direction:column;gap:0}
 .slm-feedrow{display:flex!important;width:100%;align-items:center;gap:9px;padding:8px 2px!important;border-bottom:1px solid var(--slm-line)!important;
-  border-radius:6px;font-size:12.5px;text-align:left!important;animation:slm-in .35s ease}
+  border-radius:6px;font-size:12.5px;text-align:left!important;
+  animation:slm-in var(--slm-mo-quick) var(--slm-mo-out)}
 .slm-feedrow:hover{background:rgba(255,255,255,.035)!important}
 @keyframes slm-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 .slm-feeddot{width:8px;height:8px;border-radius:50%;flex:none}
@@ -379,7 +421,8 @@ const CSS = `
 
 /* toast */
 .slm-toast{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);padding:10px 16px;border-radius:10px;
-  font-size:13px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.28);opacity:0;pointer-events:none;transition:opacity .2s;
+  font-size:13px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.28);opacity:0;pointer-events:none;
+  transition:opacity var(--slm-mo-base) var(--slm-mo-out);
   background:var(--slm-surface);color:var(--slm-text);border:1px solid var(--slm-line);z-index:5}
 .slm-toast.on{opacity:1}
 .slm-toast.err{background:#c0392b;color:#fff;border-color:#c0392b}
@@ -390,7 +433,9 @@ const CSS = `
 .slm-barbtn.on{background:rgba(244,183,64,.13);border-color:#f4b740;color:#f7ca6b}
 .slm-sectionlist{display:flex;flex-direction:column;gap:8px;margin-top:4px}
 .slm-sectionlist + .slm-eyebrow{margin-top:18px}
-.slm-sectionrow{width:100%;padding:10px!important;border:1px solid var(--slm-line)!important;border-radius:10px;background:var(--slm-surface)!important;text-align:left!important;transition:border-color .15s ease,transform .15s ease}
+.slm-sectionrow{width:100%;padding:10px!important;border:1px solid var(--slm-line)!important;border-radius:10px;
+  background:var(--slm-surface)!important;text-align:left!important;
+  transition:border-color var(--slm-mo-quick) var(--slm-mo-out),transform var(--slm-mo-quick) var(--slm-mo-out)}
 .slm-sectionrow:hover{border-color:var(--slm-muted)!important;transform:translateY(-1px)}
 .slm-sectiontop,.slm-sectionmeta{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .slm-sectiontop{font-size:12.5px;font-weight:800}.slm-sectionmeta{margin-top:5px;color:var(--slm-muted);font-size:11px}
@@ -409,7 +454,8 @@ const CSS = `
 .slm-momentumcopy{margin-top:7px;color:var(--slm-muted);font-size:11px;line-height:1.45}
 /* sections: availability windows */
 .slm-availlist{display:flex;flex-direction:column;gap:8px;margin:2px 0 12px}
-.slm-availrow{padding:10px;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface);transition:border-color .15s ease,opacity .15s ease}
+.slm-availrow{padding:10px;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface);
+  transition:border-color var(--slm-mo-quick) var(--slm-mo-out),opacity var(--slm-mo-quick) var(--slm-mo-out)}
 .slm-availrow.zone{background:color-mix(in srgb,var(--slm-surface) 82%,#000)}
 .slm-availrow.hidden{opacity:.62}.slm-availrow.closed{opacity:.82}
 .slm-availhead{display:flex;align-items:center;gap:8px}
@@ -449,9 +495,22 @@ const CSS = `
 .slm.compact .slm-barbtn{flex:1;padding:6px 9px}.slm.compact .slm-kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
 .slm.compact .slm-kpi[data-kpi="buyers"],.slm.compact .slm-kpi[data-kpi="active-holds"],
 .slm.compact .slm-kpi[data-kpi="sold-pct"],.slm.compact .slm-kpi[data-kpi="gross-sales"]{display:none}
+/* Reduced motion, as a BLANKET over the cockpit subtree rather than a list of
+   selectors. The list this replaces named four animations and two transitions,
+   and had silently fallen behind the stylesheet: the zoom hint, the toast and
+   the availability rows all still animated for a user who had asked the OS for
+   none. An enumerated list has to be edited every time a rule is added, and
+   nothing fails when it isn't — so it drifts. This cannot.
+
+   Motion is removed, never the information it carried: Channels mode's own
+   block substitutes static outlines for its shake and success states, and it
+   stays authoritative for those. No JS here waits on animationend or
+   transitionend, so cutting them outright strands no state. */
 @media (prefers-reduced-motion:reduce){
-  .slm.live .slm-live-dot,.slm-feedrow,.slm-kpi.changed b,.slm-kpidelta{animation:none!important}
-  .slm-liveevent,.slm-sectionrow{transition:none!important}
+  .slm,.slm *,.slm *::before,.slm *::after{
+    animation:none!important;
+    transition:none!important;
+    scroll-behavior:auto!important}
 }
 ${CHANNELS_CSS}`;
 
@@ -459,7 +518,7 @@ function injectStyle(): void {
   if (typeof document === 'undefined' || document.getElementById(STYLE_ID)) return;
   const el = document.createElement('style');
   el.id = STYLE_ID;
-  el.textContent = CSS;
+  el.textContent = MANAGER_CSS;
   document.head.appendChild(el);
 }
 
@@ -542,6 +601,11 @@ export class SeatManager {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private closed = false;
+  /** Mirrors the `live` root class, so the getter never has to read the DOM. */
+  private connectionStatus: SeatManagerConnection['status'] = 'reconnecting';
+  /** When the server last told us something. Stamped on accepted traffic only —
+   *  a socket that opens and says nothing has not refreshed anything. */
+  private lastMessageAt: number | null = null;
   private ready = false;
 
   private feed: SeatManagerActivity[] = [];
@@ -762,6 +826,12 @@ export class SeatManager {
       },
       worldToScreen: (point: { x: number; y: number }) => this.renderer?.worldToScreen(point) ?? null,
       seatPixelSize: () => this.seatPixelSize(),
+      isSeatDetail: () => this.renderer?.getRung?.() === 'seats',
+      showSectionOverview: () => {
+        this.renderer?.clearSectionFocus();
+        this.renderer?.setRung?.('sections');
+      },
+      focusSection: (sectionId: string) => this.renderer?.focusSection(sectionId),
       isCompact: () => !!this.root?.classList.contains('compact'),
       setMapInert: (inert: boolean) => {
         this.mapHost.toggleAttribute('inert', inert);
@@ -772,13 +842,15 @@ export class SeatManager {
     };
   }
 
-  /** Approximate on-screen seat size, for the channel overlay's marks. Derived
-   *  from the live camera so the overlay tracks zoom without a renderer hook. */
+  /** Actual on-screen seat diameter, for the channel overlay's marks. The
+   * renderer's base seat radius is 9 chart units; retaining the camera scale
+   * (rather than capping it) keeps every preview paint aligned with the real
+   * chart geometry at deep zoom. */
   private seatPixelSize(): number {
     const rect = this.renderer?.getVisibleWorldRect?.();
     const width = this.mapHost?.clientWidth ?? 0;
     if (!rect?.width || !width) return 6;
-    return Math.max(3, Math.min(24, (width / rect.width) * 14));
+    return Math.max(3, (width / rect.width) * 18);
   }
 
   /** Toggle the normalized sales-velocity outline overlay without changing seat colors. */
@@ -981,6 +1053,17 @@ export class SeatManager {
     return this.setTrendWindow(windowMinutes);
   }
 
+  /**
+   * The realtime link's current state and the "as of" behind it.
+   *
+   * Pair with `onConnectionChange` for the edges: a host that mounts after a
+   * drop, or re-reads on tab focus, needs to be able to ASK rather than wait
+   * for the next transition that may never come.
+   */
+  getConnection(): SeatManagerConnection {
+    return { status: this.connectionStatus, lastMessageAt: this.lastMessageAt };
+  }
+
   getLog(opts: { limit?: number; before?: number } = {}): Promise<{ entries: LogEntry[]; nextBefore: number | null }> {
     return this.api.log(this.key, opts);
   }
@@ -1045,6 +1128,10 @@ export class SeatManager {
       onSelect: (seat) => this.handleSeatSelect(seat),
       onDeselect: () => this.syncSelection(),
       onMarquee: () => this.syncSelection(),
+      onSectionTap: (sectionId) => {
+        this.renderer?.focusSection(sectionId);
+        this.channels?.handleSectionFocus(sectionId);
+      },
       onViewChange: () => { this.updateZoomHint(); this.channels?.handleViewChange(); },
     });
     this.renderer.setChart(this.doc);
@@ -1053,10 +1140,11 @@ export class SeatManager {
     this.updateZoomHint();
   }
 
-  /** Block and Channels are both bulk-selection tools: marquee, ⌘A, category,
-   *  section. The two differ only in WHICH statuses they may act on. */
+  /** Block always uses a marquee. Channels only enables its marquee after the
+   * organizer deliberately chooses Assign seats; Pan map keeps desktop drag
+   * available for large charts. */
   private isBulkSelectMode(): boolean {
-    return this.mode === 'block' || (this.mode === 'channels' && this.channels?.canSelect() === true);
+    return this.mode === 'block' || (this.mode === 'channels' && this.channels?.usesMarqueeSelection() === true);
   }
 
   /**
@@ -1067,7 +1155,8 @@ export class SeatManager {
    */
   private selectableStatuses(): SeatStatus[] {
     if (this.mode === 'block') return ['free', 'not_for_sale'];
-    if (this.mode === 'inspect' || this.isBulkSelectMode()) {
+    if (this.mode === 'inspect' || this.isBulkSelectMode()
+      || (this.mode === 'channels' && this.channels?.canSelect() === true)) {
       return ['free', 'held', 'booked', 'not_for_sale'];
     }
     return [];
@@ -1173,6 +1262,9 @@ export class SeatManager {
       return;
     }
     if (!msg || typeof msg !== 'object') return;
+    // Stamped here, after parsing: unreadable frames prove the socket is open
+    // but prove nothing about the numbers, and "as of" must mean the data.
+    this.lastMessageAt = Date.now();
     const m = msg as {
       type?: string;
       seats?: Record<string, string>;
@@ -1244,6 +1336,9 @@ export class SeatManager {
       const objs = await this.api.objects(this.key);
       this.applySnapshot(objs.seats);
       this.updateEffectiveAvailability(objs.hidden, objs.closed);
+      // A full snapshot over HTTP is server truth just as much as a delta is —
+      // "as of" would otherwise ignore the freshest read the cockpit ever does.
+      this.lastMessageAt = Date.now();
     } catch {
       /* transient — the delta stream keeps us fresh */
     }
@@ -1749,6 +1844,19 @@ export class SeatManager {
     this.root?.classList.toggle('live', on);
     if (this.els.livetext) this.els.livetext.textContent = on ? 'LIVE' : 'RECONNECTING';
     this.paintMonitorInsights();
+
+    // Tell the host only on a real edge. `connect()` can call this with the
+    // same value it already had (an open that follows a reconnect attempt),
+    // and a banner that re-announces itself on every retry is noise.
+    const next: SeatManagerConnection['status'] = on ? 'live' : 'reconnecting';
+    if (next === this.connectionStatus) return;
+    this.connectionStatus = next;
+    try {
+      this.opts.onConnectionChange?.(this.getConnection());
+    } catch (err) {
+      // A host callback must never take the socket down with it.
+      this.opts.onError?.(err);
+    }
   }
 
   private updateZoomHint(): void {
