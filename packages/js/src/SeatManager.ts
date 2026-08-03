@@ -23,6 +23,8 @@ import {
   SeatmapRenderer,
   expandChart,
   computeSections,
+  gaAreasOf,
+  gaUnitLabels,
   UNGROUPED_ID,
   type AvailabilityRule,
   type ChartDoc,
@@ -584,13 +586,43 @@ export class SeatManager {
   private labelToId = new Map<string, string>();
   private labelToSeat = new Map<string, ExpandedSeat>();
   private allIds: string[] = [];
+  /**
+   * GA inventory units — real sellable labels the server counts, with NO seat
+   * geometry and therefore no renderer binding. They live here rather than in
+   * `labelToId`/`allIds` so every paint path keeps addressing paintable nodes
+   * only, while the tally denominator finally covers the same universe the
+   * numerator does. Without them a GA sale hit `booked` but not `total`:
+   * Free under-reported by GA capacity and SOLD% could exceed 100%.
+   */
+  private gaUnitLabelSet = new Set<string>();
   private status = new Map<string, DoStatus>();
+  /** Live non-free counters, moved by each delta rather than re-walked. */
+  private counts: Record<Exclude<DoStatus, 'free'>, number> = { held: 0, booked: 0, blocked: 0 };
+  /** Bumped whenever the seat model is replaced wholesale (a full snapshot). */
+  private modelVersion = 0;
   private currency = 'USD';
   private authoritativeGrossRevenue = 0;
   private revenueStatus: SeatManagerTallies['revenueStatus'] = 'loading';
   private revenueRequest = 0;
-  private revenueRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private controlRoomSnapshot: ControlRoomSnapshot | null = null;
+  /**
+   * The server's own totals, pinned to the client model they were read against.
+   * Display = server baseline + (client now − client then), so the authoritative
+   * numbers land exactly on arrival and deltas still move them between reads.
+   * A wholesale model replacement invalidates the pairing (`model`), and the
+   * client tallies — themselves a fresh authenticated read — take over.
+   */
+  private serverBaseline: {
+    model: number;
+    server: { free: number; held: number; booked: number; blocked: number };
+    client: { free: number; held: number; booked: number; blocked: number };
+  } | null = null;
+  /** Latest presence frame, held whether or not a snapshot has landed yet. */
+  private livePresence: { at: number; value: { shoppingSessions: number; activeHolds: number } } | null = null;
+  /** Latest cumulative booked gross pushed on a delta frame. */
+  private liveGross: { at: number; value: number } | null = null;
+  /** Coalesces a burst of deltas into one KPI/rail repaint. */
+  private paintHandle: number | null = null;
   private trendWindowMinutes = 15;
   private heatEnabled = false;
   private followLive: boolean;
@@ -694,12 +726,7 @@ export class SeatManager {
       const res = await this.api.chart(this.key);
       this.doc = res.doc;
       this.currency = res.event.currency ?? this.opts.currency ?? this.currency;
-      const seats = expandChart(res.doc);
-      for (const s of seats) {
-        this.labelToId.set(s.label, s.id);
-        this.labelToSeat.set(s.label, s);
-        this.allIds.push(s.id);
-      }
+      this.buildUnitUniverse(res.doc);
       this.buildRenderer();
       this.buildSectionOptions();
       const [, controlRoom] = await Promise.all([
@@ -1100,7 +1127,10 @@ export class SeatManager {
     if (this.followLiveTimer) clearTimeout(this.followLiveTimer);
     if (this.followSeatTimer) clearTimeout(this.followSeatTimer);
     if (this.unblockAllConfirmTimer) clearTimeout(this.unblockAllConfirmTimer);
-    if (this.revenueRefreshTimer) clearTimeout(this.revenueRefreshTimer);
+    if (this.paintHandle !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(this.paintHandle);
+    }
+    this.paintHandle = null;
     this.channels?.destroy();
     this.channels = null;
     if (this.tokenRefreshTimer) clearTimeout(this.tokenRefreshTimer);
@@ -1184,6 +1214,42 @@ export class SeatManager {
     this.syncSelection();
   }
 
+  /**
+   * Build the client's inventory universe from the chart.
+   *
+   * `expandChart` yields SEATS — it has no output for a GA area, whose capacity
+   * is sold as N synthetic unit labels. The server's seat map keys, its deltas
+   * and its `totals` all speak those labels, so a client that only knows seats
+   * counts GA sales in the numerator (every key of the snapshot is written into
+   * `status`) while leaving them out of the denominator. Registering the GA
+   * units here — labels only, never a render binding — is what makes the two
+   * agree.
+   */
+  private buildUnitUniverse(doc: ChartDoc): void {
+    for (const seat of expandChart(doc)) {
+      this.labelToId.set(seat.label, seat.id);
+      this.labelToSeat.set(seat.label, seat);
+      this.allIds.push(seat.id);
+    }
+    for (const area of gaAreasOf(doc)) {
+      for (const label of gaUnitLabels(area)) {
+        // A GA unit never shadows a seat label, and a joined area's provenance
+        // can name the same unit twice across segments — the Set settles both.
+        if (!this.labelToId.has(label)) this.gaUnitLabelSet.add(label);
+      }
+    }
+  }
+
+  /** Every sellable unit the client knows: seats + GA capacity. */
+  private unitTotal(): number {
+    return this.allIds.length + this.gaUnitLabelSet.size;
+  }
+
+  /** Every label the client models, whether or not it can be painted. */
+  private knownLabels(): Iterable<string> {
+    return [...this.labelToId.keys(), ...this.gaUnitLabelSet];
+  }
+
   private repaintAll(): void {
     const r = this.renderer;
     if (!r) return;
@@ -1237,7 +1303,12 @@ export class SeatManager {
     ws.onopen = () => {
       this.attempt = 0;
       this.setLive(true);
-      void this.resnapshot().then(() => this.scheduleRevenueRefresh(0));
+      // Connect (and every reconnect) is where the server's own totals, gross
+      // and section metrics are re-established. Between connects the delta
+      // stream carries both the counts and the money, so nothing polls.
+      void this.resnapshot()
+        .then(() => this.refreshControlRoom())
+        .catch((err) => this.opts.onError?.(err));
       void this.refreshAvailability();
     };
     ws.onmessage = (e) => this.onMessage(e);
@@ -1273,6 +1344,10 @@ export class SeatManager {
        *  only the seats that differ from it. Absent on legacy frames. */
       default?: string;
       changes?: { label: string; status: string }[];
+      /** Organizer-scope protocol-1 deltas carry cumulative booked gross, in the
+       *  same unit as `ControlRoomSnapshot.revenue.gross`. Buyer scopes never
+       *  see it, and a worker that predates it simply omits the field. */
+      revenue?: { gross?: number };
       shoppingSessions?: number;
       activeHolds?: number;
       hidden?: string[];
@@ -1284,19 +1359,22 @@ export class SeatManager {
       this.updateEffectiveAvailability(m.hidden, m.closed);
     }
     if (m.type === 'presence') {
-      if (
-        this.controlRoomSnapshot &&
-        typeof m.shoppingSessions === 'number' &&
-        typeof m.activeHolds === 'number'
-      ) {
-        this.controlRoomSnapshot = {
-          ...this.controlRoomSnapshot,
-          presence: { shoppingSessions: m.shoppingSessions, activeHolds: m.activeHolds },
+      // Presence used to be gated on a control-room snapshot already existing,
+      // which silently dropped every frame in the window right after connect —
+      // the exact window the cockpit is watched in. The counts are held on their
+      // own field now and merged into the snapshot whenever one lands.
+      if (typeof m.shoppingSessions === 'number' && typeof m.activeHolds === 'number') {
+        this.livePresence = {
+          at: Date.now(),
+          value: { shoppingSessions: m.shoppingSessions, activeHolds: m.activeHolds },
         };
+        if (this.controlRoomSnapshot) {
+          this.controlRoomSnapshot = { ...this.controlRoomSnapshot, presence: this.livePresence.value };
+          this.opts.onControlRoom?.(this.controlRoomSnapshot);
+        }
         this.lastSyncedAt = Date.now();
         this.recomputeTallies();
         this.paintMonitorInsights();
-        this.opts.onControlRoom?.(this.controlRoomSnapshot);
       }
       return;
     }
@@ -1310,7 +1388,7 @@ export class SeatManager {
         const st = (['free', 'held', 'booked', 'blocked'].includes(ch.status) ? ch.status : 'free') as DoStatus;
         const prev = this.status.get(ch.label) ?? 'free';
         if (prev === st) continue;
-        this.status.set(ch.label, st);
+        this.setStatusLabel(ch.label, st, prev);
         const id = this.labelToId.get(ch.label);
         if (id) { this.renderer?.setStatus([id], toRenderStatus(st)); ids.push(id); }
         const verb = this.verbFor(prev, st);
@@ -1327,9 +1405,42 @@ export class SeatManager {
         this.lastSyncedAt = Date.now();
         this.afterPaint();
       }
+      // Money rides the frame now. GA-only sales register no renderer id, so a
+      // refresh gated on `ids.length` never fired for them and GROSS SALES sat
+      // frozen; a frame that carries the figure needs no fetch at all.
+      if (typeof m.revenue?.gross === 'number' && Number.isFinite(m.revenue.gross)) {
+        this.applyLiveGross(m.revenue.gross);
+      }
       this.recomputeTallies();
-      if (ids.length) this.scheduleRevenueRefresh();
     }
+  }
+
+  /**
+   * Adopt the cumulative booked gross a delta frame carried.
+   *
+   * Stashed with its arrival time so an in-flight control-room read can decide
+   * whether it is holding the newer number: a frame that landed after the
+   * request started is newer than the response, one that landed before is not.
+   */
+  private applyLiveGross(gross: number): void {
+    this.liveGross = { at: Date.now(), value: gross };
+    this.authoritativeGrossRevenue = gross;
+    this.revenueStatus = 'current';
+    if (this.controlRoomSnapshot) {
+      this.controlRoomSnapshot = {
+        ...this.controlRoomSnapshot,
+        revenue: { ...this.controlRoomSnapshot.revenue, gross },
+      };
+      this.opts.onControlRoom?.(this.controlRoomSnapshot);
+    }
+  }
+
+  /** The single writer for a label's status, so the counters never drift. */
+  private setStatusLabel(label: string, next: DoStatus, prev = this.status.get(label) ?? 'free'): void {
+    this.status.set(label, next);
+    if (prev === next) return;
+    if (prev !== 'free') this.counts[prev] -= 1;
+    if (next !== 'free') this.counts[next] += 1;
   }
 
   private async resnapshot(): Promise<void> {
@@ -1359,16 +1470,26 @@ export class SeatManager {
     const next = new Map<string, DoStatus>();
     if (fallback !== undefined) {
       const base = known(fallback);
-      for (const label of this.labelToId.keys()) next.set(label, base);
+      // GA units take the modal status too — they are inventory the server sells.
+      for (const label of this.knownLabels()) next.set(label, base);
     }
     for (const [label, st] of Object.entries(seats)) {
       next.set(label, known(st));
     }
     this.status = next;
+    this.modelVersion += 1;
+    this.recountAll();
     this.lastSyncedAt = Date.now();
     this.repaintAll();
     this.afterPaint();
     this.recomputeTallies();
+  }
+
+  /** The one O(n) walk left: a wholesale model replacement re-bases the counters. */
+  private recountAll(): void {
+    const counts: Record<Exclude<DoStatus, 'free'>, number> = { held: 0, booked: 0, blocked: 0 };
+    for (const st of this.status.values()) if (st !== 'free') counts[st] += 1;
+    this.counts = counts;
   }
 
   /** Optimistic local write shared by organizer actions. Paint and tally once,
@@ -1376,7 +1497,7 @@ export class SeatManager {
   private setSeatsLocal(labels: string[], st: DoStatus): void {
     const ids: string[] = [];
     for (const label of labels) {
-      this.status.set(label, st);
+      this.setStatusLabel(label, st);
       const id = this.labelToId.get(label);
       if (id) ids.push(id);
     }
@@ -1521,12 +1642,33 @@ export class SeatManager {
     this.recomputeTallies();
   }
 
+  /**
+   * Read the server's own control-room projection.
+   *
+   * Called on mount, on every socket (re)connect and after an organizer action —
+   * never on a timer and never per delta frame. Presence and gross that arrived
+   * on the socket AFTER this request started are newer than the response, so
+   * they survive it; anything older defers to the read.
+   */
   private async refreshControlRoom(): Promise<ControlRoomSnapshot> {
     const request = ++this.revenueRequest;
+    const requestedAt = Date.now();
     try {
-      const snapshot = await this.api.controlRoom(this.key, this.trendWindowMinutes);
+      const fetched = await this.api.controlRoom(this.key, this.trendWindowMinutes);
+      let snapshot = fetched;
       if (request === this.revenueRequest) {
+        if (this.livePresence && this.livePresence.at >= requestedAt) {
+          snapshot = { ...snapshot, presence: this.livePresence.value };
+        } else {
+          this.livePresence = null;
+        }
+        if (this.liveGross && this.liveGross.at >= requestedAt) {
+          snapshot = { ...snapshot, revenue: { ...snapshot.revenue, gross: this.liveGross.value } };
+        } else {
+          this.liveGross = null;
+        }
         this.controlRoomSnapshot = snapshot;
+        this.rebaseServerTotals(snapshot);
         this.lastSyncedAt = Date.now();
         this.authoritativeGrossRevenue = snapshot.revenue.gross;
         this.currency = snapshot.currency;
@@ -1536,6 +1678,8 @@ export class SeatManager {
         this.paintMonitorInsights();
         this.opts.onControlRoom?.(snapshot);
       }
+      // The host is handed the same object the cockpit adopted — a public
+      // getter that disagreed with `onControlRoom` would be its own defect.
       return snapshot;
     } catch (err) {
       if (request === this.revenueRequest) {
@@ -1546,34 +1690,81 @@ export class SeatManager {
     }
   }
 
-  private scheduleRevenueRefresh(delay = 140): void {
-    this.revenueStatus = 'stale';
-    this.recomputeTallies();
-    if (this.revenueRefreshTimer) clearTimeout(this.revenueRefreshTimer);
-    this.revenueRefreshTimer = setTimeout(() => {
-      this.revenueRefreshTimer = null;
-      void this.refreshControlRoom().catch((err) => this.opts.onError?.(err));
-    }, delay);
+  /** Pin the server's totals to the client model they were read against. */
+  private rebaseServerTotals(snapshot: ControlRoomSnapshot): void {
+    const totals = snapshot.totals;
+    if (!totals || ['free', 'held', 'booked', 'blocked'].some(
+      (key) => !Number.isFinite((totals as unknown as Record<string, number>)[key]),
+    )) {
+      this.serverBaseline = null;
+      return;
+    }
+    this.serverBaseline = {
+      model: this.modelVersion,
+      server: { free: totals.free, held: totals.held, booked: totals.booked, blocked: totals.blocked },
+      client: this.clientTallies(),
+    };
   }
 
-  private recomputeTallies(): void {
+  /** What the client's own model says — GA units included since `render()`. */
+  private clientTallies(): { free: number; held: number; booked: number; blocked: number } {
+    const { held, booked, blocked } = this.counts;
+    // The snapshot only carries non-free, so free is what is left over.
+    return { held, booked, blocked, free: Math.max(0, this.unitTotal() - held - booked - blocked) };
+  }
+
+  /**
+   * The numbers the KPI bar and rail render.
+   *
+   * The server is the authority: its totals land exactly as read, and the
+   * delta-driven client model carries them forward until the next read. Before
+   * the first snapshot — and after a wholesale model replacement invalidates the
+   * pairing — the client model stands alone.
+   */
+  private buildTallies(): SeatManagerTallies {
+    const client = this.clientTallies();
+    const baseline = this.serverBaseline?.model === this.modelVersion ? this.serverBaseline : null;
+    const of = (key: 'free' | 'held' | 'booked' | 'blocked'): number => (baseline
+      ? Math.max(0, baseline.server[key] + (client[key] - baseline.client[key]))
+      : client[key]);
+    const seatTotal = this.controlRoomSnapshot?.event?.seatTotal;
     const t: SeatManagerTallies = {
-      free: 0, held: 0, booked: 0, blocked: 0,
-      total: this.allIds.length, capacityPct: 0, sellThroughPct: 0,
+      free: of('free'), held: of('held'), booked: of('booked'), blocked: of('blocked'),
+      total: Number.isFinite(seatTotal) ? (seatTotal as number) : this.unitTotal(),
+      capacityPct: 0,
+      sellThroughPct: 0,
       grossRevenue: this.authoritativeGrossRevenue,
       revenueStatus: this.revenueStatus,
       currency: this.currency,
     };
-    // free = total − (held+booked+blocked); the snapshot only carries non-free.
-    let nonFree = 0;
-    for (const st of this.status.values()) {
-      t[st] += 1;
-      if (st !== 'free') nonFree += 1;
-    }
-    t.free = Math.max(0, t.total - nonFree);
     t.capacityPct = t.total ? Math.round((t.booked / t.total) * 100) : 0;
     const sellable = t.total - t.blocked;
     t.sellThroughPct = sellable > 0 ? Math.round((t.booked / sellable) * 100) : 0;
+    return t;
+  }
+
+  /**
+   * Queue one KPI/rail repaint for this burst of changes.
+   *
+   * A delta frame can carry hundreds of seats and `paintKpis` rebuilds eight
+   * nodes from scratch, so painting per change is what made an arena-sized
+   * frame expensive. Coalescing on a frame keeps the burst to a single rebuild;
+   * without `requestAnimationFrame` (SSR, an older test env) it paints inline
+   * rather than dropping the update.
+   */
+  private recomputeTallies(): void {
+    if (this.closed) return;
+    if (typeof requestAnimationFrame !== 'function') { this.flushTallies(); return; }
+    if (this.paintHandle !== null) return;
+    this.paintHandle = requestAnimationFrame(() => {
+      this.paintHandle = null;
+      this.flushTallies();
+    });
+  }
+
+  private flushTallies(): void {
+    if (this.closed) return;
+    const t = this.buildTallies();
     this.paintKpis(t);
     if (this.mode === 'view') {
       this.paintLegend(t);
@@ -1878,16 +2069,21 @@ export class SeatManager {
   private paintKpis(t: SeatManagerTallies): void {
     if (!this.els.kpis) return;
     const rev = t.revenueStatus === 'current' ? fmtMoney(t.grossRevenue, t.currency) : '—';
-    const presence = this.controlRoomSnapshot?.presence;
-    const items: { key: string; raw: number | null; n: string; l: string; dot?: string }[] = [
-      { key: 'sold-seats', raw: t.booked, n: t.booked.toLocaleString(), l: 'Sold seats', dot: '#22a06b' },
-      { key: 'held-seats', raw: t.held, n: t.held.toLocaleString(), l: 'Held seats', dot: '#f4b740' },
-      { key: 'buyers', raw: presence?.shoppingSessions ?? null, n: presence ? presence.shoppingSessions.toLocaleString() : '—', l: 'Buyers' },
-      { key: 'active-holds', raw: presence?.activeHolds ?? null, n: presence ? presence.activeHolds.toLocaleString() : '—', l: 'Active holds' },
-      { key: 'free-seats', raw: t.free, n: t.free.toLocaleString(), l: 'Free seats', dot: '#6e7bff' },
-      { key: 'blocked', raw: t.blocked, n: t.blocked.toLocaleString(), l: 'Blocked', dot: '#8b94ac' },
-      { key: 'sold-pct', raw: t.capacityPct, n: `${t.capacityPct}%`, l: 'Sold' },
-      { key: 'gross-sales', raw: t.revenueStatus === 'current' ? t.grossRevenue : null, n: rev, l: 'Gross sales' },
+    const presence = this.presenceCounts();
+    // Two different units share this bar and used to be interleaved: "Held
+    // seats" (seat units) sat next to "Active holds" (checkout sessions), which
+    // read as the same quantity counted twice. Seat tallies are grouped, the
+    // session-scale pair is grouped, and the session one is named for what it
+    // is — a cart.
+    const items: { key: string; raw: number | null; n: string; l: string; dot?: string; title: string }[] = [
+      { key: 'sold-seats', raw: t.booked, n: t.booked.toLocaleString(), l: 'Sold seats', dot: '#22a06b', title: 'Seats booked' },
+      { key: 'held-seats', raw: t.held, n: t.held.toLocaleString(), l: 'Held seats', dot: '#f4b740', title: 'Seats held in a checkout right now' },
+      { key: 'free-seats', raw: t.free, n: t.free.toLocaleString(), l: 'Free seats', dot: '#6e7bff', title: 'Seats on sale and unsold' },
+      { key: 'blocked', raw: t.blocked, n: t.blocked.toLocaleString(), l: 'Blocked', dot: '#8b94ac', title: 'Seats withheld from sale' },
+      { key: 'buyers', raw: presence?.shoppingSessions ?? null, n: presence ? presence.shoppingSessions.toLocaleString() : '—', l: 'Buyers', title: 'People on the map right now' },
+      { key: 'carts', raw: presence?.activeHolds ?? null, n: presence ? presence.activeHolds.toLocaleString() : '—', l: 'Carts', title: 'Checkouts holding seats right now — sessions, not seats' },
+      { key: 'sold-pct', raw: t.capacityPct, n: `${t.capacityPct}%`, l: 'Sold', title: 'Sold seats as a share of the whole event' },
+      { key: 'gross-sales', raw: t.revenueStatus === 'current' ? t.grossRevenue : null, n: rev, l: 'Gross sales', title: 'Exact booked gross' },
     ];
     let hasChanges = false;
     this.els.kpis.innerHTML = items.map((item) => {
@@ -1903,7 +2099,7 @@ export class SeatManager {
       }
       if (item.raw != null) this.lastKpiValues.set(item.key, item.raw);
       const activeDelta = this.activeKpiDeltas.get(item.key);
-      return `<div class="slm-kpi${activeDelta ? ' changed' : ''}" data-kpi="${item.key}">
+      return `<div class="slm-kpi${activeDelta ? ' changed' : ''}" data-kpi="${item.key}" title="${esc(item.title)}">
         <b>${item.dot ? `<span class="dot" style="background:${item.dot}"></span>` : ''}${item.n}</b><span>${item.l}</span>
         ${activeDelta ? `<span class="slm-kpidelta${activeDelta.down ? ' down' : ''}">${activeDelta.text}</span>` : ''}
       </div>`;
@@ -1968,15 +2164,22 @@ export class SeatManager {
     this.paintFeed();
   }
 
+  /** Live presence wins over the snapshot's copy — it is the fresher channel,
+   *  and it exists from the first frame rather than the first fetch. */
+  private presenceCounts(): { shoppingSessions: number; activeHolds: number } | null {
+    return this.livePresence?.value ?? this.controlRoomSnapshot?.presence ?? null;
+  }
+
   private paintMonitorInsights(): void {
     if (this.mode !== 'view') return;
     const snapshot = this.controlRoomSnapshot;
     if (this.els.presence) {
       const connected = this.root?.classList.contains('live');
       const sync = this.lastSyncedAt ? relTime(this.lastSyncedAt, Date.now()) : 'waiting';
+      const presence = this.presenceCounts();
       this.els.presence.innerHTML = `
-        <div class="slm-healthitem"><b>${snapshot ? snapshot.presence.shoppingSessions.toLocaleString() : '—'}</b><span>Buyer sessions</span></div>
-        <div class="slm-healthitem"><b>${snapshot ? snapshot.presence.activeHolds.toLocaleString() : '—'}</b><span>Active holds</span></div>
+        <div class="slm-healthitem" title="People on the map right now"><b>${presence ? presence.shoppingSessions.toLocaleString() : '—'}</b><span>Buyers</span></div>
+        <div class="slm-healthitem" title="Checkouts holding seats right now — sessions, not seats"><b>${presence ? presence.activeHolds.toLocaleString() : '—'}</b><span>Carts</span></div>
         <div class="slm-healthitem"><b>${connected ? 'Healthy' : 'Reconnecting'}</b><span>Live connection</span></div>
         <div class="slm-healthitem"><b>${sync}</b><span>Last sync</span></div>`;
     }
@@ -2644,7 +2847,10 @@ export class SeatManager {
             : null;
       if (activity) this.paintSpatialActivity(activity);
     }
-    if (action !== 'setHoldTtl') this.scheduleRevenueRefresh(0);
+    // An explicit organizer action is one of the three moments the server's own
+    // totals and money are re-read (mount, (re)connect, action) — the cockpit
+    // does not poll for them.
+    if (action !== 'setHoldTtl') void this.refreshControlRoom().catch((err) => this.opts.onError?.(err));
     this.opts.onActionComplete?.({ action, labels, count: labels.length });
   }
 
