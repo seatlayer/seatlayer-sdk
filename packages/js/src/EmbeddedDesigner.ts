@@ -669,8 +669,9 @@ export class EmbeddedDesigner {
 
   private buildSkeleton(overlay: HTMLDivElement): void {
     // Scoped keyframes; the shimmer only runs when the user allows motion.
+    // `@sl-css` opts it into build-time minification (cdn/minifyCssLiterals.ts).
     const style = document.createElement('style');
-    style.textContent = `
+    style.textContent = /* @sl-css */ `
 @media (prefers-reduced-motion: no-preference) {
   @keyframes seatlayer-designer-shimmer {
     0% { background-position: -320px 0; }

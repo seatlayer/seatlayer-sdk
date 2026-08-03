@@ -443,9 +443,16 @@ async function loadVenue3d(): Promise<Venue3DModule> {
   return import('@seatlayer/core/view3d');
 }
 
-/** Widget stylesheet — injected once per document. Every color/font/radius is a --sl-* token. */
+/**
+ * Widget stylesheet — injected once per document. Every color/font/radius is a
+ * --sl-* token.
+ *
+ * The `@sl-css` marker opts this literal into build-time CSS minification (see
+ * cdn/minifyCssLiterals.ts). Keep writing it long-hand and commented: the CDN
+ * build strips the comments and the indentation, the source keeps them.
+ */
 const STYLE_ID = 'seatlayer-picker-style';
-const CSS = `
+const CSS = /* @sl-css */ `
 .sl-picker{position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-height:420px;overflow:hidden;
   background:var(--sl-bg);color:var(--sl-text);font-family:var(--sl-font);border-radius:var(--sl-radius);
   --sl-r-sm:calc(var(--sl-radius) * .55);

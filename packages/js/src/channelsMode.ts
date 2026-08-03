@@ -201,8 +201,9 @@ const ALLOCATION_STROKE = '#101723';
  * Motion tokens (motion-system §2) plus Channels choreography (§3). Declared on
  * the widget root as `--slm-mo-*` so an embed never inherits host motion CSS.
  * Every keyframe below has its `prefers-reduced-motion` override in this block.
+ * `@sl-css` opts it into build-time minification (cdn/minifyCssLiterals.ts).
  */
-export const CHANNELS_CSS = `
+export const CHANNELS_CSS = /* @sl-css */ `
 .slm{--slm-mo-instant:80ms;--slm-mo-quick:140ms;--slm-mo-base:200ms;--slm-mo-slow:320ms;--slm-mo-ambient:2000ms;
   --slm-mo-out:cubic-bezier(.2,.8,.2,1);--slm-mo-in-out:cubic-bezier(.4,0,.2,1);--slm-mo-exit:cubic-bezier(.4,0,1,1);
   --slm-mo-spring:cubic-bezier(.34,1.3,.64,1)}

@@ -269,8 +269,9 @@ const LEGEND: { key: 'free' | 'held' | 'booked' | 'blocked'; label: string; colo
 ];
 
 /** Exported so the motion contract can be asserted without a real browser —
- *  see `SeatManagerMotion.test.ts`. Not part of the public package surface. */
-export const MANAGER_CSS = `
+ *  see `SeatManagerMotion.test.ts`. Not part of the public package surface.
+ *  `@sl-css` opts it into build-time minification (cdn/minifyCssLiterals.ts). */
+export const MANAGER_CSS = /* @sl-css */ `
 .slm{position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-height:480px;overflow:hidden;
   background:var(--slm-bg);color:var(--slm-text);font-family:var(--slm-font);border-radius:var(--slm-radius);
   /* Motion tokens (motion-system §2), declared by the cockpit ROOT rather than

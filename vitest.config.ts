@@ -8,6 +8,9 @@ export default defineConfig({
     // iframe never hits the network during unit tests.
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
-    include: ['packages/*/test/**/*.test.ts'],
+    // Plus the CDN build tooling: cdn/ is not a workspace package, but the CSS
+    // literal minifier rewrites every byte of shipped stylesheet, so it is tested
+    // rather than trusted.
+    include: ['packages/*/test/**/*.test.ts', 'cdn/test/**/*.test.ts'],
   },
 });

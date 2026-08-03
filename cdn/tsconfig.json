@@ -16,5 +16,7 @@
       "@seatlayer/js": ["packages/js/src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "../packages/core/src/env.d.ts"]
+  // minifyCssLiterals.ts is build tooling rather than bundled source, but it
+  // rewrites every byte of shipped stylesheet, so it is typechecked like source.
+  "include": ["src/**/*.ts", "minifyCssLiterals.ts", "../packages/core/src/env.d.ts"]
 }

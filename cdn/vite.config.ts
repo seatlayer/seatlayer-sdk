@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 import jsPackage from '../packages/js/package.json';
+import { minifyCssLiterals } from './minifyCssLiterals';
 
 const version = jsPackage.version;
 // Canonical CDN namespace: /seatlayer-js@<x.y.z>/seatlayer.js. The filename is
@@ -8,6 +9,10 @@ const version = jsPackage.version;
 const releaseDir = resolve(__dirname, `dist/seatlayer-js@${version}`);
 
 export default defineConfig({
+  // The widget's stylesheets live in TS template literals, which esbuild's JS
+  // minifier cannot see into — so they are minified here instead. See
+  // cdn/minifyCssLiterals.ts.
+  plugins: [minifyCssLiterals()],
   define: {
     __SEATLAYER_SDK_VERSION__: JSON.stringify(version),
     // CDN bundles can't code-split, so the widget loads the lazy 3D chunk
