@@ -140,6 +140,21 @@ export interface SeatingChartOptions {
   onSelectedObjectUnavailable?: (event: SelectedObjectUnavailableEvent) => void;
   onError?: (err: unknown) => void;
   /**
+   * What the BUYER sees when the chart cannot load.
+   *
+   * `'message'` (the default) renders a plain, styleable notice with a Try
+   * again button. This used to be silent unconditionally: `render()` returned
+   * with an EMPTY mounted div and only `onError` fired, so a host that had not
+   * wired `onError` — or had wired it to a logger — showed buyers a blank
+   * rectangle where the seat map belongs, on the host's own domain, which
+   * reads as a broken website rather than a temporary fault. `SeatPicker` has
+   * always failed loud with a retry; this is the embed class catching up.
+   *
+   * `'none'` restores the silent behaviour for hosts that render their own
+   * failure UI from `onError`.
+   */
+  errorDisplay?: 'message' | 'none';
+  /**
    * Multi-floor charts only: fires when the buyer taps a deck in the stacked
    * 3D view, after the picker switches to that floor — lets the host page sync
    * its own floor UI (tabs, labels) with the map.
@@ -174,6 +189,7 @@ export class SeatingChart {
   private mount: HTMLElement | null = null;
   private hostEl: HTMLDivElement | null = null;
   private rendered = false;
+  private retryBtn: HTMLButtonElement | null = null;
   private mode_: 'live' | 'test' | null = null;
   private tipEl: HTMLDivElement | null = null;
   private tipPos = { x: 0, y: 0 };
@@ -250,6 +266,7 @@ export class SeatingChart {
     const info = await this.controller.render(host);
     if (!info) {
       this.rendered = false;
+      if (this.opts.errorDisplay !== 'none') this.showLoadFailure(host);
       return this;
     }
     this.controller.setViewMode(this.opts.initialView ?? 'flat');
@@ -628,10 +645,47 @@ export class SeatingChart {
     return ok;
   }
 
+  /**
+   * The visible failure state. Deliberately inline-styled and dependency-free:
+   * this renders on a stranger's website, where our stylesheet may not have
+   * loaded (the chart fetch just failed) and where inheriting the host's own
+   * styles is likelier to produce something unreadable than something on-brand.
+   */
+  private showLoadFailure(host: HTMLDivElement): void {
+    const box = document.createElement('div');
+    box.setAttribute('role', 'status');
+    box.style.cssText =
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;' +
+      'width:100%;height:100%;min-height:180px;box-sizing:border-box;padding:24px;text-align:center;' +
+      'font:500 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#3b4256;';
+
+    const text = document.createElement('div');
+    // No error detail: a buyer cannot act on it, and it can carry internals.
+    text.textContent = 'The seat map didn’t load.';
+    box.appendChild(text);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Try again';
+    btn.style.cssText =
+      'appearance:none;border:1px solid #c9cede;background:#fff;color:#10162a;border-radius:8px;' +
+      'padding:8px 16px;font:600 13px/1 inherit;cursor:pointer;';
+    btn.addEventListener('click', () => {
+      // Full remount: the controller holds no partial state worth salvaging
+      // after a failed render, and this is the same recovery SeatPicker uses.
+      this.destroy();
+      void this.render().catch((err) => this.opts.onError?.(err));
+    });
+    box.appendChild(btn);
+    this.retryBtn = btn;
+    host.appendChild(box);
+  }
+
   destroy(): void {
     this.realtime?.stop();
     this.realtime = null;
     this.access?.clear();
+    this.retryBtn = null;
     if (this.hostEl && this.onTipMove) this.hostEl.removeEventListener('mousemove', this.onTipMove);
     this.tipEl = null;
     this.onTipMove = null;
