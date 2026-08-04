@@ -335,17 +335,33 @@ export interface SeatPickerOptions {
    * 1. It needs the widget's own transport. A host-supplied `transport` owns its
    *    credentials and its backend, so hosted checkout stays off there (with one
    *    console warning) rather than reaching past it to api.seatlayer.io.
-   * 2. WHERE A HOSTED GATEWAY RETURNS THE BUYER IS THE SERVER'S CHOICE. The
-   *    checkout session's return URL is built from the deployment's own allowed
-   *    origins, so a buyer paying by card from an embed on your domain comes back
-   *    to SeatLayer's buyer page and is confirmed THERE, not in this widget. The
-   *    widget resumes in place only when it is mounted on a page that actually
-   *    receives `?order=…&status=success` (a page on an allowed origin, and the
-   *    in-page gateways, which never navigate away at all). Until the server
-   *    accepts a caller-supplied return URL, treat a card payment from a
-   *    third-party embed as "the buyer finishes on our page".
+   * 2. WHERE A HOSTED GATEWAY RETURNS THE BUYER is settled by {@link returnUrl}
+   *    and by the organizer. Without one — or from an origin the organizer has
+   *    not declared — the buyer comes back to SeatLayer's own buyer page and is
+   *    confirmed THERE, not in this widget. Declare the embedding site under
+   *    Embed domains in the dashboard and pass `returnUrl`, and the buyer
+   *    returns to your page instead. In-page gateways never navigate away at
+   *    all, so they are unaffected either way.
    */
   checkout?: 'handoff' | 'hosted';
+  /**
+   * Where a redirecting gateway should send the buyer back to, for
+   * `checkout: 'hosted'`.
+   *
+   * The server keeps this URL verbatim — path and query included — and only
+   * stamps `?order=…&status=success|cancelled` onto it, so point it at
+   * whichever of YOUR pages should confirm the purchase (often just
+   * `window.location.href`). Mount a picker on that page and it resumes in
+   * place from those parameters.
+   *
+   * It is validated, not trusted: the organizer declares their embed origins
+   * in the dashboard, and an undeclared origin is ignored rather than
+   * refused — the sale still completes, the buyer just finishes on
+   * SeatLayer's page. Supplying a URL therefore cannot authorize it, which is
+   * what stops a copied snippet from redirecting a paid buyer anywhere it
+   * likes.
+   */
+  returnUrl?: string;
   /**
    * Buyer pressed the CTA and the hold succeeded — hand off to YOUR checkout.
    * `hold` and `seats` are the legacy args (unchanged since 0.6). `handoff` (P4)
@@ -4773,7 +4789,15 @@ export class SeatPicker {
     this.checkoutPanel = mountCheckout({
       root: this.root,
       state,
-      startSession: (input) => this.pubApi!.startCheckout(this.opts.event, input),
+      // `returnUrl` rides along so a redirecting gateway can come back to the
+      // HOST's page. The server validates its origin against the organizer's
+      // declared embed domains and silently falls back to our own buyer page
+      // when it does not match, so passing one can never redirect a paid buyer
+      // somewhere the organizer did not sanction.
+      startSession: (input) => this.pubApi!.startCheckout(this.opts.event, {
+        ...input,
+        ...(this.opts.returnUrl ? { returnUrl: this.opts.returnUrl } : {}),
+      }),
       orderStatus: (orderId) => this.pubApi!.orderStatus(orderId),
       onCancel: () => {
         this.checkoutPanel = null;

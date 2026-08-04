@@ -383,7 +383,7 @@ export class PubApi {
    */
   startCheckout(
     key: string,
-    input: { holdId: string; buyerEmail: string; buyerName?: string },
+    input: { holdId: string; buyerEmail: string; buyerName?: string; returnUrl?: string },
   ): Promise<CheckoutSessionResult> {
     return this.request(`/pub/events/${encodeURIComponent(key)}/checkout`, {
       method: 'POST',
