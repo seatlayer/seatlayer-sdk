@@ -5,7 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](../../LICENSE)
 
 The low-level, framework-agnostic rendering engine and shared domain model behind
-the SeatLayer SDKs. It is pure TypeScript with a Konva canvas renderer.
+the SeatLayer SDKs. It is pure TypeScript with a hardware-accelerated canvas
+renderer and an optional WebGL venue view.
 
 [Package on npm](https://www.npmjs.com/package/@seatlayer/core) ·
 [Source](https://github.com/seatlayer/seatlayer-sdk/tree/main/packages/core) ·
@@ -24,7 +25,7 @@ the SeatLayer SDKs. It is pure TypeScript with a Konva canvas renderer.
 npm install @seatlayer/core
 ```
 
-`konva`, `earcut`, and `ogl` are normal package dependencies and install with
+Its runtime dependencies are normal package dependencies and install with
 the package.
 
 ## Use it when
@@ -44,7 +45,7 @@ For a regular checkout integration, start with the
 
 | Export | Purpose |
 | --- | --- |
-| `createRenderer` / `SeatmapRenderer` | Create and control the Konva seat-map renderer |
+| `createRenderer` / `SeatmapRenderer` | Create and control the seat-map renderer |
 | `PickerController` | Coordinate selection and seat status with a host-supplied transport |
 | `ChartDoc`, `SeatStatus`, and domain types | Use the canonical chart and inventory contracts |
 | `expandChart` and layout helpers | Expand venue geometry into positioned bookable objects |
