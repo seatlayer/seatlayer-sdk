@@ -33,8 +33,14 @@ import {
   type SeatStatus,
   type SectionNode,
 } from '@seatlayer/core';
-import {
-  CHANNELS_CSS, ChannelsMode, type ChannelsCapabilities, type ChannelsRowView,
+// TYPE-ONLY, and it has to stay that way. Channels mode is a ~95 KB (minified)
+// sub-app that most cockpit visits never open, so it is reached through
+// `import('./channelsMode')` in `ensureChannels()`. A single value import here
+// would fold the whole thing back into first paint with nothing failing to say
+// so. Its stylesheet travels with it too: `CHANNELS_CSS` is injected by the
+// lazy load rather than concatenated into `MANAGER_CSS`.
+import type {
+  ChannelsMode, ChannelsCapabilities, ChannelsRowView,
 } from './channelsMode';
 import type { ChannelSeatStatus } from './channelPlan';
 import {
@@ -261,6 +267,8 @@ function toRenderStatus(s: DoStatus): SeatStatus {
 
 const DEFAULT_API_BASE = 'https://api.seatlayer.io';
 const STYLE_ID = 'seatlayer-manager-style';
+/** Channels mode's stylesheet — injected with its lazy module, not before. */
+const CHANNELS_STYLE_ID = 'seatlayer-manager-channels-style';
 const FEED_CAP = 80;
 const MAX_LIVE_SEAT_PULSES = 16;
 const MAX_LIVE_SECTION_PULSES = 4;
@@ -523,13 +531,34 @@ export const MANAGER_CSS = /* @sl-css */ `
     transition:none!important;
     scroll-behavior:auto!important}
 }
-${CHANNELS_CSS}`;
+`;
 
 function injectStyle(): void {
   if (typeof document === 'undefined' || document.getElementById(STYLE_ID)) return;
   const el = document.createElement('style');
   el.id = STYLE_ID;
   el.textContent = MANAGER_CSS;
+  document.head.appendChild(el);
+}
+
+/**
+ * Channels mode's stylesheet, injected when its module arrives.
+ *
+ * It used to be concatenated into `MANAGER_CSS`, which meant the whole Channels
+ * stylesheet was a static dependency of the cockpit's first paint even for the
+ * majority of visits that never open Channels. Splitting it here is what lets
+ * `channelsMode` leave the static graph entirely.
+ *
+ * Its own `<style>` element, and a second id, so the base cockpit's stylesheet
+ * is never rewritten after mount — restyling a live surface is how a repaint
+ * turns into a flash. Every rule inside is scoped under `.slm`, so arriving
+ * late changes nothing that was already on screen.
+ */
+function injectChannelsStyle(css: string): void {
+  if (typeof document === 'undefined' || document.getElementById(CHANNELS_STYLE_ID)) return;
+  const el = document.createElement('style');
+  el.id = CHANNELS_STYLE_ID;
+  el.textContent = css;
   document.head.appendChild(el);
 }
 
@@ -676,10 +705,25 @@ export class SeatManager {
   private blockedResultLimit = 100;
   private unblockAllConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Sales channels (M6b). The mode object is built only once the token is known
-  // to carry `event:channels:view`; until then there is no pill and no rail.
+  /**
+   * Sales channels (M6b).
+   *
+   * Two fields, and the split between them is the whole point. `channelCaps` is
+   * AUTHORITY and is known early — it is read from the token's declared
+   * capabilities before the first rail paint, so the Channels pill either
+   * exists from the start or never appears. `channels` is the loaded sub-app,
+   * and it now arrives late: its module is fetched on first entry into Channels
+   * mode (`ensureChannels`), not at mount.
+   *
+   * So every gate that used to ask `!!this.channels` — the pill, the mode
+   * whitelist, the `c` shortcut — asks `channelCaps.view` instead. Asking the
+   * instance would make a permission the member genuinely has look like one
+   * they do not for as long as a network fetch takes.
+   */
   private channels: ChannelsMode | null = null;
   private channelCaps: ChannelsCapabilities = { view: false, manage: false };
+  /** In-flight `import('./channelsMode')`, so concurrent entries load once. */
+  private channelsLoading: Promise<void> | null = null;
 
   private readonly onFullscreenChange = (): void => {
     this.paintFullscreenButton();
@@ -696,7 +740,7 @@ export class SeatManager {
     else if (key === 'i') this.setMode('inspect');
     else if (key === 'b') this.setMode('block');
     else if (key === 's') this.setMode('sections');
-    else if (key === 'c') { if (!this.channels) return; this.setMode('channels'); }
+    else if (key === 'c') { if (!this.channelCaps.view) return; this.setMode('channels'); }
     else if (key === 'f') this.toggleFullscreen();
     else if (key === 'escape') { if (!this.channels?.handleBack()) return; }
     else return;
@@ -767,8 +811,12 @@ export class SeatManager {
 
   setMode(mode: SeatManagerMode): void {
     // Fail closed: a host asking for a mode this token cannot use gets the
-    // read-only board, never a half-rendered management surface.
-    if (mode === 'channels' && !this.channels) mode = 'view';
+    // read-only board, never a half-rendered management surface. The test is
+    // the CAPABILITY, not whether the lazy module has landed — see `channels`.
+    if (mode === 'channels' && !this.channelCaps.view) mode = 'view';
+    // First entry pays for the module. Kicked off before the paints below so
+    // the fetch overlaps the mode switch instead of following it.
+    if (mode === 'channels' && !this.channels) void this.ensureChannels();
     const changed = mode !== this.mode;
     const wasChannels = this.mode === 'channels';
     this.mode = mode;
@@ -820,15 +868,64 @@ export class SeatManager {
       this.paintModeTabs();
       return;
     }
-    if (this.channels) {
-      this.channels.setCapabilities(this.channelCaps);
-    } else {
-      this.channels = new ChannelsMode(this.buildChannelsHost(), this.channelCaps);
-      // Entering/leaving buyer preview flips the canvas between selectable and
-      // strictly read-only, so re-arm the renderer when the view changes.
-      this.channels.onInteractionChange = () => this.updateRendererInteraction();
-    }
+    // The instance is NOT built here any more — only the authority is settled.
+    // Building it would load the sub-app on every mount, which is the cost this
+    // split exists to remove. An instance that already exists (a token rotation
+    // re-runs this) is told about the new capabilities in place.
+    this.channels?.setCapabilities(this.channelCaps);
     this.paintModeTabs();
+  }
+
+  /**
+   * Load Channels mode, once, on first entry.
+   *
+   * Everything about this method is shaped by one rule: the cockpit must stay
+   * usable and honest while the module is in the air.
+   *
+   * - The promise is memoized, so a member who taps the pill twice, or a host
+   *   whose deep link and initial `mode` prop both ask for Channels, loads one
+   *   module and builds one instance.
+   * - Authority is re-checked on arrival. A token rotation can revoke
+   *   `event:channels:view` between the tap and the load, and building the
+   *   sub-app for a token that no longer carries the capability would put
+   *   mutation controls on screen that every server call then refuses.
+   * - The mode is re-checked too. Someone who taps Channels and then Monitor
+   *   before the chunk lands must not be yanked into Channels when it does; the
+   *   instance is kept (it is paid for) but only entered if we are still there.
+   * - A failed load is stated in the rail rather than swallowed. Channels is a
+   *   whole surface — silently showing an empty one would read as "this event
+   *   has no channels", which is a lie about inventory.
+   */
+  private ensureChannels(): Promise<void> {
+    if (this.channelsLoading) return this.channelsLoading;
+    if (this.channels) return Promise.resolve();
+    const load = (async () => {
+      try {
+        const mod = await import('./channelsMode');
+        if (this.closed) return;
+        // Re-read authority after the await — see above.
+        if (!this.channelCaps.view) return;
+        if (!this.channels) {
+          injectChannelsStyle(mod.CHANNELS_CSS);
+          this.channels = new mod.ChannelsMode(this.buildChannelsHost(), this.channelCaps);
+          // Entering/leaving buyer preview flips the canvas between selectable
+          // and strictly read-only, so re-arm the renderer when the view changes.
+          this.channels.onInteractionChange = () => this.updateRendererInteraction();
+        }
+        if (this.mode !== 'channels') return;
+        this.updateRendererInteraction();
+        this.paintRail();
+        this.channels.enter();
+      } catch (err) {
+        if (this.closed) return;
+        // Allow a retry: the member can leave and re-enter the mode.
+        this.channelsLoading = null;
+        if (this.mode === 'channels') this.paintRail();
+        this.opts.onError?.(err);
+      }
+    })();
+    this.channelsLoading = load;
+    return load;
   }
 
   /** The adapter between the cockpit's internals and Channels mode. */
@@ -1170,6 +1267,10 @@ export class SeatManager {
     this.paintHandle = null;
     this.channels?.destroy();
     this.channels = null;
+    // A load still in flight is not cancellable, but `this.closed` makes its
+    // continuation a no-op — so drop the memo rather than leaving a settled
+    // promise that would make a later `ensureChannels()` resolve into nothing.
+    this.channelsLoading = null;
     if (this.tokenRefreshTimer) clearTimeout(this.tokenRefreshTimer);
     this.layoutObserver?.disconnect();
     this.layoutObserver = null;
@@ -2006,7 +2107,8 @@ export class SeatManager {
       const mode = el.dataset.mode as SeatManagerMode;
       // No channel-view capability ⇒ the pill is not rendered at all. A hidden
       // control is honest about authority; a disabled one advertises it.
-      const permitted = mode !== 'channels' || !!this.channels;
+      // Authority, not readiness: the pill must not wait on the lazy module.
+      const permitted = mode !== 'channels' || this.channelCaps.view;
       el.hidden = !permitted;
       if (!permitted) return;
       available.push({ mode, label: el.textContent ?? mode });
@@ -2161,7 +2263,18 @@ export class SeatManager {
     if (this.mode === 'view') this.renderViewRail();
     else if (this.mode === 'inspect') this.renderInspectRail(this.getSelection());
     else if (this.mode === 'sections') this.renderSectionsRail();
-    else if (this.mode === 'channels') this.channels?.paintRail();
+    else if (this.mode === 'channels') {
+      // The sub-app may still be in the air (see `ensureChannels`). Say which
+      // of the two it is rather than leaving the rail blank: an empty Channels
+      // rail reads as "this event has no channels", which is a claim about
+      // inventory and would be false.
+      if (this.channels) this.channels.paintRail();
+      else if (this.channelsLoading) {
+        this.els.rail.innerHTML = '<div class="slm-empty" role="status">Loading sales channels…</div>';
+      } else {
+        this.els.rail.innerHTML = '<div class="slm-empty" role="alert">Sales channels could not be loaded. Switch away and back to try again.</div>';
+      }
+    }
     else this.renderBlockRail();
     this.updateZoomHint();
   }

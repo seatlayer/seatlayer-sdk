@@ -50,6 +50,26 @@ This is an **npm-only** split. There is no CDN counterpart and none of the CDN
 scripts change: the IIFE cannot code-split, so a browser consumer keeps getting
 one bundle with everything in it.
 
+### Channels mode is lazy (npm only)
+
+`packages/js/src/channelsMode.ts` — ~95 KB minified, plus its stylesheet — is
+reached through `import('./channelsMode')` in `SeatManager.ensureChannels()`, on
+first entry into Channels mode. Most cockpit visits never open it. On npm this
+chunk-splits automatically; on the CDN the dynamic import is inlined into the
+IIFE, so this is **not** a fourth lazy CDN chunk and none of the five CDN
+scripts or the Worker allowlist change.
+
+Two invariants, both pinned by `packages/js/test/SeatManagerChannelsLazy.test.ts`:
+
+- The `channelsMode` import in `SeatManager.ts` is **type-only**. A value import
+  — including `CHANNELS_CSS`, which is why that stylesheet is now injected by
+  the lazy load rather than concatenated into `MANAGER_CSS` — folds the sub-app
+  back into first paint with nothing failing to say so.
+- The Channels pill is gated on `channelCaps.view` (authority), never on
+  `this.channels` (readiness). Gating on the instance would make a capability
+  the member genuinely has look like one they do not, for as long as a fetch
+  takes.
+
 ### The CDN bundle is a superset of npm
 
 `cdn/src/index.ts` re-exports the whole `@seatlayer/js` public API **plus** the
