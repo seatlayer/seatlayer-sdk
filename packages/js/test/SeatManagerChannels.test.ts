@@ -780,6 +780,57 @@ describe('ChannelsMode rail repaints', () => {
   });
 });
 
+describe('ChannelsMode polling', () => {
+  let hidden = false;
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    hidden = false;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('skips ticks while the tab is hidden and catches up once on return', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await vi.advanceTimersByTimeAsync(1);
+    const reads = () => vi.mocked(harness.client.channels).mock.calls.length;
+    const initial = reads();
+
+    hidden = true;
+    await vi.advanceTimersByTimeAsync(120_000); // four ticks at the 30s cadence
+    expect(reads()).toBe(initial);
+
+    hidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads()).toBe(initial + 1);
+
+    harness.mode.leave();
+    // The listener goes with the mode — a left cockpit never polls again.
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads()).toBe(initial + 1);
+  });
+
+  it('re-walks the allocation only when the assignment version moved', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    const walks = () => vi.mocked(harness.client.channelAllocation).mock.calls.length;
+    expect(walks()).toBe(1);
+
+    harness.mode.applyRealtimeHint();
+    await flush();
+    expect(walks()).toBe(1); // same version — the pages cannot have changed
+
+    vi.mocked(harness.client.channels).mockResolvedValue({ ...listFixture(), assignmentVersion: 8 });
+    harness.mode.applyRealtimeHint();
+    await flush();
+    expect(walks()).toBe(2);
+  });
+});
+
 describe('ChannelsMode archive + preview', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
 

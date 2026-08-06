@@ -176,9 +176,14 @@ export interface ChannelsModeHost {
   onStagedChange?(staged: number): void;
 }
 
-/** Live-count refresh cadence. Matches the cockpit's existing STATS clock.
- *  Organizer realtime (M5's per-scope socket) plugs in at `applyRealtimeHint`. */
-const POLL_MS = 10_000;
+/**
+ * Live-count refresh cadence. Organizer realtime (M5's per-scope socket) plugs
+ * in at `applyRealtimeHint`, so this clock is a safety net, not the transport —
+ * it was 10s, which cost every idle cockpit six list+allocation walks a minute
+ * for counts that rarely move. Ticks are skipped entirely while the tab is
+ * hidden and one runs immediately when it comes back.
+ */
+const POLL_MS = 30_000;
 const MAX_FLAGS = 8;
 const SEAT_LIST_PAGE = 300;
 
@@ -559,6 +564,14 @@ export class ChannelsMode {
   /** The markup currently in the rail. An identical repaint is skipped, which is
    *  what keeps the organizer's scroll position (and open <select>) alive. */
   private railHtml: string | null = null;
+  /**
+   * The `assignmentVersion` the allocation map was built from. Walking every
+   * allocation page is the expensive half of a refresh and the server already
+   * tells us, in the channels response, whether ANY seat moved. Unchanged
+   * version, unchanged allocation — so the walk is skipped entirely.
+   */
+  private allocationVersion: number | null = null;
+  private onVisibility: (() => void) | null = null;
 
   constructor(host: ChannelsModeHost, capabilities: ChannelsCapabilities) {
     this.host = host;
@@ -583,7 +596,20 @@ export class ChannelsMode {
     this.paintRail();
     this.onInteractionChange?.();
     void this.refresh();
-    this.pollTimer = setInterval(() => { void this.refresh({ quiet: true }); }, POLL_MS);
+    // A hidden tab has no organizer looking at it. Polling it burns the event's
+    // rate budget to repaint pixels nobody can see — and browsers throttle the
+    // timer anyway, so the ticks that do land arrive in a clump. Skip them, and
+    // catch up with exactly one read when the tab comes back.
+    this.pollTimer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void this.refresh({ quiet: true });
+    }, POLL_MS);
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      this.onVisibility = () => {
+        if (this.active && !document.hidden) void this.refresh({ quiet: true });
+      };
+      document.addEventListener('visibilitychange', this.onVisibility);
+    }
   }
 
   /** Called when the cockpit leaves Channels mode. Everything this mode painted
@@ -593,6 +619,10 @@ export class ChannelsMode {
     this.active = false;
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
+    if (this.onVisibility && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.onVisibility);
+    }
+    this.onVisibility = null;
     this.railHtml = null;
     this.closeDialog({ restoreFocus: false });
     // Link status is per-channel and short-lived; nothing about it survives the
@@ -694,8 +724,16 @@ export class ChannelsMode {
       if (!this.targetChannelId) {
         this.targetChannelId = list.channels.find((c) => c.state === 'active')?.id ?? PUBLIC_CHANNEL_ID;
       }
-      await this.loadAllocation(seq);
-      if (superseded()) return;
+      // The allocation walk is the expensive half of this refresh (one request
+      // per 1,000 seats). `assignmentVersion` is bumped by the server on every
+      // assignment, so an unchanged version means an unchanged map — re-reading
+      // it would spend an arena's worth of round trips to rebuild an identical
+      // Map every poll tick.
+      if (this.allocationVersion !== list.assignmentVersion) {
+        await this.loadAllocation(seq);
+        if (superseded()) return;
+        this.allocationVersion = list.assignmentVersion;
+      }
       // Redemptions and live-session counts move on their own, so the open
       // channel's link status rides the same clock as its seat counts.
       if (this.detailChannelId) await this.loadLinks(this.detailChannelId);
