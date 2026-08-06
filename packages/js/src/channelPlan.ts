@@ -422,10 +422,12 @@ export function retryAfterCopy(details: ArchiveBlockedDetails | null | undefined
  *  branch lands the `access` field, never to a guess. */
 export function accessLine(access: ChannelAccessSummary | null | undefined): string {
   if (!access || !access.intent) return '—';
-  const base = access.intent === 'internal' ? 'Internal selling · no buyer access needed'
-    : access.intent === 'server' ? 'Server integration'
-      : access.intent === 'hosted_link' ? 'Hosted access link'
-        : 'No buyer access configured';
+  // 'none' and 'internal' are legacy stored values with no consumer anywhere —
+  // they are not offered in the UI and both mean the same true thing: the seats
+  // are allocated (so withheld from public sale) and nobody can buy them yet.
+  const base = access.intent === 'server' ? 'Website integration'
+    : access.intent === 'hosted_link' ? 'Buyer link'
+      : 'Not distributed yet';
   const grants = access.hasActiveGrants ? 'in use now'
     : access.lastMintAt ? `last used ${new Date(access.lastMintAt).toLocaleDateString()}` : null;
   const detail = access.detail ?? grants;

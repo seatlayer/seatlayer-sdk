@@ -496,7 +496,7 @@ describe('ChannelsMode hosted access links', () => {
     const harness = mount({ view: true, manage: true }, server.client);
     await openDetail(harness);
     // Pre-link state: the access explainer, and no card.
-    expect(harness.rail.textContent).toContain('No buyer access is configured yet');
+    expect(harness.rail.textContent).toContain('Not distributed yet');
 
     // A poll read is already in flight, as it is for six seconds out of every
     // ten, and it will answer with the pre-create truth.
@@ -518,11 +518,11 @@ describe('ChannelsMode hosted access links', () => {
     await flush();
 
     // No browser reload: this is the panel as the organizer sees it.
-    expect(harness.rail.textContent).not.toContain('No buyer access is configured yet');
+    expect(harness.rail.textContent).not.toContain('Not distributed yet');
     expect(harness.rail.textContent).toContain('VIP list Nov 14');
     expect(harness.rail.querySelector('[data-ch-rotate="alk_1"]')).toBeTruthy();
     expect(harness.rail.querySelector('[data-ch-revoke="alk_1"]')).toBeTruthy();
-    expect(harness.rail.textContent).toContain('Create another hosted link');
+    expect(harness.rail.textContent).toContain('Create another buyer link');
   });
 
   it('shows the replacement link after a rotation reveal is dismissed', async () => {
@@ -547,7 +547,7 @@ describe('ChannelsMode hosted access links', () => {
     expect(harness.rail.querySelector('[data-ch-rotate="alk_2"]')).toBeTruthy();
     expect(harness.rail.querySelector('[data-ch-rotate="alk_1"]')).toBeNull();
     expect(harness.rail.textContent).toContain('Replaced');
-    expect(harness.rail.textContent).not.toContain('No buyer access is configured yet');
+    expect(harness.rail.textContent).not.toContain('Not distributed yet');
   });
 
   it('drops back to the pre-link explainer when the last link is revoked', async () => {
@@ -568,8 +568,8 @@ describe('ChannelsMode hosted access links', () => {
 
     expect(harness.rail.querySelector('[data-ch-rotate="alk_1"]')).toBeNull();
     expect(harness.rail.textContent).toContain('Revoked');
-    expect(harness.rail.textContent).toContain('No buyer access is configured yet');
-    expect(harness.rail.textContent).toContain('Create hosted access link');
+    expect(harness.rail.textContent).toContain('Not distributed yet');
+    expect(harness.rail.textContent).toContain('Create buyer link');
   });
 
   it('confirms a revoke before calling the server, and can cascade the sessions', async () => {
@@ -637,19 +637,25 @@ describe('ChannelsMode hosted access links', () => {
       .toBe('A channel may hold at most 20 live hosted links');
   });
 
-  it('says hosted links need a newer server rather than showing an error', async () => {
+  it('says buyer links need a newer server rather than showing an error', async () => {
     const harness = mount({ view: true, manage: true }, makeClient({
       accessLinks: vi.fn().mockRejectedValue(new ManageApiError(404, 'not_found')),
     }));
     await openDetail(harness);
-    expect(harness.rail.textContent).toContain('Hosted links need a newer server');
+    expect(harness.rail.textContent).toContain('Buyer links need a newer server');
     expect(harness.rail.querySelector('[data-ch-act="link-create"]')).toBeNull();
   });
 
-  it('points at the guide for server integration instead of a dead button', async () => {
-    const harness = mount({ view: true, manage: true });
+  it('points at the guide once the channel is set up on a website, never a dead button', async () => {
+    // The backend explainer belongs to the website route, so it appears once the
+    // organizer has taken it — not as a wall of server talk on every channel.
+    const list = listFixture();
+    list.channels[0].access = { intent: 'server', hasActiveGrants: false, lastMintAt: null };
+    const harness = mount({ view: true, manage: true }, makeClient({
+      channels: vi.fn().mockResolvedValue(list),
+    }));
     await openDetail(harness);
-    expect(harness.rail.textContent).toContain('nothing to set up on this screen');
+    expect(harness.rail.textContent).toContain('nothing more to set up on this screen');
     const guide = harness.rail.querySelector('a[href*="docs.seatlayer.io"]') as HTMLAnchorElement;
     expect(guide).toBeTruthy();
     expect(guide.rel).toContain('noopener');

@@ -293,10 +293,17 @@ describe('access line', () => {
     expect(accessLine({})).toBe('—');
   });
 
-  it('reads the final hardening intents', () => {
-    expect(accessLine({ intent: 'hosted_link', hasActiveGrants: true })).toBe('Hosted access link · in use now');
-    expect(accessLine({ intent: 'internal' })).toContain('Internal selling');
-    expect(accessLine({ intent: 'none' })).toBe('No buyer access configured');
+  it('names only the two distribution routes that actually reach a buyer', () => {
+    expect(accessLine({ intent: 'hosted_link', hasActiveGrants: true })).toBe('Buyer link · in use now');
+    expect(accessLine({ intent: 'server' })).toBe('Website integration');
+  });
+
+  // 'internal' and 'none' are stored on legacy rows and read by nothing. They
+  // must not resurface as a state of their own — both mean "not distributed".
+  it('says the same honest thing for both dead intents', () => {
+    expect(accessLine({ intent: 'internal' })).toBe('Not distributed yet');
+    expect(accessLine({ intent: 'none' })).toBe('Not distributed yet');
+    expect(accessLine({ intent: 'internal' })).not.toContain('Internal selling');
   });
 });
 
@@ -499,7 +506,7 @@ describe('ChannelsMode rail + a11y', () => {
     const rows = [...harness.rail.querySelectorAll('.slm-ch-row')];
     expect(rows[0].textContent).toContain('Public sale');
     expect(rows[0].textContent).toContain('Built-in');
-    expect(rows[1].textContent).toContain('Server integration');
+    expect(rows[1].textContent).toContain('Website integration');
     expect(rows[2].textContent).toContain('Paused');
     // Falls back rather than inventing a state when access is absent.
     expect(rows[0].querySelector('.slm-ch-access')).toBeNull();
@@ -636,6 +643,99 @@ describe('ChannelsMode apply', () => {
     (harness.rail.querySelector('[data-ch-act="review"]') as HTMLElement).click();
     const apply = harness.root.querySelector('[data-ch-apply]') as HTMLButtonElement;
     expect(apply.disabled).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Distribute — the two routes that actually reach a buyer
+//
+// The detail panel used to offer a four-value "access intent" picker. Two of the
+// values (none / internal) were read by nothing at all, and a third
+// (hosted_link) is the server's to set. What is left is two actions.
+// ---------------------------------------------------------------------------
+
+async function openDetail(harness: Harness, index = 0): Promise<void> {
+  (harness.rail.querySelectorAll('[data-ch-detail]')[index] as HTMLElement).click();
+  await flush();
+}
+
+function withIntent(intent: string): ChannelsClient {
+  const list = listFixture();
+  list.channels[0].access = { intent: intent as 'none', hasActiveGrants: false, lastMintAt: null };
+  return makeClient({ channels: vi.fn().mockResolvedValue(list) });
+}
+
+describe('ChannelsMode distribute', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('offers exactly the two working routes, and no dead-intent control', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+
+    expect(harness.rail.querySelector('[data-ch-act="link-create"]')).not.toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="embed-code"]')).not.toBeNull();
+    // The picker and both of its dead values are gone from the surface entirely.
+    expect(harness.rail.querySelector('[data-ch-intent]')).toBeNull();
+    expect(harness.rail.querySelector('#slm-ch-intent')).toBeNull();
+    const html = harness.rail.innerHTML;
+    expect(html).not.toContain('Internal selling');
+    expect(html).not.toContain('No buyer access yet');
+    expect(html).not.toContain('How should buyers reach this channel');
+  });
+
+  it('renders a legacy internal channel as "not distributed", never an empty select', async () => {
+    const harness = mount({ view: true, manage: true }, withIntent('internal'));
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+
+    expect(harness.rail.textContent).toContain('Not distributed yet — seats stay reserved');
+    expect(harness.rail.querySelector('select')).toBeNull();
+    // Both actions stay available on a legacy row — it is not a dead end.
+    expect(harness.rail.querySelector('[data-ch-act="link-create"]')).not.toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="embed-code"]')).not.toBeNull();
+  });
+
+  it('renders an unknown legacy intent the same way rather than crashing', async () => {
+    const harness = mount({ view: true, manage: true }, withIntent('none'));
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+    expect(harness.rail.textContent).toContain('Not distributed yet');
+  });
+
+  it('keeps the unchanged setAccessIntent API behind "Get embed code"', async () => {
+    const harness = mount({ view: true, manage: true }, withIntent('none'));
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+    (harness.rail.querySelector('[data-ch-act="embed-code"]') as HTMLElement).click();
+    await flush();
+
+    expect(harness.client.setChannelAccessIntent).toHaveBeenCalledWith('ev_1', 'ch_a', 'server');
+  });
+
+  it('opens the buyer-link dialog straight from the distribute card', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+    (harness.rail.querySelector('[data-ch-act="link-create"]') as HTMLElement).click();
+
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('Create a buyer link for Travel Agency A');
+  });
+
+  it('explains the website route without promising a screen that does not exist', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness); // ch_a already carries intent 'server'
+    expect(harness.rail.textContent).toContain("Your website's backend grants each buyer access");
+    const guide = harness.rail.querySelector('a[href]') as HTMLAnchorElement;
+    expect(guide.href).toBe('https://docs.seatlayer.io/server-api/channels');
   });
 });
 

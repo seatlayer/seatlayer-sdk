@@ -31,7 +31,6 @@ import {
   ACCESS_LINK_DEFAULTS,
   PUBLIC_CHANNEL_ID,
   PUBLIC_CHANNEL_NAME,
-  accessIntentLabel,
   accessLine,
   accessLinkBadge,
   accessLinkErrorCopy,
@@ -292,6 +291,12 @@ export const CHANNELS_CSS = /* @sl-css */ `
 .slm-ch-selnum.bump{animation:slm-ch-bump var(--slm-mo-base) var(--slm-mo-spring)}
 .slm-ch-row2{display:flex;gap:8px;margin-top:8px}
 .slm-ch-row2 .slm-btn{flex:1;min-width:0}
+/* distribute options — two actions, each with the one sentence that explains it */
+.slm-ch-dist{display:flex;flex-direction:column;gap:6px;padding:12px;margin-bottom:8px;border:1px solid var(--slm-line);
+  border-radius:10px;background:var(--slm-surface)}
+.slm-ch-dist b{font-size:13px;font-weight:800}
+.slm-ch-dist .why{color:var(--slm-muted);font-size:11.5px;line-height:1.45}
+.slm-ch-dist .slm-btn{width:100%;margin-top:2px}
 .slm-ch-alert{display:flex;align-items:flex-start;gap:9px;padding:11px 13px;border-radius:10px;font-size:12.5px;
   line-height:1.5;margin-bottom:12px}
 .slm-ch-alert.warn{background:rgba(244,183,64,.1);border:1px solid rgba(244,183,64,.4);color:#f4d58a}
@@ -334,7 +339,7 @@ export const CHANNELS_CSS = /* @sl-css */ `
   overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .slm-ch-err{color:#f1a4a6;font-size:11.5px;margin-top:6px}
 
-/* hosted access links — STATUS only; there is no Copy control on this card */
+/* buyer links — STATUS only; there is no Copy control on this card */
 .slm-ch-link{padding:10px 11px;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface);
   margin-bottom:8px}
 .slm-ch-link .lk-head{display:flex;align-items:center;gap:8px}
@@ -412,21 +417,25 @@ export function bucketRowsHtml(rows: BucketRow[]): string {
 }
 
 /**
- * Server integration is a BACKEND integration, so there is no screen to build
+ * Website integration is a BACKEND integration, so there is no screen to build
  * and this block is deliberately informational.
  *
  * It replaces a disabled "Configure server integration · Coming soon" button
  * that promised a wizard which does not exist and is not planned. A control that
  * can never do anything is worse than a sentence explaining why it isn't there:
  * the honest answer is "nothing to configure here, and here is the guide".
+ *
+ * It is shown only once the organizer has chosen this route (`intent: 'server'`),
+ * because that is also the flag the dashboard's Embed page reads to offer the
+ * snippet. Before that choice it would be an unasked-for wall of backend talk.
  */
 const SERVER_INTEGRATION_HTML = `
-  <p class="slm-eyebrow" style="margin-top:18px">Server integration</p>
-  <p class="slm-hint">There is nothing to set up on this screen. Your own server mints a short-lived buyer
+  <p class="slm-eyebrow" style="margin-top:18px">On your website</p>
+  <p class="slm-hint">There is nothing more to set up on this screen. Your own server mints a short-lived buyer
     access session for this channel with the SeatLayer server SDK and hands it to the widget. A channel name
     on its own never grants access.</p>
   <p class="slm-note"><a class="slm-linkbtn" href="https://docs.seatlayer.io/server-api/channels"
-    target="_blank" rel="noreferrer noopener">Read the server integration guide →</a></p>`;
+    target="_blank" rel="noreferrer noopener">Read the website integration guide →</a></p>`;
 
 function esc(value: unknown): string {
   return String(value ?? '')
@@ -1370,27 +1379,7 @@ export class ChannelsMode {
         <button type="button" class="slm-btn ghost" data-ch-act="archive">Archive…</button>
       </div>
       <p class="slm-note">Archive returns the allocation to a destination you choose. Nothing is ever deleted silently.</p>` : '';
-    const intent = (channel.access?.intent ?? 'none') as ChannelAccessIntent;
-    const intents: ChannelAccessIntent[] = ['none', 'internal', 'server', 'hosted_link'];
-    // "No buyer access configured" is INFORMATION for a deliberate reserve. It
-    // only becomes a warning once the organizer says the channel is meant for
-    // buyer self-service (§8.2).
-    const selfServiceGap = (intent === 'server' || intent === 'hosted_link') && !channel.access?.hasActiveGrants;
-    const access = this.caps.manage ? `
-      <p class="slm-eyebrow" style="margin-top:14px">Buyer access</p>
-      <div class="slm-field">
-        <label for="slm-ch-intent">How should buyers reach this channel?</label>
-        <select class="slm-select" id="slm-ch-intent" data-ch-intent>
-          ${intents.map((value) => `<option value="${value}"${value === intent ? ' selected' : ''}>${esc(accessIntentLabel(value))}</option>`).join('')}
-        </select>
-      </div>
-      <p class="slm-hint">${channel.access?.hasActiveGrants
-        ? 'Buyer access is live. Only this audience can buy from the allocation.'
-        : 'No buyer access is configured yet. The allocation is protected — it is not available to Public sale.'}</p>
-      ${selfServiceGap ? `<div class="slm-ch-alert warn"><span>⚠</span>
-        <span>This channel is marked for buyer self-service but no buyer has been let in yet.</span></div>` : ''}
-      ${this.hostedLinksHtml()}
-      ${SERVER_INTEGRATION_HTML}` : '';
+    const access = this.caps.manage ? this.distributeHtml(channel) : '';
     return `
       <p class="slm-eyebrow">
         <button type="button" class="slm-linkbtn" data-ch-act="back" style="text-align:left">‹ All channels</button>
@@ -1401,7 +1390,65 @@ export class ChannelsMode {
       ${lifecycle}`;
   }
 
-  // ---- hosted access links --------------------------------------------------
+  /**
+   * "Distribute" — how the seats in this channel actually reach a buyer.
+   *
+   * This replaced a four-value "access intent" picker (none / internal /
+   * hosted_link / server). Two of those values did nothing anywhere: no buyer or
+   * inventory path reads `access_intent`, so `none` and `internal` were labels an
+   * organizer could set and then wait forever for something to happen. A third,
+   * `hosted_link`, is not the organizer's to choose at all — the server sets it
+   * when a buyer link is created and clears it when the last live one is revoked.
+   *
+   * So this is two ACTIONS, not a setting: create a buyer link, or point the
+   * channel at a website integration. Both of them do something the moment they
+   * are pressed. A legacy row still carrying `none` or `internal` renders the
+   * neutral "not distributed yet" state with both actions offered — the stored
+   * value is left alone (it is organizer-declared metadata and the API that
+   * writes it is unchanged), it simply no longer has a control of its own.
+   */
+  private distributeHtml(channel: ChannelRecord): string {
+    const intent = (channel.access?.intent ?? 'none') as ChannelAccessIntent;
+    const live = channel.access?.hasActiveGrants === true;
+    // The one honest sentence about this channel's current reach. "Seats stay
+    // reserved" is not a consolation: an allocated seat is withheld from public
+    // sale whether or not anyone can buy it yet, and that IS the useful fact.
+    const state = live
+      ? intent === 'server'
+        ? 'Your website is letting buyers in. Only they can buy these seats.'
+        : 'A buyer link is live. Only people with that link can buy these seats.'
+      : intent === 'server'
+        ? 'Set up for your website — no buyer has come through yet. Seats stay reserved.'
+        : 'Not distributed yet — seats stay reserved.';
+    const option = (
+      title: string, why: string, action: string, cta: string, primary: boolean,
+    ): string => `<div class="slm-ch-dist">
+      <b>${esc(title)}</b>
+      <span class="why">${esc(why)}</span>
+      <button type="button" class="slm-btn${primary ? '' : ' ghost'}" data-ch-act="${esc(action)}">${esc(cta)}</button>
+    </div>`;
+    // A worker that predates buyer links answers 404 on the listing route, and
+    // would answer 404 on the create too. Offering the action there would be a
+    // button that can only fail; the status block below says why it is absent.
+    const linksSupported = this.linksState !== 'unsupported';
+    return `
+      <p class="slm-eyebrow" style="margin-top:14px">Distribute</p>
+      <p class="slm-hint">${esc(state)}</p>
+      ${linksSupported ? option(
+        'Sell with a buyer link',
+        'SeatLayer makes a link you send to a named group. They open it and buy only these seats.',
+        'link-create', this.links.some(accessLinkIsLive) ? 'Create another buyer link' : 'Create buyer link', true,
+      ) : ''}
+      ${option(
+        'Integrate a website or app',
+        "Your website's backend grants each buyer access — set up on the Embed page.",
+        'embed-code', 'Get embed code', false,
+      )}
+      ${this.hostedLinksHtml()}
+      ${intent === 'server' ? SERVER_INTEGRATION_HTML : ''}`;
+  }
+
+  // ---- buyer links ----------------------------------------------------------
 
   /**
    * Read the status projection for the open channel. Never paints — the caller
@@ -1435,40 +1482,34 @@ export class ChannelsMode {
   }
 
   /**
-   * The hosted-link section of the detail panel.
+   * The buyer-link status section of the detail panel.
    *
    * STATUS ONLY, by design (comp 06 `hosted`): label, state, expiry,
    * redemptions, seats per buyer, live sessions. There is no Copy control here
    * and no field to hang one on — the URL was shown once at creation and cannot
    * be produced again. Rotation is the recovery path, and it says so.
+   *
+   * Creating a link is the Distribute card's action, not this section's, so a
+   * channel with no links renders nothing here rather than an empty heading and
+   * a second button saying the same thing.
    */
   private hostedLinksHtml(): string {
-    const eyebrow = `<p class="slm-eyebrow" style="margin-top:18px">Hosted access links</p>`;
+    const eyebrow = `<p class="slm-eyebrow" style="margin-top:18px">Buyer links</p>`;
     if (this.linksState === 'unsupported') {
       return `${eyebrow}<div class="slm-ch-alert warn"><span>ℹ</span>
-        <span><b>Hosted links need a newer server.</b> Everything else on this channel works normally.</span></div>`;
+        <span><b>Buyer links need a newer server.</b> Everything else on this channel works normally.</span></div>`;
     }
     if (this.linksState === 'error') {
       return `${eyebrow}<div class="slm-ch-alert err" role="alert"><span>⚠</span>
         <span><b>Couldn't load this channel's links.</b>
         <button type="button" data-ch-act="link-reload">Try again</button></span></div>`;
     }
-    const live = this.links.filter(accessLinkIsLive).length;
-    const cards = this.linksState === 'loading' && !this.links.length
-      ? `<div class="slm-empty">Loading links…</div>`
-      : this.links.length
-        ? this.links.map((link) => this.linkCardHtml(link)).join('')
-        : `<p class="slm-hint">No hosted link yet. Create one to send this allocation to a named group —
-            they open the link and buy only these seats.</p>`;
-    // Fail-closed: without manage authority the create control is ABSENT, not
-    // disabled, exactly like every other mutation in this mode.
-    const create = this.caps.manage
-      ? `<button type="button" class="slm-btn" style="width:100%" data-ch-act="link-create">
-          ${live ? 'Create another hosted link' : 'Create hosted access link'}</button>`
-      : '';
+    if (this.linksState === 'loading' && !this.links.length) {
+      return `${eyebrow}<div class="slm-empty">Loading links…</div>`;
+    }
+    if (!this.links.length) return '';
     return `${eyebrow}
-      ${cards}
-      ${create}
+      ${this.links.map((link) => this.linkCardHtml(link)).join('')}
       <p class="slm-note">A link is shown once, when you create it. SeatLayer keeps only a fingerprint of it, so it
         can never be shown again — if a link is lost, rotate it and send the fresh one.</p>`;
   }
@@ -1497,7 +1538,7 @@ export class ChannelsMode {
       : '';
     return `<div class="slm-ch-link">
       <span class="lk-head">
-        <span class="lk-name">${esc(link.label || 'Hosted link')}</span>
+        <span class="lk-name">${esc(link.label || 'Buyer link')}</span>
         <span class="slm-ch-badge ${badge.kind}">${esc(badge.text)}</span>
       </span>
       <div class="slm-ch-meter" role="img"
@@ -1617,10 +1658,6 @@ export class ChannelsMode {
       this.previewIncludePublic = includePublic.checked;
       void this.loadPreview();
     });
-    const intent = rail.querySelector<HTMLSelectElement>('[data-ch-intent]');
-    intent?.addEventListener('change', () => {
-      void this.setAccessIntent(intent.value as ChannelAccessIntent);
-    });
     const grab = rail.querySelector<HTMLElement>('.slm-ch-grab');
     grab?.addEventListener('click', () => this.cycleDetent());
     rail.querySelectorAll<HTMLElement>('[data-ch-act]').forEach((button) => {
@@ -1652,6 +1689,11 @@ export class ChannelsMode {
       case 'link-create':
         this.openDialog({ kind: 'linkCreate', channelId: this.detailChannelId! });
         break;
+      // The one thing this screen can actually do for a website integration is
+      // record that the channel is meant for one — which is exactly the flag the
+      // dashboard's Embed page reads before it offers the snippet. Saying so is
+      // honest; a fake "copy code" button on a screen with no code would not be.
+      case 'embed-code': void this.chooseWebsiteIntegration(); break;
       case 'link-reload':
         if (this.detailChannelId) void this.reloadLinks();
         break;
@@ -2018,12 +2060,28 @@ export class ChannelsMode {
     });
   }
 
+  /**
+   * "Get embed code" — mark the channel as reached through the organizer's own
+   * backend. The write itself is `setChannelAccessIntent(…, 'server')`, the same
+   * API the old picker called; the difference is that it is now a deliberate
+   * action with a consequence the organizer is told about, rather than one of
+   * four dropdown values with no observable effect.
+   */
+  private async chooseWebsiteIntegration(): Promise<void> {
+    const channelId = this.detailChannelId;
+    if (!channelId) return;
+    await this.setAccessIntent('server');
+  }
+
   private async setAccessIntent(accessIntent: ChannelAccessIntent): Promise<void> {
     const channelId = this.detailChannelId;
     if (!channelId || !this.caps.manage) return;
     try {
       await this.host.api.setChannelAccessIntent(this.host.eventKey, channelId, accessIntent);
       await this.refresh();
+      if (accessIntent === 'server') {
+        this.host.toast('Marked for your website. The embed code is on the Embed page.', 'ok');
+      }
     } catch (err) {
       this.host.toast("Couldn't save how buyers reach this channel.", 'err');
       this.host.onError(err);
@@ -2177,7 +2235,7 @@ export class ChannelsMode {
     });
   }
 
-  // ---- hosted-link dialogs --------------------------------------------------
+  // ---- buyer-link dialogs ---------------------------------------------------
 
   private async reloadLinks(): Promise<void> {
     const channelId = this.detailChannelId;
@@ -2223,7 +2281,7 @@ export class ChannelsMode {
     const channel = this.list?.channels.find((item) => item.id === state.channelId);
     if (!channel || !this.caps.manage) { this.closeDialog(); return; }
     this.renderScrim(`
-      <h3 id="slm-ch-dlg-title">Create a hosted access link for ${esc(channel.name)}</h3>
+      <h3 id="slm-ch-dlg-title">Create a buyer link for ${esc(channel.name)}</h3>
       <p class="sub">Anyone who opens the link can buy from this channel's allocation — and only from it.
         You'll see the link once, right after you create it.</p>
       <div class="slm-field">
@@ -2361,7 +2419,7 @@ export class ChannelsMode {
       copy?.addEventListener('click', () => {
         const ok = (): void => {
           copy.textContent = 'Copied';
-          this.announce('Hosted access link copied.');
+          this.announce('Buyer link copied.');
         };
         const clipboard = typeof navigator === 'undefined' ? null : navigator.clipboard;
         if (clipboard?.writeText) {
@@ -2376,7 +2434,7 @@ export class ChannelsMode {
       // owns the reload (`reloadAfterLinkChange`), so the panel behind the scrim
       // is current whichever way the organizer leaves — including Escape.
     });
-    this.announce('Your hosted access link is ready and is shown once.');
+    this.announce('Your buyer link is ready and is shown once.');
   }
 
   /**
@@ -2395,7 +2453,7 @@ export class ChannelsMode {
           and still ${sessions === 1 ? 'has' : 'have'} active access.</span></div>`
       : '';
     this.renderScrim(`
-      <h3 id="slm-ch-dlg-title">Rotate the ${esc(link.label || 'hosted')} link?</h3>
+      <h3 id="slm-ch-dlg-title">Rotate the ${esc(link.label || 'buyer')} link?</h3>
       <p class="sub">The current link stops opening immediately and cannot be restored. You will get a new
         link to copy — shown once.</p>
       ${warning}
@@ -2451,7 +2509,7 @@ export class ChannelsMode {
     if (!link || !this.caps.manage) { this.closeDialog(); return; }
     const sessions = link.activeSessions ?? 0;
     this.renderScrim(`
-      <h3 id="slm-ch-dlg-title">Revoke the ${esc(link.label || 'hosted')} link?</h3>
+      <h3 id="slm-ch-dlg-title">Revoke the ${esc(link.label || 'buyer')} link?</h3>
       <p class="sub">It stops opening immediately and cannot be restored — there is no undo, and no way to
         bring the same URL back. Seats already bought through it keep their sale.</p>
       ${sessions ? `<label class="slm-ch-radio">
