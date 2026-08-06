@@ -69,7 +69,9 @@ export type {
 // Exported so a host can reuse the review-bucket renderer (Apply results AND
 // the chart-update `channel_assignment_would_drop` refusal share it).
 export { ChannelsMode, bucketRowsHtml } from './channelsMode';
-export type { ChannelsCapabilities, ChannelsClient, ChannelsModeHost, ChannelsSeatView } from './channelsMode';
+export type {
+  ChannelsCapabilities, ChannelsClient, ChannelsModeHost, ChannelsRowView, ChannelsSeatView,
+} from './channelsMode';
 export {
   ACCESS_LINK_DEFAULTS,
   PUBLIC_CHANNEL_ID,

@@ -72,6 +72,17 @@ export interface ChannelsSeatView {
   y: number;
 }
 
+/** One row offered to the bulk assignment chooser. A physically segmented row
+ * (one label split across several row objects) shares one logical id, so the
+ * organizer picks "Row AA" once rather than three fragments of it. */
+export interface ChannelsRowView {
+  id: string;
+  label: string;
+  sectionId: string;
+  sectionLabel: string;
+  labels: string[];
+}
+
 /** The `ManageApi` subset Channels mode uses — structural so tests can pass a
  *  hand-rolled double without constructing a real client. */
 export interface ChannelsClient {
@@ -154,6 +165,10 @@ export interface ChannelsModeHost {
   clearSelection(): void;
   selectSection(sectionId: string): void;
   sections(): Array<{ id: string; label: string }>;
+  /** Every selectable label inside one section, for the additive scope chooser. */
+  labelsInSection(sectionId: string): string[];
+  /** Logical rows across the whole chart, grouped by their section. */
+  rows(): ChannelsRowView[];
   categories(): Array<{ key: string; label: string; color?: string }>;
   labelsInCategory(key: string): string[];
   sectionOfLabel(label: string): { id: string; label: string } | null;
@@ -186,6 +201,15 @@ export interface ChannelsModeHost {
 const POLL_MS = 30_000;
 const MAX_FLAGS = 8;
 const SEAT_LIST_PAGE = 300;
+
+/**
+ * The most seats one Apply may carry. The assignment route rewrites every label
+ * in a single transaction, so an unbounded selection is a request that times out
+ * halfway and leaves the organizer guessing what moved. The ceiling is stated in
+ * the UI *before* Apply — in the staged bar, the selection rail, the scope
+ * chooser and the review sheet — so it is never discovered as a failure.
+ */
+const MAX_ASSIGNMENT_UNITS = 5_000;
 
 /**
  * Buyer-preview colours are deliberately independent of a chart's category
@@ -246,6 +270,7 @@ export const CHANNELS_CSS = /* @sl-css */ `
 .slm-ch-staged .grow{flex:1}
 .slm-ch-staged .go{padding:9px 16px;min-height:44px;display:inline-flex;align-items:center;border-radius:9px;
   background:#f4b740;color:#1a1200;font-weight:800;font-size:12.5px}
+.slm-ch-staged .go:disabled{opacity:.48;cursor:not-allowed}
 .slm-ch-staged .drop{color:var(--slm-muted);font-weight:700;font-size:11.5px;min-height:44px;padding-inline:8px}
 .slm-ch-tick{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;
   background:#fff;color:#1f7a4d;font-weight:900;font-size:11px;animation:slm-ch-tick var(--slm-mo-base) var(--slm-mo-spring)}
@@ -376,6 +401,25 @@ export const CHANNELS_CSS = /* @sl-css */ `
 .slm-ch-seatitem[aria-checked="true"] .box{border-color:var(--slm-accent);background:var(--slm-accent);color:var(--slm-accent-ink)}
 .slm-ch-seatitem .meta{margin-left:auto;color:var(--slm-muted);font-size:10.5px}
 
+/* scope chooser: whole sections or many rows in one additive pass */
+.slm-ch-scopebar{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:10px;margin-top:12px}
+.slm-ch-scopebar label{display:grid;gap:5px;color:var(--slm-muted);font-size:10.5px;font-weight:800}
+.slm-ch-scopebar input{width:100%;min-height:40px;padding:8px 10px;border:1px solid var(--slm-line);border-radius:8px;
+  background:var(--slm-surface);color:var(--slm-text);font:inherit}
+.slm-ch-scopesummary{padding-bottom:10px;color:var(--slm-muted);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.slm-ch-scopegroup{position:sticky;top:0;z-index:1;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;
+  gap:6px;padding:6px 8px;border-bottom:1px solid var(--slm-line);background:var(--slm-surface)}
+.slm-ch-groupcheck{display:flex;min-width:0;align-items:center;gap:8px;padding:5px 2px;text-align:left;font-size:11px;font-weight:800}
+.slm-ch-groupcheck .box{width:16px;height:16px;flex:none;display:grid;place-items:center;border:1px solid var(--slm-muted);border-radius:4px;
+  color:transparent;font-size:10px}
+.slm-ch-groupcheck[aria-checked="true"] .box,.slm-ch-groupcheck[aria-checked="mixed"] .box{border-color:var(--slm-accent);
+  background:var(--slm-accent);color:var(--slm-accent-ink)}
+.slm-ch-groupcheck .meta{min-width:0;margin-left:auto;color:var(--slm-muted);font-size:10.5px;font-weight:600;white-space:nowrap}
+.slm-ch-grouptoggle{min-height:32px;padding:5px 8px;color:var(--slm-accent);font-size:11px;font-weight:800}
+.slm-ch-scopehint{padding:8px 10px;color:var(--slm-muted);font-size:10.5px;border-bottom:1px solid var(--slm-line)}
+.slm-ch-scope-empty{padding:18px 12px;color:var(--slm-muted);font-size:11.5px;text-align:center}
+@media(max-width:560px){.slm-ch-scopebar{grid-template-columns:1fr}.slm-ch-scopesummary{padding-bottom:0}}
+
 /* compact: bottom sheet with three detents (§13) */
 .slm.compact.ch-sheet .slm-rail{position:absolute;left:0;right:0;bottom:0;z-index:8;border-top:1px solid var(--slm-line);
   border-radius:18px 18px 0 0;background:#12151f;
@@ -479,7 +523,7 @@ function selectSecret(dialog: HTMLElement): void {
 type Detent = 'collapsed' | 'medium' | 'full';
 
 type DialogKind =
-  | 'create' | 'review' | 'archive' | 'rename' | 'seatlist'
+  | 'create' | 'review' | 'archive' | 'rename' | 'seatlist' | 'scope'
   | 'linkCreate' | 'linkRotate' | 'linkRevoke';
 
 /**
@@ -495,6 +539,8 @@ interface DialogState {
   /** Authoritative result rendered after Apply (review dialog only). */
   applied?: AssignmentResult | null;
   archiveBlocked?: ArchiveBlockedDetails | null;
+  /** Which unit the scope chooser is picking (scope dialog only). */
+  scope?: 'sections' | 'rows';
   busy?: boolean;
   error?: string | null;
 }
@@ -561,6 +607,10 @@ export class ChannelsMode {
   private stagedDoneTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSelectionCount = 0;
   private lastCounts = new Map<string, number>();
+  /** Rows are structural chart data — they do not move while the organizer is
+   * allocating. Deriving them walks every seat, so the view is cached for the
+   * lifetime of this mode entry and ordinary selection repaints stay O(1). */
+  private assignmentRowsCache: ChannelsRowView[] | null = null;
   /** The markup currently in the rail. An identical repaint is skipped, which is
    *  what keeps the organizer's scroll position (and open <select>) alive. */
   private railHtml: string | null = null;
@@ -586,6 +636,7 @@ export class ChannelsMode {
     this.active = true;
     this.mapIntent = 'pan';
     this.focusedSectionId = null;
+    this.assignmentRowsCache = null; // the chart may have changed since last entry
     this.railHtml = null; // the rail belonged to another mode a moment ago
     this.ensureLayer();
     this.host.root.classList.add('ch-mode');
@@ -1132,6 +1183,7 @@ export class ChannelsMode {
     if (!labels.length) { this.setStaged(null); return; }
     const target = this.nameOf(this.targetChannelId) ?? PUBLIC_CHANNEL_NAME;
     const mutations = mutationCount(buckets);
+    const tooLarge = labels.length > MAX_ASSIGNMENT_UNITS;
     const skipped = buckets.skippedHeld.count + buckets.skippedBooked.count;
     const parts = [
       `<b>${labels.length.toLocaleString()}</b> selected`,
@@ -1143,7 +1195,9 @@ export class ChannelsMode {
       <span>${parts.join(' · ')}</span>
       <span class="grow"></span>
       <button type="button" class="drop" data-ch-act="discard">Discard</button>
-      <button type="button" class="go" data-ch-act="review">Review changes</button>`);
+      <button type="button" class="go" data-ch-act="review"${tooLarge ? ' disabled' : ''}>
+        ${tooLarge ? `Maximum ${MAX_ASSIGNMENT_UNITS.toLocaleString()} seats` : 'Review changes'}
+      </button>`);
     this.stagedEl?.querySelectorAll<HTMLElement>('[data-ch-act]').forEach((button) => {
       button.addEventListener('click', () => {
         if (button.dataset.chAct === 'discard') this.host.clearSelection();
@@ -1380,8 +1434,9 @@ export class ChannelsMode {
     const readOnly = this.caps.manage ? '' :
       `<p class="slm-note">You can see how inventory is allocated. Changing it needs channel-management permission.</p>`;
     return `
+      ${this.caps.manage ? this.assignmentToolsHtml() : ''}
       <p class="slm-eyebrow">Sales channels</p>
-      <p class="slm-hint">Select seats on the map, then assign them. Channel colours and names are never shown to buyers.</p>
+      <p class="slm-hint">Channel colours and names are only visible to organizers, never to buyers.</p>
       <div class="slm-ch-list">${rows}</div>
       ${create}
       ${readOnly}
@@ -1389,6 +1444,45 @@ export class ChannelsMode {
         <button type="button" class="slm-linkbtn" data-ch-act="toggle-archived" aria-pressed="${this.showArchived}"
           style="text-align:left">${this.showArchived ? 'Hide' : 'Show'} archived${archivedCount ? ` (${archivedCount})` : ''}</button>
       </p>`;
+  }
+
+  /**
+   * Destination-first assignment controls.
+   *
+   * These used to live only inside the selection rail, which meant every route
+   * into them was gated behind "select a seat on the map first" — the section,
+   * row and category choosers were invisible until the organizer had already
+   * done the work by hand. They now paint above the channel list too, so the
+   * destination is chosen first and whole sections and rows are discoverable
+   * without learning a hidden seat-first workflow.
+   */
+  private assignmentToolsHtml(): string {
+    const options = this.assignableChannels()
+      .map((channel) => `<option value="${esc(channel.id)}"${channel.id === this.targetChannelId ? ' selected' : ''}>${esc(channel.name)}</option>`)
+      .join('');
+    const sections = this.host.sections().length
+      ? '<button type="button" class="slm-btn ghost" data-ch-act="pick-sections">Sections</button>' : '';
+    const rows = this.assignmentRows().length
+      ? '<button type="button" class="slm-btn ghost" data-ch-act="pick-rows">Rows</button>' : '';
+    // Drag box is a map INTENT, not a dialog: it arms the marquee, so it shows
+    // its armed state the same way the map-navigation segment does.
+    const dragClass = this.mapIntent === 'assign' ? 'slm-btn' : 'slm-btn ghost';
+    return `
+      <p class="slm-eyebrow">Assign inventory</p>
+      <div class="slm-field">
+        <label for="slm-ch-target">Assign to</label>
+        <select class="slm-select" id="slm-ch-target" data-ch-target>${options}</select>
+      </div>
+      <p class="slm-eyebrow" style="margin-top:12px">Select by</p>
+      <div class="slm-ch-row2" style="margin-top:2px">
+        ${sections}${rows}
+        <button type="button" class="${dragClass}" data-ch-act="drag-select">Drag box</button>
+      </div>
+      <div class="slm-ch-row2">
+        <button type="button" class="slm-btn ghost" data-ch-act="pick-category">Category</button>
+        <button type="button" class="slm-btn ghost" data-ch-act="seatlist">Seat list ⌨</button>
+      </div>
+      <p class="slm-note">Choose a destination, then add whole sections, multiple rows, a dragged area, or individual seats.</p>`;
   }
 
   private selectionRailHtml(selection: string[]): string {
@@ -1401,37 +1495,27 @@ export class ChannelsMode {
       : '';
     const bump = selection.length !== this.lastSelectionCount ? ' bump' : '';
     this.lastSelectionCount = selection.length;
-    const options = this.assignableChannels()
-      .map((channel) => `<option value="${esc(channel.id)}"${channel.id === this.targetChannelId ? ' selected' : ''}>${esc(channel.name)}</option>`)
-      .join('');
+    const tooLarge = selection.length > MAX_ASSIGNMENT_UNITS;
     const sourceRows = sources.map((row) => {
       const marker = this.markerFor(row.channelId);
       return `<div class="slm-ch-selsrc-row">
         <span class="mk" style="background:${esc(marker.color)}" aria-hidden="true">${esc(marker.letter)}</span>
         <b>${row.count.toLocaleString()}</b><span>${esc(row.name)}</span></div>`;
     }).join('');
-    const sectionSelect = this.host.sections().length
-      ? `<button type="button" class="slm-btn ghost" data-ch-act="pick-section">Section</button>` : '';
     return `
       ${conflict}
+      ${this.assignmentToolsHtml()}
       <div class="slm-selbar"><span class="slm-selnum slm-ch-selnum${bump}">${selection.length.toLocaleString()}</span>
         <span class="slm-sellabel">selected</span></div>
       <div class="slm-ch-selsrc" aria-live="polite" aria-label="Selection sources">${sourceRows}</div>
-      <div class="slm-field">
-        <label for="slm-ch-target">Assign to</label>
-        <select class="slm-select" id="slm-ch-target" data-ch-target>${options}</select>
-      </div>
+      ${tooLarge ? `<div class="slm-ch-alert warn" role="alert"><span>ℹ</span><span>
+        <b>This selection is too large to apply at once.</b> Choose at most ${MAX_ASSIGNMENT_UNITS.toLocaleString()}
+        seats, for example by splitting the venue into row groups.</span></div>` : ''}
       <p class="slm-note">Changes are staged — nothing moves until you review and apply.
         Seats in checkout or already sold are never moved.</p>
       <div class="slm-ch-row2">
         <button type="button" class="slm-btn ghost" data-ch-act="discard">Clear selection</button>
-        <button type="button" class="slm-btn" data-ch-act="review">Review changes</button>
-      </div>
-      <p class="slm-eyebrow" style="margin-top:18px">Select by</p>
-      <div class="slm-ch-row2" style="margin-top:2px">
-        ${sectionSelect}
-        <button type="button" class="slm-btn ghost" data-ch-act="pick-category">Category</button>
-        <button type="button" class="slm-btn ghost" data-ch-act="seatlist">List ⌨</button>
+        <button type="button" class="slm-btn" data-ch-act="review"${tooLarge ? ' disabled' : ''}>Review changes</button>
       </div>
       <p class="slm-note">The seat list offers the same selection with checkboxes for keyboard and screen-reader use.</p>`;
   }
@@ -1774,7 +1858,13 @@ export class ChannelsMode {
         this.conflict = false;
         void this.refresh().then(() => this.openDialog({ kind: 'review' }));
         break;
-      case 'pick-section': this.pickSection(); break;
+      case 'pick-sections': this.openDialog({ kind: 'scope', scope: 'sections' }); break;
+      case 'pick-rows': this.openDialog({ kind: 'scope', scope: 'rows' }); break;
+      case 'drag-select':
+        this.mapIntent = 'assign';
+        this.paintRail();
+        this.onInteractionChange?.();
+        break;
       case 'pick-category': this.pickCategory(); break;
       default: break;
     }
@@ -1782,12 +1872,10 @@ export class ChannelsMode {
 
   // ---- selection helpers ----------------------------------------------------
 
-  private pickSection(): void {
-    const sections = this.host.sections();
-    if (!sections.length) return;
-    this.promptChoice('Select a whole section', sections.map((s) => ({ value: s.id, label: s.label })), (value) => {
-      this.host.selectSection(value);
-    });
+  /** Derived once per mode entry — see `assignmentRowsCache`. */
+  private assignmentRows(): ChannelsRowView[] {
+    if (!this.assignmentRowsCache) this.assignmentRowsCache = this.host.rows();
+    return this.assignmentRowsCache;
   }
 
   private pickCategory(): void {
@@ -1825,6 +1913,231 @@ export class ChannelsMode {
     });
   }
 
+  /**
+   * Add several whole sections, or several whole rows, in one operation.
+   *
+   * ADDITIVE by contract: the chooser starts from the labels already selected
+   * and only ever grows that set, so opening it never destroys a hard-won
+   * marquee or seat-list selection. The confirm button always states the net
+   * number of seats it will add, and refuses to exceed `MAX_ASSIGNMENT_UNITS`.
+   *
+   * Rows get the richer variant. A large venue has thousands of them, so they
+   * arrive collapsed under their section, with a section-level tri-state
+   * checkbox, a search across every row, and a render cap — the flat list used
+   * for sections would be an unusable wall of buttons.
+   */
+  private renderScopeDialog(state: DialogState): void {
+    const scope = state.scope === 'rows' ? 'rows' : 'sections';
+    const options = scope === 'sections'
+      ? this.host.sections().map((section) => ({
+        id: section.id,
+        label: section.label,
+        group: 'Sections',
+        labels: this.host.labelsInSection(section.id),
+      }))
+      : this.assignmentRows().map((row) => ({
+        id: row.id,
+        label: row.label,
+        group: row.sectionLabel,
+        labels: row.labels,
+      }));
+    // A section or row with nothing selectable in it is a dead entry, not a
+    // choice — offering it would produce an "Add 0 seats" button.
+    const available = options.filter((option) => option.labels.length > 0);
+    const grouped = new Map<string, typeof available>();
+    for (const option of available) {
+      const group = grouped.get(option.group) ?? [];
+      group.push(option);
+      grouped.set(option.group, group);
+    }
+
+    if (scope === 'rows') {
+      const groups = [...grouped.entries()];
+      this.renderScrim(`
+        <h3 id="slm-ch-dlg-title">Add multiple rows</h3>
+        <p class="sub">Sections stay collapsed for speed. Select a whole section, expand only the rows you need, or search across every row.</p>
+        <div class="slm-ch-scopebar">
+          <label>Find section or row<input type="search" data-ch-scope-search placeholder="e.g. Orchestra or AA"></label>
+          <span class="slm-ch-scopesummary" data-ch-scope-summary aria-live="polite">0 rows selected</span>
+        </div>
+        <p class="slm-ch-scopehint" data-ch-scope-filter>Showing section groups. Expand one or search to see rows.</p>
+        <div class="slm-ch-seatlist" data-ch-scope-list></div>
+        <p class="slm-ch-err" data-ch-error hidden></p>
+        <div class="foot">
+          <button type="button" class="quiet" data-ch-close>Cancel</button>
+          <button type="button" class="slm-btn" data-ch-add-scope disabled>Add seats</button>
+        </div>`, (dialog) => {
+        const byId = new Map(available.map((option) => [option.id, option]));
+        const picked = new Set<string>();
+        const expanded = new Set<number>();
+        const current = new Set(this.host.selectionLabels());
+        const confirm = dialog.querySelector<HTMLButtonElement>('[data-ch-add-scope]')!;
+        const error = dialog.querySelector<HTMLElement>('[data-ch-error]')!;
+        const list = dialog.querySelector<HTMLElement>('[data-ch-scope-list]')!;
+        const search = dialog.querySelector<HTMLInputElement>('[data-ch-scope-search]')!;
+        const summary = dialog.querySelector<HTMLElement>('[data-ch-scope-summary]')!;
+        const filterHint = dialog.querySelector<HTMLElement>('[data-ch-scope-filter]')!;
+        const renderLimit = 200;
+        let query = '';
+
+        const selectedLabels = (): Set<string> => {
+          const labels = new Set(current);
+          for (const id of picked) for (const label of byId.get(id)?.labels ?? []) labels.add(label);
+          return labels;
+        };
+        const update = (): void => {
+          const labels = selectedLabels();
+          const added = labels.size - current.size;
+          const tooLarge = labels.size > MAX_ASSIGNMENT_UNITS;
+          confirm.disabled = added === 0 || tooLarge;
+          confirm.textContent = tooLarge
+            ? `Maximum ${MAX_ASSIGNMENT_UNITS.toLocaleString()} seats`
+            : `Add ${added.toLocaleString()} seat${added === 1 ? '' : 's'}`;
+          error.hidden = !tooLarge;
+          error.textContent = tooLarge
+            ? `That would make ${labels.size.toLocaleString()} selected seats. Choose fewer rows or sections.`
+            : '';
+          summary.textContent = `${picked.size.toLocaleString()} row${picked.size === 1 ? '' : 's'} · ${added.toLocaleString()} seat${added === 1 ? '' : 's'} added`;
+        };
+        const renderList = (): void => {
+          const blocks: string[] = [];
+          let totalMatches = 0;
+          let rendered = 0;
+          groups.forEach(([group, items], groupIndex) => {
+            const normalizedGroup = group.toLocaleLowerCase();
+            const matches = query
+              ? items.filter((item) => `${normalizedGroup} ${item.label.toLocaleLowerCase()}`.includes(query))
+              : items;
+            if (query && !matches.length) return;
+            totalMatches += matches.length;
+            const allPicked = items.every((item) => picked.has(item.id));
+            const somePicked = !allPicked && items.some((item) => picked.has(item.id));
+            const open = Boolean(query) || expanded.has(groupIndex);
+            const room = Math.max(0, renderLimit - rendered);
+            const visible = open ? matches.slice(0, room) : [];
+            rendered += visible.length;
+            const seatCount = items.reduce((sum, item) => sum + item.labels.length, 0);
+            blocks.push(`<div class="slm-ch-scopegroup">
+              <button type="button" class="slm-ch-groupcheck" role="checkbox" aria-checked="${allPicked ? 'true' : somePicked ? 'mixed' : 'false'}"
+                aria-label="Select all ${items.length.toLocaleString()} rows in ${esc(group)}" data-ch-scope-group="${groupIndex}">
+                <span class="box" aria-hidden="true">✓</span><span>${esc(group)}</span>
+                <span class="meta">${items.length.toLocaleString()} rows · ${seatCount.toLocaleString()} seats</span>
+              </button>
+              <button type="button" class="slm-ch-grouptoggle" aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} rows in ${esc(group)}"
+                data-ch-scope-toggle="${groupIndex}">${open ? 'Hide' : 'Show'}</button>
+            </div>`);
+            blocks.push(...visible.map((option) => `<button type="button" class="slm-ch-seatitem" role="checkbox"
+              aria-checked="${picked.has(option.id)}" data-ch-scope-id="${esc(option.id)}">
+              <span class="box" aria-hidden="true">✓</span><span>${esc(option.label)}</span>
+              <span class="meta">${option.labels.length.toLocaleString()} seat${option.labels.length === 1 ? '' : 's'}</span>
+            </button>`));
+            if (open && matches.length > visible.length) {
+              blocks.push(`<p class="slm-ch-scopehint">${(matches.length - visible.length).toLocaleString()} more row${matches.length - visible.length === 1 ? '' : 's'}. Search to narrow the list.</p>`);
+            }
+          });
+          list.innerHTML = blocks.join('')
+            || `<div class="slm-ch-scope-empty">No sections or rows match “${esc(query)}”.</div>`;
+          filterHint.textContent = query
+            ? `Showing ${rendered.toLocaleString()} of ${totalMatches.toLocaleString()} matching rows. Section checkboxes still select every row in that section.`
+            : 'Showing section groups. Expand one or search to see rows.';
+          list.querySelectorAll<HTMLElement>('[data-ch-scope-group]').forEach((button) => button.addEventListener('click', () => {
+            const items = groups[Number(button.dataset.chScopeGroup)]?.[1] ?? [];
+            const remove = items.every((item) => picked.has(item.id));
+            for (const item of items) remove ? picked.delete(item.id) : picked.add(item.id);
+            renderList();
+            update();
+          }));
+          list.querySelectorAll<HTMLElement>('[data-ch-scope-toggle]').forEach((button) => button.addEventListener('click', () => {
+            const index = Number(button.dataset.chScopeToggle);
+            if (expanded.has(index)) expanded.delete(index);
+            else expanded.add(index);
+            renderList();
+          }));
+          list.querySelectorAll<HTMLElement>('[data-ch-scope-id]').forEach((button) => button.addEventListener('click', () => {
+            const id = button.dataset.chScopeId!;
+            if (picked.has(id)) picked.delete(id);
+            else picked.add(id);
+            renderList();
+            update();
+          }));
+        };
+
+        search.addEventListener('input', () => {
+          query = search.value.trim().toLocaleLowerCase();
+          renderList();
+          update();
+        });
+        confirm.addEventListener('click', () => {
+          const labels = [...selectedLabels()];
+          if (!picked.size || labels.length > MAX_ASSIGNMENT_UNITS) return;
+          this.closeDialog();
+          this.host.selectByLabels(labels);
+        });
+        renderList();
+        update();
+      });
+      return;
+    }
+
+    const body = [...grouped.entries()].map(([group, items]) => `
+      <div class="slm-ch-seatgroup"><span>${esc(group)}</span></div>
+      ${items.map((option) => `<button type="button" class="slm-ch-seatitem" role="checkbox"
+        aria-checked="false" data-ch-scope-id="${esc(option.id)}">
+        <span class="box" aria-hidden="true">✓</span>
+        <span>${esc(option.label)}</span>
+        <span class="meta">${option.labels.length.toLocaleString()} seat${option.labels.length === 1 ? '' : 's'}</span>
+      </button>`).join('')}`).join('');
+    this.renderScrim(`
+      <h3 id="slm-ch-dlg-title">Add whole sections</h3>
+      <p class="sub">Choose one or more. They are added to the seats already selected on the map.</p>
+      <div class="slm-ch-seatlist">${body || `<div class="slm-empty">No sections are available.</div>`}</div>
+      <p class="slm-ch-err" data-ch-error hidden></p>
+      <div class="foot">
+        <button type="button" class="quiet" data-ch-close>Cancel</button>
+        <button type="button" class="slm-btn" data-ch-add-scope disabled>Add seats</button>
+      </div>`, (dialog) => {
+      const byId = new Map(available.map((option) => [option.id, option]));
+      const picked = new Set<string>();
+      const current = new Set(this.host.selectionLabels());
+      const confirm = dialog.querySelector<HTMLButtonElement>('[data-ch-add-scope]')!;
+      const error = dialog.querySelector<HTMLElement>('[data-ch-error]')!;
+      const selectedLabels = (): Set<string> => {
+        const labels = new Set(current);
+        for (const id of picked) for (const label of byId.get(id)?.labels ?? []) labels.add(label);
+        return labels;
+      };
+      const update = (): void => {
+        const labels = selectedLabels();
+        const added = labels.size - current.size;
+        const tooLarge = labels.size > MAX_ASSIGNMENT_UNITS;
+        confirm.disabled = added === 0 || tooLarge;
+        confirm.textContent = tooLarge
+          ? `Maximum ${MAX_ASSIGNMENT_UNITS.toLocaleString()} seats`
+          : `Add ${added.toLocaleString()} seat${added === 1 ? '' : 's'}`;
+        error.hidden = !tooLarge;
+        error.textContent = tooLarge
+          ? `That would make ${labels.size.toLocaleString()} selected seats. Choose fewer rows or sections.`
+          : '';
+      };
+      dialog.querySelectorAll<HTMLElement>('[data-ch-scope-id]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const id = button.dataset.chScopeId!;
+          if (picked.has(id)) picked.delete(id);
+          else picked.add(id);
+          button.setAttribute('aria-checked', String(picked.has(id)));
+          update();
+        });
+      });
+      confirm.addEventListener('click', () => {
+        const labels = [...selectedLabels()];
+        if (!picked.size || labels.length > MAX_ASSIGNMENT_UNITS) return;
+        this.closeDialog();
+        this.host.selectByLabels(labels);
+      });
+      update();
+    });
+  }
+
   // ---- dialogs --------------------------------------------------------------
 
   private openDialog(state: DialogState): void {
@@ -1837,6 +2150,7 @@ export class ChannelsMode {
     if (!state) return;
     if (state.kind === 'create') this.renderCreateDialog(state);
     else if (state.kind === 'review') this.renderReviewDialog(state);
+    else if (state.kind === 'scope') this.renderScopeDialog(state);
     else if (state.kind === 'archive') this.renderArchiveDialog(state);
     else if (state.kind === 'rename') this.renderRenameDialog(state);
     else if (state.kind === 'seatlist') this.renderSeatListDialog();
@@ -1990,17 +2304,21 @@ export class ChannelsMode {
     const { labels, buckets } = this.currentPlan();
     const authoritative = state.applied;
     const shown = authoritative ? authoritative.buckets : buckets;
-    const targetName = this.nameOf(this.targetChannelId) ?? PUBLIC_CHANNEL_NAME;
+    // An authoritative result names the channel the SERVER moved seats into.
+    // Reading `targetChannelId` off the mode would relabel a completed result
+    // if the organizer changed the destination picker before opening Details.
+    const targetName = this.nameOf(authoritative?.targetChannelId ?? this.targetChannelId) ?? PUBLIC_CHANNEL_NAME;
     const rows = bucketRows(shown, targetName);
     const mutations = authoritative ? authoritative.applied : mutationCount(buckets);
     const allSkipped = !authoritative && labels.length > 0 && mutations === 0;
+    const tooLarge = !authoritative && labels.length > MAX_ASSIGNMENT_UNITS;
     const rowsHtml = bucketRowsHtml(rows);
 
     const foot = authoritative
       ? `<div class="foot"><button type="button" class="slm-btn" data-ch-close>Done</button></div>`
       : `<div class="foot">
           <button type="button" class="quiet" data-ch-close>Back</button>
-          <button type="button" class="slm-btn" data-ch-apply ${allSkipped || state.busy ? 'disabled' : ''}>
+          <button type="button" class="slm-btn" data-ch-apply ${allSkipped || tooLarge || state.busy ? 'disabled' : ''}>
             ${state.busy ? 'Applying…' : `Apply ${mutations.toLocaleString()} change${mutations === 1 ? '' : 's'}`}
           </button>
         </div>`;
@@ -2011,6 +2329,10 @@ export class ChannelsMode {
       ? `<div class="slm-ch-alert warn"><span>ℹ</span><span>Nothing in this selection can move right now —
           every seat is in a buyer's checkout, already sold, or already in ${esc(targetName)}.</span></div>`
       : '';
+    const limitNote = tooLarge
+      ? `<div class="slm-ch-alert warn" role="alert"><span>ℹ</span><span><b>Choose fewer seats.</b>
+          One Apply can cover at most ${MAX_ASSIGNMENT_UNITS.toLocaleString()} seats.</span></div>`
+      : '';
 
     this.renderScrim(`
       <h3 id="slm-ch-dlg-title">${authoritative
@@ -2020,6 +2342,7 @@ export class ChannelsMode {
         ? 'These are the exact counts the server applied.'
         : 'Every selected seat is in exactly one line below.'}</p>
       ${skippedNote}
+      ${limitNote}
       ${rowsHtml || '<div class="slm-empty">Nothing selected.</div>'}
       ${confirmNote}
       <p class="slm-ch-err" data-ch-error ${state.error ? '' : 'hidden'}>${esc(state.error ?? '')}</p>
@@ -2032,15 +2355,21 @@ export class ChannelsMode {
   }
 
   /**
-   * Apply. On success the review sheet re-renders with the AUTHORITATIVE server
-   * buckets and the staged bar morphs to a ✓ for 1.2s. On a stale version the
-   * server mutated nothing: keep the selection, shake the bar once, and offer
-   * exactly one action — Refresh and review.
+   * Apply. On success the sheet CLOSES and the staged bar confirms what moved,
+   * naming the destination and any skipped seats, with the AUTHORITATIVE server
+   * buckets still one Details press away. Leaving the modal up on success made
+   * the organizer dismiss a sheet to get back to a map they had just changed.
+   * On a stale version the server mutated nothing: keep the selection, shake
+   * the bar once, and offer exactly one action — Refresh and review.
    */
   private async apply(): Promise<void> {
     if (!this.dialog || !this.caps.manage) return;
     const { labels } = this.currentPlan();
     if (!labels.length) return;
+    if (labels.length > MAX_ASSIGNMENT_UNITS) {
+      this.showDialogError(`Choose at most ${MAX_ASSIGNMENT_UNITS.toLocaleString()} seats for one Apply.`);
+      return;
+    }
     this.dialog = { ...this.dialog, busy: true, error: null };
     this.renderDialog();
     try {
@@ -2053,11 +2382,10 @@ export class ChannelsMode {
       });
       this.assignmentVersion = result.assignmentVersion;
       this.conflict = false;
-      this.dialog = { kind: 'review', applied: result };
       await this.refresh({ quiet: true });
-      this.renderDialog();
-      this.showApplied(result);
+      this.closeDialog({ restoreFocus: false });
       this.host.clearSelection();
+      this.showApplied(result);
     } catch (err) {
       const conflict = err instanceof ManageApiError && err.status === 409
         && err.code === 'channel_assignment_conflict';
@@ -2082,12 +2410,27 @@ export class ChannelsMode {
     }
   }
 
+  /**
+   * The success receipt, now that the review sheet closes on Apply. It names the
+   * destination and the seats that could not move, keeps the authoritative
+   * buckets reachable through Details, and stays up long enough to be read —
+   * 1.2s was tuned for a confirmation the organizer was already looking at.
+   */
   private showApplied(result: AssignmentResult): void {
+    const targetName = this.nameOf(result.targetChannelId) ?? PUBLIC_CHANNEL_NAME;
+    const skipped = result.buckets.skippedHeld.count + result.buckets.skippedBooked.count
+      + result.buckets.notFound.count;
     this.setStaged(`<span class="slm-ch-tick" aria-hidden="true">✓</span>
-      <span>Applied <b>${result.applied.toLocaleString()}</b> change${result.applied === 1 ? '' : 's'}</span>
-      <span class="grow"></span>`, 'done');
+      <span>Assigned <b>${result.applied.toLocaleString()}</b> seat${result.applied === 1 ? '' : 's'} to ${esc(targetName)}
+        ${skipped ? ` · ${skipped.toLocaleString()} skipped` : ''}</span>
+      <span class="grow"></span>
+      <button type="button" class="drop" data-ch-applied-details>Details</button>`, 'done');
+    this.stagedEl?.querySelector<HTMLElement>('[data-ch-applied-details]')?.addEventListener('click', () => {
+      this.openDialog({ kind: 'review', applied: result });
+    });
+    this.announce(`Assigned ${result.applied} seat${result.applied === 1 ? '' : 's'} to ${targetName}${skipped ? `; ${skipped} skipped` : ''}.`);
     if (this.stagedDoneTimer) clearTimeout(this.stagedDoneTimer);
-    this.stagedDoneTimer = setTimeout(() => this.setStaged(null), 1200);
+    this.stagedDoneTimer = setTimeout(() => this.setStaged(null), 5_000);
   }
 
   private shakeStaged(): void {

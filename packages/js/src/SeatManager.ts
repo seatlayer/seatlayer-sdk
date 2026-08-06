@@ -33,7 +33,9 @@ import {
   type SeatStatus,
   type SectionNode,
 } from '@seatlayer/core';
-import { CHANNELS_CSS, ChannelsMode, type ChannelsCapabilities } from './channelsMode';
+import {
+  CHANNELS_CSS, ChannelsMode, type ChannelsCapabilities, type ChannelsRowView,
+} from './channelsMode';
 import type { ChannelSeatStatus } from './channelPlan';
 import {
   ManageApi,
@@ -847,6 +849,35 @@ export class SeatManager {
       clearSelection: () => this.clearSelection(),
       selectSection: (sectionId: string) => { this.selectSection(sectionId); },
       sections: () => this.sectionOptions,
+      labelsInSection: (sectionId: string) =>
+        this.renderer?.getSelectableInSection(sectionId).map((seat) => seat.label) ?? [],
+      // Logical rows, not physical row objects: a segmented row is authored as
+      // several objects sharing one `logicalRowId`, and the organizer thinks of
+      // it as one row. Tables carry seats too, so they are rows here as well.
+      rows: (): ChannelsRowView[] => {
+        const objects = new Map((this.doc?.objects ?? []).map((object) => [object.id, object]));
+        const rows = new Map<string, ChannelsRowView>();
+        for (const seat of this.labelToSeat.values()) {
+          const object = objects.get(seat.rowId);
+          if (!object || (object.type !== 'row' && object.type !== 'table')) continue;
+          const id = seat.logicalRowId ?? seat.rowId;
+          const sectionId = this.sectionByObject.get(seat.rowId) ?? UNGROUPED_ID;
+          const row = rows.get(id) ?? {
+            id,
+            label: object.type === 'row'
+              ? object.segmentedRow?.displayLabel ?? object.displayLabel ?? object.label
+              : object.displayLabel ?? object.label,
+            sectionId,
+            sectionLabel: this.sectionLabelById.get(sectionId) ?? 'Other seats',
+            labels: [],
+          };
+          row.labels.push(seat.label);
+          rows.set(id, row);
+        }
+        return [...rows.values()].sort((left, right) =>
+          left.sectionLabel.localeCompare(right.sectionLabel, undefined, { numeric: true, sensitivity: 'base' })
+          || left.label.localeCompare(right.label, undefined, { numeric: true, sensitivity: 'base' }));
+      },
       categories: () => (this.doc?.categories ?? []).map((category) => ({
         key: category.key, label: category.label ?? category.key, color: category.color,
       })),

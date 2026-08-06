@@ -5,6 +5,7 @@ import {
   bucketRowsHtml,
   type ChannelsClient,
   type ChannelsModeHost,
+  type ChannelsRowView,
 } from '../src/channelsMode';
 import {
   PUBLIC_CHANNEL_ID,
@@ -404,11 +405,17 @@ interface Harness {
   client: ChannelsClient;
   selection: string[];
   setSelection(labels: string[]): void;
+  get overviewCalls(): number;
 }
 
 function mount(
   capabilities: { view: boolean; manage: boolean },
   client = makeClient(),
+  opts: {
+    seatPixelSize?: number;
+    sections?: Array<{ id: string; label: string }>;
+    rows?: ChannelsRowView[];
+  } = {},
 ): Harness {
   const root = document.createElement('div');
   root.className = 'slm';
@@ -417,7 +424,7 @@ function mount(
   document.body.appendChild(root);
   const rail = root.querySelector('.slm-railscroll') as HTMLElement;
   const status: Record<string, ChannelSeatStatus> = { A1: 'free', A2: 'booked', S1: 'free', P1: 'free', P2: 'held' };
-  const state = { selection: [] as string[] };
+  const state = { selection: [] as string[], overviewCalls: 0 };
   const host: ChannelsModeHost = {
     eventKey: 'ev_1',
     api: client,
@@ -430,12 +437,21 @@ function mount(
     selectByLabels: (labels) => { state.selection = [...new Set([...state.selection, ...labels])]; },
     clearSelection: () => { state.selection = []; },
     selectSection: () => {},
-    sections: () => [{ id: 'sec-1', label: 'Stalls' }],
+    sections: () => opts.sections ?? [{ id: 'sec-1', label: 'Stalls' }, { id: 'sec-2', label: 'Circle' }],
+    labelsInSection: (sectionId) => (sectionId === 'sec-1' ? ['A1', 'A2'] : ['S1', 'P1', 'P2']),
+    rows: () => opts.rows ?? [
+      { id: 'row-a', label: 'A', sectionId: 'sec-1', sectionLabel: 'Stalls', labels: ['A1', 'A2'] },
+      { id: 'row-p', label: 'P', sectionId: 'sec-2', sectionLabel: 'Circle', labels: ['P1', 'P2'] },
+      { id: 'row-s', label: 'S', sectionId: 'sec-2', sectionLabel: 'Circle', labels: ['S1'] },
+    ],
     categories: () => [{ key: 'std', label: 'Standard' }],
     labelsInCategory: () => ['A1'],
     sectionOfLabel: () => ({ id: 'sec-1', label: 'Stalls' }),
     worldToScreen: (point) => ({ x: point.x, y: point.y }),
-    seatPixelSize: () => 6,
+    seatPixelSize: () => opts.seatPixelSize ?? 6,
+    isSeatDetail: () => true,
+    showSectionOverview: () => { state.overviewCalls += 1; },
+    focusSection: () => {},
     isCompact: () => false,
     setMapInert: () => {},
     toast: () => {},
@@ -446,6 +462,7 @@ function mount(
     mode, root, rail, client,
     get selection() { return state.selection; },
     setSelection(labels: string[]) { state.selection = labels; },
+    get overviewCalls() { return state.overviewCalls; },
   };
 }
 
@@ -484,6 +501,25 @@ describe('ChannelsMode capability gating', () => {
     expect(harness.rail.querySelector('[data-ch-act="create"]')).not.toBeNull();
     expect(harness.rail.querySelectorAll('[data-ch-detail]').length).toBe(2);
     expect(harness.mode.canSelect()).toBe(true);
+    expect(harness.mode.usesMarqueeSelection()).toBe(false);
+  });
+
+  it('opens a sectioned chart in overview and makes marquee assignment explicit', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+
+    expect(harness.overviewCalls).toBe(1);
+    expect(harness.rail.textContent).toContain('Section overview');
+    expect(harness.rail.textContent).toContain('Pan map');
+    expect(harness.mode.usesMarqueeSelection()).toBe(false);
+
+    (harness.rail.querySelector('[data-ch-map="assign"]') as HTMLElement).click();
+    expect(harness.mode.usesMarqueeSelection()).toBe(true);
+    expect(harness.rail.textContent).toContain('Drag across seats to select them');
+
+    (harness.rail.querySelector('[data-ch-act="sections"]') as HTMLElement).click();
+    expect(harness.overviewCalls).toBe(2);
   });
 
   it('drops to read-only when the server refuses the list', async () => {
@@ -581,7 +617,7 @@ describe('ChannelsMode rail + a11y', () => {
 describe('ChannelsMode apply', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
 
-  it('renders the AUTHORITATIVE server buckets after Apply', async () => {
+  it('closes the sheet on Apply and keeps the AUTHORITATIVE buckets behind Details', async () => {
     const applied = {
       ok: true as const, targetChannelId: 'ch_a', assignmentVersion: 8, requested: 3, applied: 2,
       buckets: {
@@ -605,11 +641,22 @@ describe('ChannelsMode apply', () => {
     await flush();
     await flush();
 
+    // The organizer is returned to the map they just changed — no sheet to dismiss.
+    expect(harness.root.querySelector('[role="dialog"]')).toBeNull();
+    const staged = harness.root.querySelector('[data-ch="staged"]')!;
+    expect(staged.textContent).toContain('Assigned');
+    expect(staged.textContent).toContain('Travel Agency A');
+    // 1 held + 5 not-found are the seats the server refused to move.
+    expect(staged.textContent).toContain('6 skipped');
+    expect(harness.root.querySelector('[aria-live="polite"]')!.textContent)
+      .toContain('Assigned 2 seats to Travel Agency A; 6 skipped');
+
+    // Details reopens the authoritative sheet, still naming the SERVER's target.
+    (staged.querySelector('[data-ch-applied-details]') as HTMLElement).click();
     const dialog = harness.root.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain('Moved 2 seats');
     // The sixth bucket the comp does not draw, rendered because it is non-zero.
     expect(dialog.textContent).toContain('not on this map');
-    expect(harness.root.querySelector('[aria-live="polite"]')!.textContent).toContain('Applied 2');
   });
 
   it('keeps the selection and offers Refresh and review on a version conflict', async () => {
@@ -878,5 +925,287 @@ describe('ChannelsMode archive + preview', () => {
     await flush();
     expect(harness.rail.textContent).toContain('This private sale is not available');
     expect(harness.rail.textContent).toContain('Sponsor guests is paused');
+  });
+
+  it('paints the exact preview allocation as a distinct state without square category bleed', async () => {
+    const fills: string[] = [];
+    const context = {
+      fillStyle: '', strokeStyle: '', lineWidth: 0, globalAlpha: 1,
+      setTransform: vi.fn(), clearRect: vi.fn(), beginPath: vi.fn(), arc: vi.fn(),
+      fill: vi.fn(() => { fills.push(context.fillStyle); }), measureText: vi.fn(() => ({ width: 8 })),
+      fillText: vi.fn(),
+      stroke: vi.fn(), fillRect: vi.fn(),
+    };
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    const harness = mount({ view: true, manage: true }, makeClient({
+      // The worker's authoritative seat labels are sufficient even when an
+      // older deployment omits the redundant aggregate count.
+      channelPreview: vi.fn().mockResolvedValue({ available: true, eligible: ['A1'] }),
+    }), { seatPixelSize: 24 });
+    const map = harness.root.querySelector('.slm-map') as HTMLElement;
+    vi.spyOn(map, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, top: 0, left: 0, right: 300, bottom: 180, width: 300, height: 180,
+      toJSON: () => ({}),
+    });
+
+    harness.mode.enter();
+    await flush();
+    // In the organiser's allocation view, private inventory uses the channel
+    // marker colour — not the chart category colour beneath it.
+    expect(fills).toEqual(expect.arrayContaining(['#a78bfa', '#2dd4bf']));
+    expect(context.arc).toHaveBeenCalled();
+    // Inspect mode legitimately paints the administrative allocation. The
+    // assertions below are specifically about the buyer-preview repaint.
+    context.fillRect.mockClear();
+    context.arc.mockClear();
+    context.fill.mockClear();
+    fills.length = 0;
+    (harness.rail.querySelector('[data-ch-view="preview"]') as HTMLElement).click();
+    await flush();
+    await flush();
+
+    expect(harness.rail.textContent).toContain('1 seat is available now');
+    expect(fills).toEqual(expect.arrayContaining(['#6e7bff', '#303846']));
+    expect(context.arc).toHaveBeenCalled();
+    expect(context.fillText).toHaveBeenCalledWith('A1', expect.any(Number), expect.any(Number));
+    expect(context.fillRect).not.toHaveBeenCalled();
+    getContext.mockRestore();
+  });
+});
+
+/**
+ * Assignment tools. These were the cockpit's biggest discoverability hole: the
+ * section / category / seat-list choosers only existed inside the selection
+ * rail, which nothing reached until seats were already selected by hand.
+ */
+describe('ChannelsMode assignment tools', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('offers the destination and every select-by route BEFORE a seat is selected', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+
+    expect(harness.rail.querySelector('[data-ch-target]')).not.toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="pick-sections"]')).not.toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="pick-rows"]')).not.toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="drag-select"]')).not.toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="pick-category"]')).not.toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="seatlist"]')).not.toBeNull();
+  });
+
+  it('keeps the same tools once a selection exists', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    harness.setSelection(['P1', 'S1']);
+    harness.mode.handleSelectionChange();
+
+    expect(harness.rail.textContent).toContain('2');
+    expect(harness.rail.querySelector('[data-ch-act="pick-rows"]')).not.toBeNull();
+    expect(harness.rail.querySelector('[data-ch-target]')).not.toBeNull();
+  });
+
+  it('shows NO assignment tools to a view-only token', async () => {
+    const harness = mount({ view: true, manage: false });
+    harness.mode.enter();
+    await flush();
+
+    expect(harness.rail.querySelector('[data-ch-act="pick-sections"]')).toBeNull();
+    expect(harness.rail.querySelector('[data-ch-target]')).toBeNull();
+  });
+
+  it('hides a route the chart cannot serve rather than opening an empty chooser', async () => {
+    const harness = mount({ view: true, manage: true }, makeClient(), { sections: [], rows: [] });
+    harness.mode.enter();
+    await flush();
+
+    expect(harness.rail.querySelector('[data-ch-act="pick-sections"]')).toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="pick-rows"]')).toBeNull();
+    // Drag box needs no chart structure at all, so it is always offered.
+    expect(harness.rail.querySelector('[data-ch-act="drag-select"]')).not.toBeNull();
+  });
+
+  it('arms the marquee — Drag box is a map intent, not a dialog', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    expect(harness.mode.usesMarqueeSelection()).toBe(false);
+
+    (harness.rail.querySelector('[data-ch-act="drag-select"]') as HTMLElement).click();
+
+    expect(harness.mode.usesMarqueeSelection()).toBe(true);
+    expect(harness.root.querySelector('[role="dialog"]')).toBeNull();
+    // The armed state is visible, not silent.
+    expect((harness.rail.querySelector('[data-ch-act="drag-select"]') as HTMLElement).className)
+      .not.toContain('ghost');
+  });
+});
+
+describe('ChannelsMode scope chooser', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('ADDS whole sections to the existing selection instead of replacing it', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    harness.setSelection(['P1']);
+    harness.mode.handleSelectionChange();
+    (harness.rail.querySelector('[data-ch-act="pick-sections"]') as HTMLElement).click();
+
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    const confirm = dialog.querySelector('[data-ch-add-scope]') as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    (dialog.querySelector('[data-ch-scope-id="sec-1"]') as HTMLElement).click();
+    expect(confirm.textContent).toContain('Add 2 seats');
+
+    confirm.click();
+    // P1 survives — a chooser that discarded a marquee would be a trap.
+    expect(harness.selection).toEqual(['P1', 'A1', 'A2']);
+    expect(harness.root.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('keeps rows collapsed under their section and expands one on request', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
+
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    expect(dialog.querySelectorAll('[data-ch-scope-group]').length).toBe(2);
+    expect(dialog.querySelector('[data-ch-scope-id="row-a"]')).toBeNull();
+
+    (dialog.querySelector('[data-ch-scope-toggle="0"]') as HTMLElement).click();
+    expect(dialog.querySelector('[data-ch-scope-id="row-a"]')).not.toBeNull();
+  });
+
+  it('selects every row in a section from one tri-state group checkbox', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
+
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    // Circle holds rows P (2 seats) and S (1 seat).
+    (dialog.querySelector('[data-ch-scope-group="1"]') as HTMLElement).click();
+    expect(dialog.querySelector('[data-ch-scope-group="1"]')!.getAttribute('aria-checked')).toBe('true');
+    const confirm = dialog.querySelector('[data-ch-add-scope]') as HTMLButtonElement;
+    expect(confirm.textContent).toContain('Add 3 seats');
+
+    confirm.click();
+    expect(harness.selection).toEqual(['P1', 'P2', 'S1']);
+  });
+
+  it('searches across every row without expanding a section by hand', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
+
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    const search = dialog.querySelector('[data-ch-scope-search]') as HTMLInputElement;
+    search.value = 'stalls';
+    search.dispatchEvent(new Event('input'));
+
+    expect(dialog.querySelector('[data-ch-scope-id="row-a"]')).not.toBeNull();
+    expect(dialog.querySelector('[data-ch-scope-id="row-p"]')).toBeNull();
+    expect(dialog.textContent).toContain('matching rows');
+  });
+
+  it('says so plainly when nothing matches the search', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
+
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    const search = dialog.querySelector('[data-ch-scope-search]') as HTMLInputElement;
+    search.value = 'balcony';
+    search.dispatchEvent(new Event('input'));
+
+    expect(dialog.textContent).toContain('No sections or rows match');
+  });
+
+  it('drops a row that has no selectable seats rather than offering "Add 0 seats"', async () => {
+    const harness = mount({ view: true, manage: true }, makeClient(), {
+      rows: [
+        { id: 'row-a', label: 'A', sectionId: 'sec-1', sectionLabel: 'Stalls', labels: ['A1'] },
+        { id: 'row-x', label: 'X', sectionId: 'sec-1', sectionLabel: 'Stalls', labels: [] },
+      ],
+    });
+    harness.mode.enter();
+    await flush();
+    (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
+
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    (dialog.querySelector('[data-ch-scope-toggle="0"]') as HTMLElement).click();
+    expect(dialog.querySelector('[data-ch-scope-id="row-a"]')).not.toBeNull();
+    expect(dialog.querySelector('[data-ch-scope-id="row-x"]')).toBeNull();
+  });
+
+  it('refuses a scope selection that would exceed the one-Apply ceiling', async () => {
+    const huge = Array.from({ length: 6_000 }, (_, index) => `H${index}`);
+    const harness = mount({ view: true, manage: true }, makeClient(), {
+      rows: [{ id: 'row-h', label: 'H', sectionId: 'sec-1', sectionLabel: 'Stalls', labels: huge }],
+    });
+    harness.mode.enter();
+    await flush();
+    (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
+
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    (dialog.querySelector('[data-ch-scope-group="0"]') as HTMLElement).click();
+    const confirm = dialog.querySelector('[data-ch-add-scope]') as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    expect(confirm.textContent).toContain('Maximum 5,000 seats');
+    expect(dialog.querySelector('[data-ch-error]')!.textContent).toContain('Choose fewer rows or sections');
+
+    confirm.click();
+    expect(harness.selection).toEqual([]);
+  });
+});
+
+/**
+ * The one-Apply ceiling. It is stated everywhere the organizer could commit,
+ * so it is never discovered as a request that dies halfway.
+ */
+describe('ChannelsMode assignment ceiling', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('blocks Review from both the staged bar and the rail, and says the limit', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    harness.setSelection(Array.from({ length: 5_001 }, (_, index) => `H${index}`));
+    harness.mode.handleSelectionChange();
+
+    const railReview = harness.rail.querySelector('[data-ch-act="review"]') as HTMLButtonElement;
+    expect(railReview.disabled).toBe(true);
+    expect(harness.rail.textContent).toContain('too large to apply at once');
+
+    const stagedReview = harness.root
+      .querySelector('[data-ch="staged"] [data-ch-act="review"]') as HTMLButtonElement;
+    expect(stagedReview.disabled).toBe(true);
+    expect(stagedReview.textContent).toContain('Maximum 5,000 seats');
+  });
+
+  // The sheet reads the LIVE selection, so a selection that grows while the
+  // review is open must be caught at the Apply itself, not only in the markup.
+  it('never sends an over-sized Apply to the server', async () => {
+    const apply = vi.fn();
+    const harness = mount({ view: true, manage: true }, makeClient({ applyChannelAssignment: apply }));
+    harness.mode.enter();
+    await flush();
+    harness.setSelection(['P1', 'S1']);
+    harness.mode.handleSelectionChange();
+    (harness.rail.querySelector('[data-ch-act="review"]') as HTMLElement).click();
+
+    harness.setSelection(Array.from({ length: 5_001 }, (_, index) => `H${index}`));
+    (harness.root.querySelector('[data-ch-apply]') as HTMLElement).click();
+    await flush();
+
+    expect(apply).not.toHaveBeenCalled();
+    expect(harness.root.querySelector('[data-ch-error]')!.textContent)
+      .toContain('at most 5,000 seats');
   });
 });
