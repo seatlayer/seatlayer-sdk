@@ -76,6 +76,7 @@ export {
   ACCESS_LINK_DEFAULTS,
   PUBLIC_CHANNEL_ID,
   PUBLIC_CHANNEL_NAME,
+  accessIntentDescription,
   accessIntentLabel,
   accessLine,
   accessLinkBadge,
@@ -84,6 +85,8 @@ export {
   accessLinkPolicyLines,
   bucketRows,
   dropReviewRows,
+  intentForbidsCopy,
+  intentSwitchBlockedCopy,
   isPublicChannelId,
   markerLetter,
   markerOf,
@@ -96,6 +99,7 @@ export {
   suggestMarker,
 } from './channelPlan';
 export type {
+  AccessIntentForbidsDetails,
   AccessLinkRecord,
   AccessLinkReveal,
   AccessLinkState,
@@ -113,6 +117,7 @@ export type {
   ChannelRecord,
   ChannelSeatStatus,
   ChannelState,
+  IntentSwitchBlockedDetails,
   SelectionSourceRow,
 } from './channelPlan';
 export { ManageApi, ManageApiError } from './manageApi';

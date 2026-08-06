@@ -422,24 +422,151 @@ export function retryAfterCopy(details: ArchiveBlockedDetails | null | undefined
  *  branch lands the `access` field, never to a guess. */
 export function accessLine(access: ChannelAccessSummary | null | undefined): string {
   if (!access || !access.intent) return '—';
-  // 'none' and 'internal' are legacy stored values with no consumer anywhere —
-  // they are not offered in the UI and both mean the same true thing: the seats
-  // are allocated (so withheld from public sale) and nobody can buy them yet.
+  // Every one of the four is a real, enforced answer now (server 2026-08-06), so
+  // each gets its own line. 'none' and 'internal' used to collapse into "not
+  // distributed yet" because nothing read them; today `none` refuses every buyer
+  // path and `internal` opens the staff one, and those are different facts.
   const base = access.intent === 'server' ? 'Website integration'
     : access.intent === 'hosted_link' ? 'Buyer link'
-      : 'Not distributed yet';
+      : access.intent === 'internal' ? 'Your staff sell these'
+        : 'Protected reserve';
   const grants = access.hasActiveGrants ? 'in use now'
     : access.lastMintAt ? `last used ${new Date(access.lastMintAt).toLocaleDateString()}` : null;
   const detail = access.detail ?? grants;
   return detail ? `${base} · ${detail}` : base;
 }
 
-/** Plain-language label for the access-intent control. */
+/**
+ * The name of each sale route, WORD FOR WORD as the server says it.
+ *
+ * `eventChannels.ts` builds its refusal sentences from an `INTENT_LABEL` map
+ * with exactly these four strings. Diverging here would mean the picker calls a
+ * route one thing and the refusal it produces calls it another, so these are
+ * copied deliberately rather than paraphrased.
+ */
 export function accessIntentLabel(intent: ChannelAccessIntent): string {
-  return intent === 'internal' ? 'Internal selling — our own staff sell these'
-    : intent === 'server' ? 'Server integration — our backend lets buyers in'
-      : intent === 'hosted_link' ? 'Hosted access link — SeatLayer issues the link'
-        : 'No buyer access yet — the allocation is just protected';
+  return intent === 'internal' ? 'Sell through your own staff'
+    : intent === 'server' ? 'Integrate a website or app'
+      : intent === 'hosted_link' ? 'Sell with a buyer link'
+        : 'Keep as protected reserve';
+}
+
+/**
+ * What choosing this route actually DOES, now that the server enforces it.
+ *
+ * Written against the enforcement matrix, not against intent: each route opens
+ * exactly one way to reach a buyer and refuses the other three, so each sentence
+ * says both halves. The old copy for these values promised nothing and delivered
+ * nothing; it was deleted in 0.42.0 and is not coming back.
+ */
+export function accessIntentDescription(intent: ChannelAccessIntent): string {
+  switch (intent) {
+    case 'internal':
+      return 'Only your own box office can sell these seats, through your secret key. '
+        + 'Buyer links and website integrations are refused.';
+    case 'server':
+      return "Your website's backend mints each buyer a short-lived session for these seats. "
+        + 'Buyer links are refused; the code lives on the Embed page.';
+    case 'hosted_link':
+      return 'SeatLayer makes a link you send to a named group. They open it and buy only these seats. '
+        + 'No other route can sell them.';
+    default:
+      return 'Nobody can buy these seats. Every way of letting a buyer in — a buyer link, your website, '
+        + 'even your own staff — is refused while this is the route. The seats stay out of public sale.';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Access-intent enforcement refusals (server 2026-08-06)
+// ---------------------------------------------------------------------------
+
+/** `channel_access_intent_forbids` (409) — the route this channel declares is
+ *  not the one the action needed. */
+export interface AccessIntentForbidsDetails {
+  channelId?: string;
+  accessIntent?: ChannelAccessIntent | string;
+  /** The route the refused action arrived on: `hosted_link` | `server` | `staff` | `public`. */
+  route?: string;
+}
+
+/** Which declaration would have let the refused route through. The server's
+ *  matrix is one route per intent, so this inverts cleanly. */
+function intentForRoute(route: string | undefined): ChannelAccessIntent | null {
+  return route === 'hosted_link' ? 'hosted_link'
+    : route === 'server' ? 'server'
+      : route === 'staff' ? 'internal' : null;
+}
+
+/**
+ * The refusal, said as a decision the organizer can act on.
+ *
+ * The server's own sentence stops at "…so it cannot be sold through a buyer
+ * link" — true, but it leaves the reader to work out what to do. This adds the
+ * second half: which route to switch to. The code itself is never shown.
+ */
+export function intentForbidsCopy(details: AccessIntentForbidsDetails | null | undefined): string {
+  const current = parseIntent(details?.accessIntent);
+  const wanted = intentForRoute(details?.route);
+  const head = `This channel is set to "${accessIntentLabel(current)}"`;
+  return wanted
+    ? `${head}, so it cannot do that. Switch it to "${accessIntentLabel(wanted)}" first.`
+    : `${head}, so it cannot do that. Choose a different route for this channel first.`;
+}
+
+/** `channel_intent_switch_blocked` (409) — buyers are inside the current route. */
+export interface IntentSwitchBlockedDetails {
+  channelId?: string;
+  from?: ChannelAccessIntent | string;
+  to?: ChannelAccessIntent | string;
+  liveAccessLinks?: number;
+  activeSessions?: number;
+  acknowledgeWith?: { acknowledgeLiveAccess?: boolean };
+}
+
+function parseIntent(value: unknown): ChannelAccessIntent {
+  return value === 'internal' || value === 'server' || value === 'hosted_link' || value === 'none'
+    ? value : 'none';
+}
+
+function plural(count: number, one: string, many: string): string {
+  return `${count.toLocaleString()} ${count === 1 ? one : many}`;
+}
+
+/**
+ * What is live right now, and what acknowledging would do to it.
+ *
+ * Both halves are checked against the server rather than guessed: an
+ * acknowledged switch REVOKES the channel's hosted links (redemption refuses
+ * from that moment, so a link left listed as active would be a door the
+ * management surface advertises and the buyer path denies), and deliberately
+ * LEAVES buyer sessions and their holds alone — nobody is thrown out of a
+ * checkout. Sessions cap at 12 hours (30 minutes by default) and no new ones can
+ * be minted, so the old route drains on its own.
+ */
+export function intentSwitchBlockedCopy(
+  details: IntentSwitchBlockedDetails | null | undefined,
+): { headline: string; consequences: string[] } {
+  const links = Math.max(0, details?.liveAccessLinks ?? 0);
+  const sessions = Math.max(0, details?.activeSessions ?? 0);
+  const from = parseIntent(details?.from);
+  const to = parseIntent(details?.to);
+  const live = [
+    links ? plural(links, 'buyer link is live', 'buyer links are live') : null,
+    sessions ? plural(sessions, 'buyer is in a checkout', 'buyers are in a checkout') : null,
+  ].filter(Boolean).join(', and ');
+  const headline = `${live || 'Buyers are inside this channel'} on "${accessIntentLabel(from)}". `
+    + `Moving it to "${accessIntentLabel(to)}" changes what happens to them.`;
+  const consequences: string[] = [];
+  if (links) {
+    consequences.push(`${plural(links, 'buyer link closes', 'buyer links close')} immediately. `
+      + 'Anyone who has not opened it yet never will — send a new link if you still need one.');
+  }
+  if (sessions) {
+    consequences.push(`${plural(sessions, 'buyer who is already in a checkout keeps', 'buyers who are already in a checkout keep')} `
+      + 'their seats and can finish paying. Nobody is thrown out. No new buyers come in this way, '
+      + 'so the old route empties on its own within 12 hours.');
+  }
+  return { headline, consequences };
 }
 
 // ---------------------------------------------------------------------------
@@ -576,7 +703,9 @@ export function accessLinkPolicyLines(link: AccessLinkRecord): Array<{ k: string
  * here, so the client can never disagree with the rule it is reporting.
  */
 export function accessLinkErrorCopy(
-  err: { code?: string; serverMessage?: string; status?: number } | null | undefined,
+  err: {
+    code?: string; serverMessage?: string; status?: number; details?: Record<string, unknown>;
+  } | null | undefined,
 ): string {
   const fromServer = err?.serverMessage?.trim();
   switch (err?.code) {
@@ -593,6 +722,11 @@ export function accessLinkErrorCopy(
       return 'That link is no longer active, so it cannot be rotated or revoked.';
     case 'channel_unavailable':
       return 'This channel is paused or archived, so it cannot let new buyers in. Resume it first.';
+    // The channel declares a different sale route. The UI declares `hosted_link`
+    // before it creates, so reaching this means the declaration itself was
+    // refused or raced — say which route is in the way, not the code.
+    case 'channel_access_intent_forbids':
+      return intentForbidsCopy(err?.details as AccessIntentForbidsDetails | undefined);
     case 'end_active_sessions_required':
       return 'Choose what happens to the buyers who already came in through this link.';
     case 'not_found':

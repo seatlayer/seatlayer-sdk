@@ -299,12 +299,13 @@ describe('access line', () => {
     expect(accessLine({ intent: 'server' })).toBe('Website integration');
   });
 
-  // 'internal' and 'none' are stored on legacy rows and read by nothing. They
-  // must not resurface as a state of their own — both mean "not distributed".
-  it('says the same honest thing for both dead intents', () => {
-    expect(accessLine({ intent: 'internal' })).toBe('Not distributed yet');
-    expect(accessLine({ intent: 'none' })).toBe('Not distributed yet');
-    expect(accessLine({ intent: 'internal' })).not.toContain('Internal selling');
+  // 'internal' and 'none' used to collapse into one line because nothing read
+  // them. Since 2026-08-06 `none` refuses every buyer path and `internal` opens
+  // the staff one, so they are different facts and get different lines.
+  it('gives the two non-buyer-facing routes their own honest line', () => {
+    expect(accessLine({ intent: 'internal' })).toBe('Your staff sell these');
+    expect(accessLine({ intent: 'none' })).toBe('Protected reserve');
+    expect(accessLine({ intent: 'none', hasActiveGrants: false })).not.toContain('Not distributed');
   });
 });
 
@@ -372,6 +373,21 @@ describe('ManageApi channel routes', () => {
 // Mode behaviour (DOM)
 // ---------------------------------------------------------------------------
 
+/** The 201 body, whose `url` exists for exactly one render and is never stored. */
+function revealFixture() {
+  return {
+    link: {
+      id: 'alk_1', channelId: 'ch_a', label: 'Agency B', includePublic: false,
+      expiresAt: Date.now() + 86_400_000, maxRedemptions: 100, maxQuantity: 4,
+      redemptions: 0, state: 'active' as const, status: 'active' as const,
+      createdAt: Date.now(), endedAt: null, rotatedTo: null, sessionTtlSeconds: null,
+    },
+    url: 'https://seatlayer.io/a/alc_demo',
+    capability: 'alc_demo',
+    revealedOnce: true as const,
+  };
+}
+
 function makeClient(over: Partial<ChannelsClient> = {}): ChannelsClient {
   return {
     channels: vi.fn().mockResolvedValue(listFixture()),
@@ -389,8 +405,8 @@ function makeClient(over: Partial<ChannelsClient> = {}): ChannelsClient {
     archiveChannel: vi.fn(),
     applyChannelAssignment: vi.fn(),
     channelPreview: vi.fn().mockResolvedValue({ available: true, eligible: ['A1'], counts: { eligible: 1 } }),
-    setChannelAccessIntent: vi.fn(),
-    createAccessLink: vi.fn(),
+    setChannelAccessIntent: vi.fn().mockResolvedValue({ ok: true }),
+    createAccessLink: vi.fn().mockResolvedValue(revealFixture()),
     accessLinks: vi.fn().mockResolvedValue({ links: [] }),
     rotateAccessLink: vi.fn(),
     revokeAccessLink: vi.fn(),
@@ -406,6 +422,9 @@ interface Harness {
   selection: string[];
   setSelection(labels: string[]): void;
   get overviewCalls(): number;
+  /** Every toast the mode raised, in order — the rail's report lane for direct
+   *  actions, which is where the route refusals have to be readable. */
+  get toasts(): Array<{ message: string; kind: 'ok' | 'err' }>;
 }
 
 function mount(
@@ -424,7 +443,10 @@ function mount(
   document.body.appendChild(root);
   const rail = root.querySelector('.slm-railscroll') as HTMLElement;
   const status: Record<string, ChannelSeatStatus> = { A1: 'free', A2: 'booked', S1: 'free', P1: 'free', P2: 'held' };
-  const state = { selection: [] as string[], overviewCalls: 0 };
+  const state = {
+    selection: [] as string[], overviewCalls: 0,
+    toasts: [] as Array<{ message: string; kind: 'ok' | 'err' }>,
+  };
   const host: ChannelsModeHost = {
     eventKey: 'ev_1',
     api: client,
@@ -454,7 +476,7 @@ function mount(
     focusSection: () => {},
     isCompact: () => false,
     setMapInert: () => {},
-    toast: () => {},
+    toast: (message, kind) => { state.toasts.push({ message, kind }); },
     onError: () => {},
   };
   const mode = new ChannelsMode(host, capabilities);
@@ -463,6 +485,7 @@ function mount(
     get selection() { return state.selection; },
     setSelection(labels: string[]) { state.selection = labels; },
     get overviewCalls() { return state.overviewCalls; },
+    get toasts() { return state.toasts; },
   };
 }
 
@@ -703,11 +726,19 @@ describe('ChannelsMode apply', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Distribute — the two routes that actually reach a buyer
+// Distribute — four routes, every one of them enforced
 //
-// The detail panel used to offer a four-value "access intent" picker. Two of the
-// values (none / internal) were read by nothing at all, and a third
-// (hosted_link) is the server's to set. What is left is two actions.
+// The picker was cut to two actions in 0.42.0 because `access_intent` was stored
+// and read by nothing: "Keep as protected reserve" and "Sell through your own
+// staff" were labels you could set and then wait forever for something to
+// happen. The server closed that hole on 2026-08-06 — each declaration opens
+// exactly one route and refuses the other three — so all four are real choices
+// again, with copy written against the enforcement rather than the old fiction.
+//
+// The bug these tests exist to keep fixed: `createAccessLink` used to SET
+// `hosted_link` as a side effect. It now REQUIRES it, and channels default to
+// `none`, so a create that does not declare first 409s on the organizer's very
+// first "Create buyer link".
 // ---------------------------------------------------------------------------
 
 async function openDetail(harness: Harness, index = 0): Promise<void> {
@@ -721,48 +752,88 @@ function withIntent(intent: string): ChannelsClient {
   return makeClient({ channels: vi.fn().mockResolvedValue(list) });
 }
 
+/** A 409 exactly as the worker sends it. */
+function refusal(code: string, details: Record<string, unknown>): ManageApiError {
+  return new ManageApiError(409, code, code, undefined, details, 'server sentence');
+}
+
 describe('ChannelsMode distribute', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
 
-  it('offers exactly the two working routes, and no dead-intent control', async () => {
+  it('offers all four routes, each named the way the server names it', async () => {
     const harness = mount({ view: true, manage: true });
     harness.mode.enter();
     await flush();
     await openDetail(harness);
 
-    expect(harness.rail.querySelector('[data-ch-act="link-create"]')).not.toBeNull();
-    expect(harness.rail.querySelector('[data-ch-act="embed-code"]')).not.toBeNull();
-    // The picker and both of its dead values are gone from the surface entirely.
-    expect(harness.rail.querySelector('[data-ch-intent]')).toBeNull();
-    expect(harness.rail.querySelector('#slm-ch-intent')).toBeNull();
-    const html = harness.rail.innerHTML;
-    expect(html).not.toContain('Internal selling');
-    expect(html).not.toContain('No buyer access yet');
-    expect(html).not.toContain('How should buyers reach this channel');
+    const routes = [...harness.rail.querySelectorAll('[data-ch-route]')]
+      .map((card) => card.getAttribute('data-ch-route'));
+    expect(routes).toEqual(['hosted_link', 'server', 'internal', 'none']);
+    const text = harness.rail.textContent!;
+    // Word for word what `eventChannels.INTENT_LABEL` says, so the picker and the
+    // refusal it produces can never call the same route two different things.
+    expect(text).toContain('Sell with a buyer link');
+    expect(text).toContain('Integrate a website or app');
+    expect(text).toContain('Sell through your own staff');
+    expect(text).toContain('Keep as protected reserve');
+    // The dishonest 0.42.0-era copy stays deleted.
+    expect(text).not.toContain('Internal selling — our own staff sell these');
+    expect(text).not.toContain('No buyer access yet');
   });
 
-  it('renders a legacy internal channel as "not distributed", never an empty select', async () => {
+  it('says what each route actually refuses, not just what it allows', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+    const text = harness.rail.textContent!;
+
+    expect(text).toContain('Nobody can buy these seats');
+    expect(text).toContain('is refused while this is the route');
+    expect(text).toContain('Only your own box office can sell these seats');
+    expect(text).toContain('Buyer links and website integrations are refused');
+    expect(text).toContain('No other route can sell them');
+  });
+
+  it('names the current route instead of leaving it to be inferred', async () => {
     const harness = mount({ view: true, manage: true }, withIntent('internal'));
     harness.mode.enter();
     await flush();
     await openDetail(harness);
 
-    expect(harness.rail.textContent).toContain('Not distributed yet — seats stay reserved');
-    expect(harness.rail.querySelector('select')).toBeNull();
-    // Both actions stay available on a legacy row — it is not a dead end.
-    expect(harness.rail.querySelector('[data-ch-act="link-create"]')).not.toBeNull();
-    expect(harness.rail.querySelector('[data-ch-act="embed-code"]')).not.toBeNull();
+    const current = harness.rail.querySelector('.slm-ch-dist.on');
+    expect(current?.getAttribute('data-ch-route')).toBe('internal');
+    expect(current?.textContent).toContain('Current route');
+    // …and it does not offer a button that would re-select what is already on.
+    expect(harness.rail.querySelector('[data-ch-act="route-internal"]')).toBeNull();
+    expect(harness.rail.textContent).toContain('Your staff sell these seats. No buyer-facing route is open.');
   });
 
-  it('renders an unknown legacy intent the same way rather than crashing', async () => {
+  it('states the protected reserve as a decision, never as a gap', async () => {
     const harness = mount({ view: true, manage: true }, withIntent('none'));
     harness.mode.enter();
     await flush();
     await openDetail(harness);
-    expect(harness.rail.textContent).toContain('Not distributed yet');
+
+    expect(harness.rail.textContent).toContain('Protected reserve — no route can sell these seats');
+    expect(harness.rail.querySelector('.slm-ch-dist.on')?.getAttribute('data-ch-route')).toBe('none');
   });
 
-  it('keeps the unchanged setAccessIntent API behind "Get embed code"', async () => {
+  it('persists each route the organizer picks', async () => {
+    for (const [action, intent] of [['route-internal', 'internal'], ['route-none', 'none']] as const) {
+      document.body.innerHTML = '';
+      const harness = mount({ view: true, manage: true }, withIntent('server'));
+      harness.mode.enter();
+      await flush();
+      await openDetail(harness);
+      (harness.rail.querySelector(`[data-ch-act="${action}"]`) as HTMLElement).click();
+      await flush();
+
+      expect(harness.client.setChannelAccessIntent).toHaveBeenCalledWith('ev_1', 'ch_a', intent, {});
+    }
+  });
+
+  it('keeps the website route on the same setAccessIntent call it always used', async () => {
     const harness = mount({ view: true, manage: true }, withIntent('none'));
     harness.mode.enter();
     await flush();
@@ -770,7 +841,9 @@ describe('ChannelsMode distribute', () => {
     (harness.rail.querySelector('[data-ch-act="embed-code"]') as HTMLElement).click();
     await flush();
 
-    expect(harness.client.setChannelAccessIntent).toHaveBeenCalledWith('ev_1', 'ch_a', 'server');
+    expect(harness.client.setChannelAccessIntent).toHaveBeenCalledWith('ev_1', 'ch_a', 'server', {});
+    expect(harness.toasts.at(-1)).toMatchObject({ kind: 'ok' });
+    expect(harness.toasts.at(-1)!.message).toContain('embed code is on the Embed page');
   });
 
   it('opens the buyer-link dialog straight from the distribute card', async () => {
@@ -789,9 +862,248 @@ describe('ChannelsMode distribute', () => {
     harness.mode.enter();
     await flush();
     await openDetail(harness); // ch_a already carries intent 'server'
-    expect(harness.rail.textContent).toContain("Your website's backend grants each buyer access");
+    expect(harness.rail.textContent).toContain("Your website's backend mints each buyer a short-lived session");
     const guide = harness.rail.querySelector('a[href]') as HTMLAnchorElement;
     expect(guide.href).toBe('https://docs.seatlayer.io/server-api/channels');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Declare-then-create — THE production bug
+// ---------------------------------------------------------------------------
+
+describe('ChannelsMode declare-then-create', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  /** Open the channel, open the link dialog, submit it. */
+  async function createLinkFrom(harness: Harness): Promise<void> {
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+    (harness.rail.querySelector('[data-ch-act="link-create"]') as HTMLElement).click();
+    (harness.root.querySelector('[data-ch-lk-create]') as HTMLElement).click();
+    await flush();
+    await flush();
+  }
+
+  it('declares hosted_link BEFORE creating, so a first link on a fresh channel cannot 409', async () => {
+    const client = withIntent('none');
+    const order: string[] = [];
+    (client.setChannelAccessIntent as ReturnType<typeof vi.fn>)
+      .mockImplementation(async () => { order.push('declare'); return { ok: true }; });
+    (client.createAccessLink as ReturnType<typeof vi.fn>)
+      .mockImplementation(async () => { order.push('create'); return revealFixture(); });
+    const harness = mount({ view: true, manage: true }, client);
+
+    await createLinkFrom(harness);
+
+    expect(order).toEqual(['declare', 'create']);
+    expect(client.setChannelAccessIntent).toHaveBeenCalledWith('ev_1', 'ch_a', 'hosted_link');
+    expect(client.createAccessLink).toHaveBeenCalled();
+  });
+
+  it('declares nothing while the organizer is only looking at the form', async () => {
+    const client = withIntent('none');
+    const harness = mount({ view: true, manage: true }, client);
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+    (harness.rail.querySelector('[data-ch-act="link-create"]') as HTMLElement).click();
+    (harness.root.querySelector('[data-ch-close]') as HTMLElement).click();
+    await flush();
+
+    expect(client.setChannelAccessIntent).not.toHaveBeenCalled();
+  });
+
+  it('spends no extra request on a channel already selling by buyer link', async () => {
+    const client = withIntent('hosted_link');
+    const harness = mount({ view: true, manage: true }, client);
+    await createLinkFrom(harness);
+
+    expect(client.setChannelAccessIntent).not.toHaveBeenCalled();
+    expect(client.createAccessLink).toHaveBeenCalled();
+  });
+
+  it('reports a refused declaration as the route in the way, never as a code', async () => {
+    const client = withIntent('none');
+    (client.setChannelAccessIntent as ReturnType<typeof vi.fn>).mockRejectedValue(
+      refusal('channel_access_intent_forbids', {
+        channelId: 'ch_a', accessIntent: 'internal', route: 'hosted_link',
+      }),
+    );
+    const harness = mount({ view: true, manage: true }, client);
+    await createLinkFrom(harness);
+
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('This channel is set to "Sell through your own staff"');
+    expect(dialog.textContent).toContain('Switch it to "Sell with a buyer link" first');
+    expect(dialog.textContent).not.toContain('channel_access_intent_forbids');
+    // The refused half must not let the second half run.
+    expect(client.createAccessLink).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Enforcement refusals — copy, counts, and the acknowledge path
+// ---------------------------------------------------------------------------
+
+describe('ChannelsMode access-intent refusals', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('reads a direct route refusal back as an actionable sentence', async () => {
+    const client = withIntent('none');
+    (client.setChannelAccessIntent as ReturnType<typeof vi.fn>).mockRejectedValue(
+      refusal('channel_access_intent_forbids', {
+        channelId: 'ch_a', accessIntent: 'none', route: 'server',
+      }),
+    );
+    const harness = mount({ view: true, manage: true }, client);
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+    (harness.rail.querySelector('[data-ch-act="embed-code"]') as HTMLElement).click();
+    await flush();
+
+    const toast = harness.toasts.at(-1)!;
+    expect(toast.kind).toBe('err');
+    expect(toast.message).toBe(
+      'This channel is set to "Keep as protected reserve", so it cannot do that. '
+      + 'Switch it to "Integrate a website or app" first.',
+    );
+  });
+
+  it('surfaces what is live, and what acknowledging does to it', async () => {
+    const client = withIntent('hosted_link');
+    (client.setChannelAccessIntent as ReturnType<typeof vi.fn>).mockRejectedValue(
+      refusal('channel_intent_switch_blocked', {
+        channelId: 'ch_a', from: 'hosted_link', to: 'none',
+        liveAccessLinks: 2, activeSessions: 3,
+        acknowledgeWith: { acknowledgeLiveAccess: true },
+      }),
+    );
+    const harness = mount({ view: true, manage: true }, client);
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+    (harness.rail.querySelector('[data-ch-act="route-none"]') as HTMLElement).click();
+    await flush();
+
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    const text = dialog.textContent!;
+    // The counts the server named, in the organizer's words.
+    expect(text).toContain('2 buyer links are live');
+    expect(text).toContain('3 buyers are in a checkout');
+    // Links close; checkouts survive and drain. Both halves, plainly.
+    expect(text).toContain('2 buyer links close immediately');
+    expect(text).toContain('keep their seats and can finish paying');
+    expect(text).toContain('Nobody is thrown out');
+    expect(text).toContain('within 12 hours');
+    expect(text).toContain('Change to "Keep as protected reserve"');
+    expect(text).not.toContain('channel_intent_switch_blocked');
+  });
+
+  it('retries with acknowledgeLiveAccess only when the organizer says so', async () => {
+    const client = withIntent('hosted_link');
+    const calls: unknown[][] = [];
+    (client.setChannelAccessIntent as ReturnType<typeof vi.fn>).mockImplementation(
+      async (...args: unknown[]) => {
+        calls.push(args);
+        if ((args[3] as { acknowledgeLiveAccess?: boolean })?.acknowledgeLiveAccess) {
+          return { ok: true, intentSwitch: { closedLinks: 2, keptSessions: 3 } };
+        }
+        throw refusal('channel_intent_switch_blocked', {
+          from: 'hosted_link', to: 'internal', liveAccessLinks: 2, activeSessions: 3,
+          acknowledgeWith: { acknowledgeLiveAccess: true },
+        });
+      },
+    );
+    const harness = mount({ view: true, manage: true }, client);
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+    (harness.rail.querySelector('[data-ch-act="route-internal"]') as HTMLElement).click();
+    await flush();
+    // Nothing has changed yet — a refusal is not a prompt that already acted.
+    expect(calls).toHaveLength(1);
+    expect(calls[0][3]).toEqual({});
+
+    (harness.root.querySelector('[data-ch-intent-ack]') as HTMLElement).click();
+    await flush();
+    await flush();
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual(['ev_1', 'ch_a', 'internal', { acknowledgeLiveAccess: true }]);
+    expect(harness.root.querySelector('[role="dialog"]')).toBeNull();
+    // What the switch actually disturbed is reported, not silently swallowed.
+    const toast = harness.toasts.at(-1)!;
+    expect(toast.message).toContain('2 buyer links closed');
+    expect(toast.message).toContain('3 buyers already in a checkout can still finish');
+  });
+
+  it('walking away from the review changes nothing', async () => {
+    const client = withIntent('hosted_link');
+    (client.setChannelAccessIntent as ReturnType<typeof vi.fn>).mockRejectedValue(
+      refusal('channel_intent_switch_blocked', {
+        from: 'hosted_link', to: 'none', liveAccessLinks: 1, activeSessions: 0,
+      }),
+    );
+    const harness = mount({ view: true, manage: true }, client);
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+    (harness.rail.querySelector('[data-ch-act="route-none"]') as HTMLElement).click();
+    await flush();
+    (harness.root.querySelector('[data-ch-close]') as HTMLElement).click();
+    await flush();
+
+    expect(harness.root.querySelector('[role="dialog"]')).toBeNull();
+    expect(client.setChannelAccessIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it('finishes the held buyer link on the far side of an acknowledgement', async () => {
+    const client = withIntent('server');
+    let declared = false;
+    (client.setChannelAccessIntent as ReturnType<typeof vi.fn>).mockImplementation(
+      async (...args: unknown[]) => {
+        if ((args[3] as { acknowledgeLiveAccess?: boolean })?.acknowledgeLiveAccess) {
+          declared = true;
+          return { ok: true, intentSwitch: { closedLinks: 0, keptSessions: 4 } };
+        }
+        throw refusal('channel_intent_switch_blocked', {
+          from: 'server', to: 'hosted_link', liveAccessLinks: 0, activeSessions: 4,
+          acknowledgeWith: { acknowledgeLiveAccess: true },
+        });
+      },
+    );
+    const harness = mount({ view: true, manage: true }, client);
+    harness.mode.enter();
+    await flush();
+    await openDetail(harness);
+    (harness.rail.querySelector('[data-ch-act="link-create"]') as HTMLElement).click();
+    (harness.root.querySelector('#slm-ch-lk-label') as HTMLInputElement).value = 'Agency B';
+    (harness.root.querySelector('[data-ch-lk-create]') as HTMLElement).click();
+    await flush();
+    await flush();
+
+    // The link was NOT created behind a refused declaration…
+    expect(client.createAccessLink).not.toHaveBeenCalled();
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('4 buyers are in a checkout');
+    expect(dialog.textContent!.replace(/\s+/g, ' '))
+      .toContain('Your new buyer link is created as soon as the route changes');
+
+    // …and the organizer does not have to fill the form in again.
+    (harness.root.querySelector('[data-ch-intent-ack]') as HTMLElement).click();
+    await flush();
+    await flush();
+    await flush();
+
+    expect(declared).toBe(true);
+    expect(client.createAccessLink).toHaveBeenCalledWith('ev_1', 'ch_a', expect.objectContaining({
+      label: 'Agency B',
+    }));
+    // Straight into the one-time reveal — one gesture, even across the review.
+    expect(harness.root.querySelector('[data-ch-lk-url]')).not.toBeNull();
   });
 });
 

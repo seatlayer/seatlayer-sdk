@@ -31,6 +31,8 @@ import {
   ACCESS_LINK_DEFAULTS,
   PUBLIC_CHANNEL_ID,
   PUBLIC_CHANNEL_NAME,
+  accessIntentDescription,
+  accessIntentLabel,
   accessLine,
   accessLinkBadge,
   accessLinkErrorCopy,
@@ -43,16 +45,20 @@ import {
   mutationCount,
   needsMoveConfirmation,
   planAssignment,
+  intentForbidsCopy,
+  intentSwitchBlockedCopy,
   retryAfterCopy,
   selectionSources,
   stateBadge,
   suggestMarker,
+  type AccessIntentForbidsDetails,
   type AccessLinkReveal,
   type AccessLinkStatusRecord,
   type AssignmentBuckets,
   type AssignmentResult,
   type ArchiveBlockedDetails,
   type BucketRow,
+  type IntentSwitchBlockedDetails,
   type ChannelAccessIntent,
   type ChannelListResult,
   type ChannelRecord,
@@ -108,11 +114,19 @@ export interface ChannelsClient {
     channelIds: string[],
     opts?: { includePublic?: boolean },
   ): Promise<ChannelPreviewProjection>;
+  /** Choose the channel's sale route. Authorization since 2026-08-06, so this is
+   *  a precondition of every buyer-facing action, not a label. `opts` carries the
+   *  acknowledgement that unblocks a switch with live buyer access. */
   setChannelAccessIntent(
     key: string,
     channelId: string,
     accessIntent: ChannelAccessIntent,
-  ): Promise<{ ok: true; channel: ChannelRecord }>;
+    opts?: { acknowledgeLiveAccess?: boolean; reason?: string },
+  ): Promise<{
+    ok: true;
+    channel: ChannelRecord;
+    intentSwitch?: { closedLinks: number; keptSessions: number };
+  }>;
   /** 201 with the ONE-TIME reveal. Every omitted field takes the server default
    *  (expiry = event start, 100 redemptions, 4 seats per buyer). */
   createAccessLink(
@@ -337,10 +351,14 @@ export const CHANNELS_CSS = /* @sl-css */ `
 .slm-ch-selnum.bump{animation:slm-ch-bump var(--slm-mo-base) var(--slm-mo-spring)}
 .slm-ch-row2{display:flex;gap:8px;margin-top:8px}
 .slm-ch-row2 .slm-btn{flex:1;min-width:0}
-/* distribute options — two actions, each with the one sentence that explains it */
+/* distribute routes — four choices, each with the one sentence that explains it.
+   The current one is NAMED in its own card, never signalled by colour alone. */
 .slm-ch-dist{display:flex;flex-direction:column;gap:6px;padding:12px;margin-bottom:8px;border:1px solid var(--slm-line);
   border-radius:10px;background:var(--slm-surface)}
-.slm-ch-dist b{font-size:13px;font-weight:800}
+.slm-ch-dist.on{border-color:var(--slm-accent,#8b7cf6)}
+.slm-ch-dist b{font-size:13px;font-weight:800;display:flex;align-items:center;gap:8px;justify-content:space-between}
+.slm-ch-dist b .cur{font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--slm-accent,#8b7cf6);white-space:nowrap}
 .slm-ch-dist .why{color:var(--slm-muted);font-size:11.5px;line-height:1.45}
 .slm-ch-dist .slm-btn{width:100%;margin-top:2px}
 .slm-ch-alert{display:flex;align-items:flex-start;gap:9px;padding:11px 13px;border-radius:10px;font-size:12.5px;
@@ -541,7 +559,18 @@ type Detent = 'collapsed' | 'medium' | 'full';
 
 type DialogKind =
   | 'create' | 'review' | 'archive' | 'rename' | 'seatlist' | 'scope' | 'menu'
-  | 'linkCreate' | 'linkRotate' | 'linkRevoke';
+  | 'linkCreate' | 'linkRotate' | 'linkRevoke' | 'intentSwitch';
+
+/** The link the organizer asked for, held while a blocked route switch is
+ *  reviewed, so acknowledging resumes the SAME gesture instead of making them
+ *  fill the form in again. It carries no secret — the reveal is still one-time. */
+export interface PendingLinkInput {
+  label: string | null;
+  includePublic: boolean;
+  expiresAt?: number;
+  maxRedemptions: number;
+  maxQuantity: number;
+}
 
 /**
  * There is deliberately NO `reveal` dialog kind. A one-time reveal is not a
@@ -556,6 +585,12 @@ interface DialogState {
   /** Authoritative result rendered after Apply (review dialog only). */
   applied?: AssignmentResult | null;
   archiveBlocked?: ArchiveBlockedDetails | null;
+  /** The refused route switch, and where it was headed (intentSwitch only). */
+  switchBlocked?: IntentSwitchBlockedDetails | null;
+  intentTo?: ChannelAccessIntent;
+  /** Set when the blocked switch was the declare half of a declare-then-create,
+   *  so acknowledging finishes the link the organizer actually asked for. */
+  pendingLink?: PendingLinkInput | null;
   /** Which unit the scope chooser is picking (scope dialog only). */
   scope?: 'sections' | 'rows';
   busy?: boolean;
@@ -1645,59 +1680,68 @@ export class ChannelsMode {
   }
 
   /**
-   * "Distribute" — how the seats in this channel actually reach a buyer.
+   * "Distribute" — the ONE way this channel's seats reach a buyer.
    *
-   * This replaced a four-value "access intent" picker (none / internal /
-   * hosted_link / server). Two of those values did nothing anywhere: no buyer or
-   * inventory path reads `access_intent`, so `none` and `internal` were labels an
-   * organizer could set and then wait forever for something to happen. A third,
-   * `hosted_link`, is not the organizer's to choose at all — the server sets it
-   * when a buyer link is created and clears it when the last live one is revoked.
+   * All four routes are here, and this is a real chooser again. It was cut down
+   * to two actions in 0.42.0 for a good reason: `access_intent` was stored,
+   * audited, and read by nothing, so "Keep as protected reserve" and "Sell
+   * through your own staff" were labels an organizer could set and then wait
+   * forever for something to happen. The server closed that hole on 2026-08-06 —
+   * each declaration now opens exactly one route and REFUSES the other three —
+   * so all four are honest choices and belong on the surface.
    *
-   * So this is two ACTIONS, not a setting: create a buyer link, or point the
-   * channel at a website integration. Both of them do something the moment they
-   * are pressed. A legacy row still carrying `none` or `internal` renders the
-   * neutral "not distributed yet" state with both actions offered — the stored
-   * value is left alone (it is organizer-declared metadata and the API that
-   * writes it is unchanged), it simply no longer has a control of its own.
+   * None of the old copy came back with them. These sentences are written
+   * against the enforcement matrix (`accessIntentDescription`), which is why
+   * each one says what the route refuses as well as what it allows.
+   *
+   * The current route is stated, not merely styled: a chooser whose selection
+   * you have to infer from a border is not a chooser. Its card carries a
+   * "Current route" marker and drops its own select button, because pressing it
+   * would do nothing.
    */
   private distributeHtml(channel: ChannelRecord): string {
     const intent = (channel.access?.intent ?? 'none') as ChannelAccessIntent;
     const live = channel.access?.hasActiveGrants === true;
-    // The one honest sentence about this channel's current reach. "Seats stay
-    // reserved" is not a consolation: an allocated seat is withheld from public
-    // sale whether or not anyone can buy it yet, and that IS the useful fact.
-    const state = live
-      ? intent === 'server'
-        ? 'Your website is letting buyers in. Only they can buy these seats.'
-        : 'A buyer link is live. Only people with that link can buy these seats.'
-      : intent === 'server'
-        ? 'Set up for your website — no buyer has come through yet. Seats stay reserved.'
-        : 'Not distributed yet — seats stay reserved.';
-    const option = (
-      title: string, why: string, action: string, cta: string, primary: boolean,
-    ): string => `<div class="slm-ch-dist">
-      <b>${esc(title)}</b>
-      <span class="why">${esc(why)}</span>
-      <button type="button" class="slm-btn${primary ? '' : ' ghost'}" data-ch-act="${esc(action)}">${esc(cta)}</button>
-    </div>`;
     // A worker that predates buyer links answers 404 on the listing route, and
     // would answer 404 on the create too. Offering the action there would be a
     // button that can only fail; the status block below says why it is absent.
     const linksSupported = this.linksState !== 'unsupported';
+    const hasLiveLink = this.links.some(accessLinkIsLive);
+    // What is true RIGHT NOW — the route plus whether anyone has actually come
+    // through it. "Seats stay reserved" is not a consolation: an allocated seat
+    // is withheld from public sale either way, and that IS the useful fact.
+    const state = intent === 'none'
+      ? 'Protected reserve — no route can sell these seats. Every buyer path is refused.'
+      : intent === 'internal'
+        ? 'Your staff sell these seats. No buyer-facing route is open.'
+        : live
+          ? intent === 'server'
+            ? 'Your website is letting buyers in. Only they can buy these seats.'
+            : 'A buyer link is live. Only people with that link can buy these seats.'
+          : intent === 'server'
+            ? 'Set up for your website — no buyer has come through yet. Seats stay reserved.'
+            : 'Set up for buyer links — no buyer has come through yet. Seats stay reserved.';
+    const option = (
+      route: ChannelAccessIntent, action: string, cta: string, primary: boolean,
+    ): string => {
+      const current = route === intent;
+      return `<div class="slm-ch-dist${current ? ' on' : ''}" data-ch-route="${esc(route)}">
+        <b>${esc(accessIntentLabel(route))}${current ? '<span class="cur">Current route</span>' : ''}</b>
+        <span class="why">${esc(accessIntentDescription(route))}</span>
+        ${current && !cta ? '' : `<button type="button" class="slm-btn${primary && !current ? '' : ' ghost'}"
+          data-ch-act="${esc(action)}">${esc(cta)}</button>`}
+      </div>`;
+    };
     return `
       <p class="slm-eyebrow" style="margin-top:14px">Distribute</p>
       <p class="slm-hint">${esc(state)}</p>
       ${linksSupported ? option(
-        'Sell with a buyer link',
-        'SeatLayer makes a link you send to a named group. They open it and buy only these seats.',
-        'link-create', this.links.some(accessLinkIsLive) ? 'Create another buyer link' : 'Create buyer link', true,
+        'hosted_link', 'link-create',
+        hasLiveLink ? 'Create another buyer link' : 'Create buyer link', true,
       ) : ''}
-      ${option(
-        'Integrate a website or app',
-        "Your website's backend grants each buyer access — set up on the Embed page.",
-        'embed-code', 'Get embed code', false,
-      )}
+      ${option('server', 'embed-code', intent === 'server' ? 'Get embed code' : 'Use a website or app', false)}
+      ${option('internal', 'route-internal', intent === 'internal' ? '' : 'Hand to your staff', false)}
+      ${option('none', 'route-none', intent === 'none' ? '' : 'Keep as reserve', false)}
       ${this.hostedLinksHtml()}
       ${intent === 'server' ? SERVER_INTEGRATION_HTML : ''}`;
   }
@@ -1986,14 +2030,19 @@ export class ChannelsMode {
         this.linksState = 'idle';
         this.paintRail();
         break;
+      // Choosing the buyer-link route IS creating the first link — the dialog
+      // declares the route on submit (see `createLink`), so this stays one
+      // gesture whether the channel is already on `hosted_link` or not.
       case 'link-create':
         this.openDialog({ kind: 'linkCreate', channelId: this.detailChannelId! });
         break;
       // The one thing this screen can actually do for a website integration is
-      // record that the channel is meant for one — which is exactly the flag the
-      // dashboard's Embed page reads before it offers the snippet. Saying so is
-      // honest; a fake "copy code" button on a screen with no code would not be.
+      // record that the channel is meant for one — and since 2026-08-06 that
+      // record is what AUTHORIZES the integration to mint buyer sessions at all,
+      // so it is the substantive half of the job, not a flag.
       case 'embed-code': void this.chooseWebsiteIntegration(); break;
+      case 'route-internal': void this.setAccessIntent('internal'); break;
+      case 'route-none': void this.setAccessIntent('none'); break;
       case 'link-reload':
         if (this.detailChannelId) void this.reloadLinks();
         break;
@@ -2326,6 +2375,69 @@ export class ChannelsMode {
     else if (state.kind === 'linkCreate') this.renderLinkCreateDialog(state);
     else if (state.kind === 'linkRotate') this.renderLinkRotateDialog(state);
     else if (state.kind === 'linkRevoke') this.renderLinkRevokeDialog(state);
+    else if (state.kind === 'intentSwitch') this.renderIntentSwitchDialog(state);
+  }
+
+  /**
+   * `channel_intent_switch_blocked` — buyers are inside the route being left.
+   *
+   * The same review-then-acknowledge shape as the archive and chart-drop guards,
+   * because it is the same kind of decision: the server refuses once, names
+   * exactly what is at stake, and only a deliberate second press goes through.
+   * What acknowledging does is spelled out per consequence — links close now,
+   * checkouts already running survive and drain — rather than hidden behind a
+   * word like "force".
+   */
+  private renderIntentSwitchDialog(state: DialogState): void {
+    const channel = this.list?.channels.find((item) => item.id === state.channelId);
+    const to = state.intentTo;
+    if (!channel || !to || !this.caps.manage) { this.closeDialog(); return; }
+    const { headline, consequences } = intentSwitchBlockedCopy(state.switchBlocked);
+    this.renderScrim(`
+      <h3 id="slm-ch-dlg-title">Change how ${esc(channel.name)} reaches buyers?</h3>
+      <p class="sub">${esc(headline)}</p>
+      <div class="slm-ch-alert warn" role="alert"><span>⚠</span><span>
+        ${consequences.map((line) => `<span style="display:block;margin-bottom:6px">${esc(line)}</span>`).join('')}
+      </span></div>
+      ${state.pendingLink ? `<p class="slm-note">Your new buyer link is created as soon as
+        the route changes — you will not have to fill the form in again.</p>` : ''}
+      <p class="slm-ch-err" data-ch-error ${state.error ? '' : 'hidden'}>${esc(state.error ?? '')}</p>
+      <div class="foot">
+        <button type="button" class="quiet" data-ch-close>Leave it as it is</button>
+        <button type="button" class="slm-btn" data-ch-intent-ack${state.busy ? ' disabled' : ''}>
+          ${state.busy ? 'Changing…' : `Change to "${esc(accessIntentLabel(to))}"`}</button>
+      </div>`, (dialog) => {
+      dialog.querySelector('[data-ch-intent-ack]')?.addEventListener('click', () => {
+        void this.acknowledgeIntentSwitch(to, state.pendingLink ?? null);
+      });
+    });
+  }
+
+  /**
+   * The acknowledged retry. The declare and the create stay one gesture across
+   * the sheet: if this switch was the first half of a declare-then-create, the
+   * held form finishes on the far side of the acknowledgement.
+   */
+  private async acknowledgeIntentSwitch(
+    intent: ChannelAccessIntent, pendingLink: PendingLinkInput | null,
+  ): Promise<void> {
+    const channelId = this.detailChannelId;
+    if (!channelId) { this.closeDialog(); return; }
+    if (this.dialog) { this.dialog.busy = true; this.renderDialog(); }
+    const ok = await this.setAccessIntent(intent, { acknowledgeLiveAccess: true });
+    if (!ok) {
+      // `setAccessIntent` has already said why, through the toast lane or by
+      // re-opening this sheet with fresher counts. Never leave a stuck spinner.
+      if (this.dialog?.kind === 'intentSwitch') { this.dialog.busy = false; this.renderDialog(); }
+      return;
+    }
+    if (!pendingLink) { this.closeDialog(); return; }
+    // Un-busy BEFORE the create: `showDialogError` paints into the mounted
+    // sheet without re-rendering it, so a create that fails here would otherwise
+    // report itself under a permanently disabled "Changing…" button. Pressing
+    // again re-acknowledges (idempotent) and retries the link.
+    if (this.dialog?.kind === 'intentSwitch') { this.dialog.busy = false; this.renderDialog(); }
+    await this.mintLink(channelId, pendingLink);
   }
 
   /**
@@ -2682,11 +2794,12 @@ export class ChannelsMode {
   }
 
   /**
-   * "Get embed code" — mark the channel as reached through the organizer's own
-   * backend. The write itself is `setChannelAccessIntent(…, 'server')`, the same
-   * API the old picker called; the difference is that it is now a deliberate
-   * action with a consequence the organizer is told about, rather than one of
-   * four dropdown values with no observable effect.
+   * "Use a website or app" — declare the channel's route as `server`.
+   *
+   * This is no longer a flag the Embed page happens to read: since 2026-08-06 it
+   * is what AUTHORIZES `POST /v1/events/:key/buyer-access-sessions` to mint for
+   * this channel at all. Without it, an integration that is otherwise perfectly
+   * wired up gets a 409 on every buyer.
    */
   private async chooseWebsiteIntegration(): Promise<void> {
     const channelId = this.detailChannelId;
@@ -2694,19 +2807,71 @@ export class ChannelsMode {
     await this.setAccessIntent('server');
   }
 
-  private async setAccessIntent(accessIntent: ChannelAccessIntent): Promise<void> {
+  /**
+   * Declare this channel's sale route.
+   *
+   * Reports through the toast lane the rest of the rail's direct actions use.
+   * The two enforcement refusals get real answers rather than a generic failure:
+   * `channel_intent_switch_blocked` opens the review sheet (there is a decision
+   * to make, and a sheet is where decisions live), and
+   * `channel_access_intent_forbids` — which the organizer can hit by racing
+   * their own second tab — says which route is in the way.
+   */
+  private async setAccessIntent(
+    accessIntent: ChannelAccessIntent,
+    opts: { acknowledgeLiveAccess?: boolean } = {},
+  ): Promise<boolean> {
     const channelId = this.detailChannelId;
-    if (!channelId || !this.caps.manage) return;
+    if (!channelId || !this.caps.manage) return false;
     try {
-      await this.host.api.setChannelAccessIntent(this.host.eventKey, channelId, accessIntent);
+      // `intentSwitch` is present only when the switch actually disturbed
+      // something, and the whole response is read defensively because the client
+      // is host-supplied — a thin proxy that resolves void must not crash the rail.
+      const result = await this.host.api.setChannelAccessIntent(
+        this.host.eventKey, channelId, accessIntent, opts,
+      ) as { intentSwitch?: { closedLinks: number; keptSessions: number } } | undefined;
       await this.refresh();
-      if (accessIntent === 'server') {
-        this.host.toast('Marked for your website. The embed code is on the Embed page.', 'ok');
-      }
+      this.host.toast(this.intentSavedCopy(accessIntent, result?.intentSwitch), 'ok');
+      return true;
     } catch (err) {
-      this.host.toast("Couldn't save how buyers reach this channel.", 'err');
+      if (err instanceof ManageApiError && err.code === 'channel_intent_switch_blocked') {
+        this.openDialog({
+          kind: 'intentSwitch',
+          channelId,
+          intentTo: accessIntent,
+          switchBlocked: err.details as IntentSwitchBlockedDetails,
+        });
+        return false;
+      }
+      if (err instanceof ManageApiError && err.code === 'channel_access_intent_forbids') {
+        this.host.toast(intentForbidsCopy(err.details as AccessIntentForbidsDetails), 'err');
+        return false;
+      }
+      this.host.toast("Couldn't change how this channel reaches buyers.", 'err');
       this.host.onError(err);
+      return false;
     }
+  }
+
+  /** What just happened, including anything the switch took down with it — the
+   *  server reports `intentSwitch` only when it actually disturbed something. */
+  private intentSavedCopy(
+    intent: ChannelAccessIntent,
+    disturbed: { closedLinks: number; keptSessions: number } | undefined,
+  ): string {
+    const head = intent === 'server'
+      ? 'Set to your website or app. The embed code is on the Embed page.'
+      : intent === 'internal'
+        ? 'Only your own staff can sell this channel now.'
+        : intent === 'hosted_link'
+          ? 'Set to buyer links. Create one to let buyers in.'
+          : 'Kept as a protected reserve. No route can sell these seats.';
+    if (!disturbed) return head;
+    const closed = disturbed.closedLinks
+      ? ` ${disturbed.closedLinks.toLocaleString()} buyer link${disturbed.closedLinks === 1 ? '' : 's'} closed.` : '';
+    const kept = disturbed.keptSessions
+      ? ` ${disturbed.keptSessions.toLocaleString()} buyer${disturbed.keptSessions === 1 ? '' : 's'} already in a checkout can still finish.` : '';
+    return `${head}${closed}${kept}`;
   }
 
   /** `channelId` is explicit because this is reachable from the ⋯ menu on a row
@@ -2977,13 +3142,36 @@ export class ChannelsMode {
     });
   }
 
-  private async createLink(
-    channelId: string,
-    input: {
-      label: string | null; includePublic: boolean;
-      expiresAt?: number; maxRedemptions: number; maxQuantity: number;
-    },
-  ): Promise<void> {
+  /**
+   * DECLARE, then create.
+   *
+   * `createAccessLink` used to set the channel's route to `hosted_link` as a
+   * side effect, which is exactly why the picker could never refuse anything.
+   * The server took that side effect away and now REQUIRES the declaration —
+   * and channels default to `none`, so a create that did not declare first
+   * would 409 on the organizer's very first "Create buyer link".
+   *
+   * So the route is declared here, immediately before the create. It stays ONE
+   * gesture: nothing is declared while the organizer is still filling the form
+   * in (cancelling changes nothing), and if the declaration is the part that is
+   * refused, the review sheet holds this form and finishes the job on the far
+   * side of the acknowledgement.
+   */
+  private async createLink(channelId: string, input: PendingLinkInput): Promise<void> {
+    if (!(await this.ensureHostedLinkRoute(channelId, input))) return;
+    await this.mintLink(channelId, input);
+  }
+
+  /**
+   * The create half, on its own.
+   *
+   * Separate from `createLink` because the acknowledge path has ALREADY declared
+   * the route — with the very acknowledgement the plain declaration was refused
+   * for. Sending it back through `ensureHostedLinkRoute` would re-derive the
+   * route from a channel list that has not necessarily caught up, and could
+   * refuse the organizer a second time for a decision they just made.
+   */
+  private async mintLink(channelId: string, input: PendingLinkInput): Promise<void> {
     try {
       const reveal = await this.host.api.createAccessLink(this.host.eventKey, channelId, input);
       this.revealLink(reveal, { channelId });
@@ -2991,6 +3179,40 @@ export class ChannelsMode {
     } catch (err) {
       this.showDialogError(accessLinkErrorCopy(err instanceof ManageApiError ? err : undefined));
       if (!(err instanceof ManageApiError)) this.host.onError(err);
+    }
+  }
+
+  /**
+   * Make sure the channel declares the buyer-link route before a link is minted.
+   *
+   * Returns false when the create must NOT proceed — either it was refused, or
+   * the decision has been handed to the switch-review sheet, which resumes it.
+   * A channel already on `hosted_link` costs no request at all, so creating a
+   * second link is the same single call it has always been.
+   */
+  private async ensureHostedLinkRoute(channelId: string, pendingLink: PendingLinkInput): Promise<boolean> {
+    const channel = this.list?.channels.find((item) => item.id === channelId);
+    if ((channel?.access?.intent ?? 'none') === 'hosted_link') return true;
+    try {
+      await this.host.api.setChannelAccessIntent(this.host.eventKey, channelId, 'hosted_link');
+      await this.refresh();
+      return true;
+    } catch (err) {
+      if (err instanceof ManageApiError && err.code === 'channel_intent_switch_blocked') {
+        this.openDialog({
+          kind: 'intentSwitch',
+          channelId,
+          intentTo: 'hosted_link',
+          switchBlocked: err.details as IntentSwitchBlockedDetails,
+          pendingLink,
+        });
+        return false;
+      }
+      this.showDialogError(err instanceof ManageApiError && err.code === 'channel_access_intent_forbids'
+        ? intentForbidsCopy(err.details as AccessIntentForbidsDetails)
+        : "Couldn't set this channel up for buyer links. Try again.");
+      if (!(err instanceof ManageApiError)) this.host.onError(err);
+      return false;
     }
   }
 

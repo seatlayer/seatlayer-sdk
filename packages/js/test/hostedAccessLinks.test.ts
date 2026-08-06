@@ -109,8 +109,9 @@ function statefulServer(opts: { seeded?: boolean } = {}): {
   const client = makeClient({
     channels: vi.fn(async () => {
       const list = listFixture();
-      // The worker sets `hosted_link` on create; the access line follows the
-      // links that are actually live.
+      // The worker no longer sets `hosted_link` on create — the CLIENT declares
+      // it first (server 2026-08-06). Either way a channel with a live link is a
+      // channel on the buyer-link route, and the access line follows the links.
       list.channels[0].access = { intent: live() ? 'hosted_link' : 'none', hasActiveGrants: live(), lastMintAt: null };
       return list;
     }),
@@ -498,7 +499,7 @@ describe('ChannelsMode hosted access links', () => {
     const harness = mount({ view: true, manage: true }, server.client);
     await openDetail(harness);
     // Pre-link state: the access explainer, and no card.
-    expect(harness.rail.textContent).toContain('Not distributed yet');
+    expect(harness.rail.textContent).toContain('Protected reserve');
 
     // A poll read is already in flight, as it is for six seconds out of every
     // ten, and it will answer with the pre-create truth.
@@ -520,7 +521,7 @@ describe('ChannelsMode hosted access links', () => {
     await flush();
 
     // No browser reload: this is the panel as the organizer sees it.
-    expect(harness.rail.textContent).not.toContain('Not distributed yet');
+    expect(harness.rail.textContent).toContain('A buyer link is live');
     expect(harness.rail.textContent).toContain('VIP list Nov 14');
     expect(harness.rail.querySelector('[data-ch-rotate="alk_1"]')).toBeTruthy();
     expect(harness.rail.querySelector('[data-ch-revoke="alk_1"]')).toBeTruthy();
@@ -549,7 +550,7 @@ describe('ChannelsMode hosted access links', () => {
     expect(harness.rail.querySelector('[data-ch-rotate="alk_2"]')).toBeTruthy();
     expect(harness.rail.querySelector('[data-ch-rotate="alk_1"]')).toBeNull();
     expect(harness.rail.textContent).toContain('Replaced');
-    expect(harness.rail.textContent).not.toContain('Not distributed yet');
+    expect(harness.rail.textContent).toContain('A buyer link is live');
   });
 
   it('drops back to the pre-link explainer when the last link is revoked', async () => {
@@ -570,7 +571,7 @@ describe('ChannelsMode hosted access links', () => {
 
     expect(harness.rail.querySelector('[data-ch-rotate="alk_1"]')).toBeNull();
     expect(harness.rail.textContent).toContain('Revoked');
-    expect(harness.rail.textContent).toContain('Not distributed yet');
+    expect(harness.rail.textContent).toContain('Protected reserve — no route can sell these seats');
     expect(harness.rail.textContent).toContain('Create buyer link');
   });
 

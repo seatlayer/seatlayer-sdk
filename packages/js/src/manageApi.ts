@@ -506,16 +506,40 @@ export class ManageApi {
     return this.auth(`/v1/events/${encodeURIComponent(key)}/channels/preview${qs ? `?${qs}` : ''}`);
   }
 
-  /** Declare how buyers are meant to reach this channel. Drives the rail's
-   *  access line and turns "No buyer access configured" from information into a
-   *  warning when the organizer says the channel is for buyer self-service. */
+  /**
+   * Choose which sale route this channel opens.
+   *
+   * Since the server's 2026-08-06 change this is AUTHORIZATION, not a label:
+   * exactly one of the four routes may mint buyer access for the channel and the
+   * other three refuse with 409 `channel_access_intent_forbids`. The default is
+   * `none`, which refuses all four — so a route has to be declared before any
+   * buyer-facing action on the channel can succeed.
+   *
+   * Switching the route while buyers are already inside the current one is
+   * refused with 409 `channel_intent_switch_blocked`, whose `details` name what
+   * is live (`liveAccessLinks`, `activeSessions`). Retry with
+   * `acknowledgeLiveAccess: true`: hosted links on the channel are revoked,
+   * while sessions already minted keep their holds and drain on their own.
+   * `intentSwitch` is present on the response ONLY when the switch disturbed
+   * something, so the ordinary case stays the two-key body it has always been.
+   */
   setChannelAccessIntent(
     key: string,
     channelId: string,
     accessIntent: ChannelAccessIntent,
-  ): Promise<{ ok: true; channel: ChannelRecord }> {
+    opts: { acknowledgeLiveAccess?: boolean; reason?: string } = {},
+  ): Promise<{
+    ok: true;
+    channel: ChannelRecord;
+    intentSwitch?: { closedLinks: number; keptSessions: number };
+  }> {
     return this.auth(`/v1/events/${encodeURIComponent(key)}/channels/${encodeURIComponent(channelId)}`, {
-      method: 'PATCH', body: { accessIntent },
+      method: 'PATCH',
+      body: {
+        accessIntent,
+        ...(opts.acknowledgeLiveAccess ? { acknowledgeLiveAccess: true } : {}),
+        ...(opts.reason ? { reason: opts.reason } : {}),
+      },
     });
   }
 
@@ -532,8 +556,11 @@ export class ManageApi {
    * Platform bounds are enforced server-side and reported as 422 with the rule
    * spelled out in `ManageApiError.serverMessage`.
    *
-   * Side effect by design: this also declares the channel's access intent as
-   * `hosted_link`, so the rail stops saying "no buyer access configured".
+   * NOT a side effect any more. This used to SET the channel's access intent to
+   * `hosted_link`; since 2026-08-06 it REQUIRES it, and a channel declaring any
+   * other route refuses with 409 `channel_access_intent_forbids`. Callers must
+   * declare the route first — `ChannelsMode` does exactly that before it
+   * creates, so a first buyer link on a fresh channel is still one gesture.
    */
   createAccessLink(
     key: string,
