@@ -202,7 +202,7 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 async function openDetail(harness: Harness): Promise<void> {
   harness.mode.enter();
   await flush();
-  (harness.rail.querySelector('[data-ch-detail="ch_s"]') as HTMLElement).click();
+  (harness.rail.querySelector('[data-ch-open="ch_s"]') as HTMLElement).click();
   await flush();
   await flush();
 }
@@ -416,7 +416,7 @@ describe('ChannelsMode hosted access links', () => {
     expect(reachableFrom(harness.mode, 'alc_')).toBe(false);
     // Re-painting and re-entering the channel cannot resurrect it.
     harness.mode.paintRail();
-    (harness.rail.querySelector('[data-ch-detail="ch_s"]') as HTMLElement)?.click();
+    (harness.rail.querySelector('[data-ch-open="ch_s"]') as HTMLElement)?.click();
     await flush();
     expect(document.body.innerHTML).not.toContain(REVEALED_URL);
   });
@@ -592,7 +592,7 @@ describe('ChannelsMode hosted access links', () => {
     harness.mode.enter();
     await flush();
     const html = harness.rail.innerHTML;
-    expect(html).not.toContain('data-ch-detail');
+    expect(html).not.toContain('data-ch-open');
     expect(html).not.toContain('data-ch-act="link-create"');
     expect(html).not.toContain('data-ch-rotate');
     expect(html).not.toContain('data-ch-revoke');

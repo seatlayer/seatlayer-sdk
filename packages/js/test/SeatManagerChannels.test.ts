@@ -468,6 +468,15 @@ function mount(
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/**
+ * Express the intent to assign. The tools are disclosed, not permanent, so every
+ * test that reaches for a select-by route has to say so first — which is exactly
+ * what an organizer now has to do.
+ */
+function openAssign(harness: Harness): void {
+  (harness.rail.querySelector('[data-ch-act="assign-open"]') as HTMLElement).click();
+}
+
 describe('ChannelsMode capability gating', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
 
@@ -488,7 +497,7 @@ describe('ChannelsMode capability gating', () => {
     expect(html).toContain('120');
     // Absent, not disabled — a read-only operator is never shown authority.
     expect(html).not.toContain('Create channel');
-    expect(harness.rail.querySelector('[data-ch-detail]')).toBeNull();
+    expect(harness.rail.querySelector('[data-ch-open]')).toBeNull();
     expect(harness.rail.querySelector('[data-ch-act="create"]')).toBeNull();
     expect(harness.rail.querySelectorAll('[disabled]').length).toBe(0);
     expect(harness.mode.canSelect()).toBe(false);
@@ -499,7 +508,7 @@ describe('ChannelsMode capability gating', () => {
     harness.mode.enter();
     await flush();
     expect(harness.rail.querySelector('[data-ch-act="create"]')).not.toBeNull();
-    expect(harness.rail.querySelectorAll('[data-ch-detail]').length).toBe(2);
+    expect(harness.rail.querySelectorAll('[data-ch-open]').length).toBe(2);
     expect(harness.mode.canSelect()).toBe(true);
     expect(harness.mode.usesMarqueeSelection()).toBe(false);
   });
@@ -702,7 +711,7 @@ describe('ChannelsMode apply', () => {
 // ---------------------------------------------------------------------------
 
 async function openDetail(harness: Harness, index = 0): Promise<void> {
-  (harness.rail.querySelectorAll('[data-ch-detail]')[index] as HTMLElement).click();
+  (harness.rail.querySelectorAll('[data-ch-open]')[index] as HTMLElement).click();
   await flush();
 }
 
@@ -890,7 +899,7 @@ describe('ChannelsMode archive + preview', () => {
     }));
     harness.mode.enter();
     await flush();
-    (harness.rail.querySelectorAll('[data-ch-detail]')[1] as HTMLElement).click();
+    (harness.rail.querySelectorAll('[data-ch-open]')[1] as HTMLElement).click();
     (harness.rail.querySelector('[data-ch-act="archive"]') as HTMLElement).click();
     (harness.root.querySelector('[data-ch-archive]') as HTMLElement).click();
     await flush();
@@ -982,10 +991,29 @@ describe('ChannelsMode archive + preview', () => {
 describe('ChannelsMode assignment tools', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
 
-  it('offers the destination and every select-by route BEFORE a seat is selected', async () => {
+  it('leads with the CHANNELS — no tools until the organizer asks to assign', async () => {
     const harness = mount({ view: true, manage: true });
     harness.mode.enter();
     await flush();
+
+    // The panel opens on the thing the organizer came for.
+    const html = harness.rail.innerHTML;
+    expect(html.indexOf('Sales channels')).toBeLessThan(html.indexOf('assign-open'));
+    expect(harness.rail.querySelector('[data-ch-target]')).toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="pick-sections"]')).toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="drag-select"]')).toBeNull();
+    // …but the way in is a plain-language control, not a hidden gesture.
+    const entry = harness.rail.querySelector('[data-ch-act="assign-open"]') as HTMLElement;
+    expect(entry).not.toBeNull();
+    expect(entry.textContent).toContain('Assign seats to a channel');
+    expect(entry.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('discloses the destination and every select-by route once assigning starts', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    openAssign(harness);
 
     expect(harness.rail.querySelector('[data-ch-target]')).not.toBeNull();
     expect(harness.rail.querySelector('[data-ch-act="pick-sections"]')).not.toBeNull();
@@ -993,6 +1021,51 @@ describe('ChannelsMode assignment tools', () => {
     expect(harness.rail.querySelector('[data-ch-act="drag-select"]')).not.toBeNull();
     expect(harness.rail.querySelector('[data-ch-act="pick-category"]')).not.toBeNull();
     expect(harness.rail.querySelector('[data-ch-act="seatlist"]')).not.toBeNull();
+    // The channel list is still above them — disclosure never buries the list.
+    const html = harness.rail.innerHTML;
+    expect(html.indexOf('Travel Agency A')).toBeLessThan(html.indexOf('data-ch-target'));
+  });
+
+  it('closes back down and disarms the marquee, never leaving a hidden mode on', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    openAssign(harness);
+    (harness.rail.querySelector('[data-ch-act="drag-select"]') as HTMLElement).click();
+    expect(harness.mode.usesMarqueeSelection()).toBe(true);
+
+    (harness.rail.querySelector('[data-ch-act="assign-close"]') as HTMLElement).click();
+
+    expect(harness.rail.querySelector('[data-ch-target]')).toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="assign-open"]')).not.toBeNull();
+    expect(harness.mode.usesMarqueeSelection()).toBe(false);
+  });
+
+  it('opens the tools from the map segment too, so the two routes cannot disagree', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    expect(harness.rail.querySelector('[data-ch-target]')).toBeNull();
+
+    (harness.rail.querySelector('[data-ch-map="assign"]') as HTMLElement).click();
+
+    expect(harness.mode.usesMarqueeSelection()).toBe(true);
+    expect(harness.rail.querySelector('[data-ch-target]')).not.toBeNull();
+  });
+
+  it('keeps the tools open after a selection is cleared, not back behind the door', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    harness.setSelection(['P1']);
+    harness.mode.handleSelectionChange();
+    expect(harness.rail.querySelector('[data-ch-target]')).not.toBeNull();
+
+    (harness.rail.querySelector('[data-ch-act="discard"]') as HTMLElement).click();
+    harness.mode.handleSelectionChange();
+
+    expect(harness.rail.querySelector('[data-ch-target]')).not.toBeNull();
+    expect(harness.rail.querySelector('[data-ch-act="assign-open"]')).toBeNull();
   });
 
   it('keeps the same tools once a selection exists', async () => {
@@ -1020,6 +1093,7 @@ describe('ChannelsMode assignment tools', () => {
     const harness = mount({ view: true, manage: true }, makeClient(), { sections: [], rows: [] });
     harness.mode.enter();
     await flush();
+    openAssign(harness);
 
     expect(harness.rail.querySelector('[data-ch-act="pick-sections"]')).toBeNull();
     expect(harness.rail.querySelector('[data-ch-act="pick-rows"]')).toBeNull();
@@ -1031,6 +1105,7 @@ describe('ChannelsMode assignment tools', () => {
     const harness = mount({ view: true, manage: true });
     harness.mode.enter();
     await flush();
+    openAssign(harness);
     expect(harness.mode.usesMarqueeSelection()).toBe(false);
 
     (harness.rail.querySelector('[data-ch-act="drag-select"]') as HTMLElement).click();
@@ -1070,6 +1145,7 @@ describe('ChannelsMode scope chooser', () => {
     const harness = mount({ view: true, manage: true });
     harness.mode.enter();
     await flush();
+    openAssign(harness);
     (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
 
     const dialog = harness.root.querySelector('[role="dialog"]')!;
@@ -1084,6 +1160,7 @@ describe('ChannelsMode scope chooser', () => {
     const harness = mount({ view: true, manage: true });
     harness.mode.enter();
     await flush();
+    openAssign(harness);
     (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
 
     const dialog = harness.root.querySelector('[role="dialog"]')!;
@@ -1101,6 +1178,7 @@ describe('ChannelsMode scope chooser', () => {
     const harness = mount({ view: true, manage: true });
     harness.mode.enter();
     await flush();
+    openAssign(harness);
     (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
 
     const dialog = harness.root.querySelector('[role="dialog"]')!;
@@ -1117,6 +1195,7 @@ describe('ChannelsMode scope chooser', () => {
     const harness = mount({ view: true, manage: true });
     harness.mode.enter();
     await flush();
+    openAssign(harness);
     (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
 
     const dialog = harness.root.querySelector('[role="dialog"]')!;
@@ -1136,6 +1215,7 @@ describe('ChannelsMode scope chooser', () => {
     });
     harness.mode.enter();
     await flush();
+    openAssign(harness);
     (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
 
     const dialog = harness.root.querySelector('[role="dialog"]')!;
@@ -1151,6 +1231,7 @@ describe('ChannelsMode scope chooser', () => {
     });
     harness.mode.enter();
     await flush();
+    openAssign(harness);
     (harness.rail.querySelector('[data-ch-act="pick-rows"]') as HTMLElement).click();
 
     const dialog = harness.root.querySelector('[role="dialog"]')!;
@@ -1207,5 +1288,257 @@ describe('ChannelsMode assignment ceiling', () => {
     expect(apply).not.toHaveBeenCalled();
     expect(harness.root.querySelector('[data-ch-error]')!.textContent)
       .toContain('at most 5,000 seats');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The row/menu interaction contract: the ROW is the door, ⋯ is everything else.
+// ---------------------------------------------------------------------------
+
+function channelRow(harness: Harness, channelId: string): HTMLElement {
+  return harness.rail.querySelector(`[data-ch-open="${channelId}"]`) as HTMLElement;
+}
+
+describe('ChannelsMode channel row', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('opens the channel from anywhere on the row, not just a hidden ⋯', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+
+    // Clicking the NAME — the part an organizer actually aims at — opens it.
+    (channelRow(harness, 'ch_a').querySelector('.slm-ch-name') as HTMLElement).click();
+    await flush();
+
+    expect(harness.rail.textContent).toContain('Channel · Travel Agency A');
+    expect(harness.rail.querySelector('[data-ch-act="back"]')).not.toBeNull();
+  });
+
+  it('is a real control: role, tab stop, and both activation keys', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    const row = channelRow(harness, 'ch_a');
+
+    expect(row.getAttribute('role')).toBe('button');
+    expect(row.getAttribute('tabindex')).toBe('0');
+    expect(row.getAttribute('aria-label')).toBe('Open Travel Agency A');
+    expect(row.className).toContain('open'); // the hover/focus affordance is on
+
+    row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await flush();
+    expect(harness.rail.textContent).toContain('Channel · Travel Agency A');
+
+    (harness.rail.querySelector('[data-ch-act="back"]') as HTMLElement).click();
+    channelRow(harness, 'ch_a')
+      .dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    await flush();
+    expect(harness.rail.textContent).toContain('Channel · Travel Agency A');
+  });
+
+  it('⋯ opens the actions menu and does NOT also open the channel', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    const more = harness.rail.querySelector('[data-ch-menu="ch_a"]') as HTMLElement;
+    expect(more.getAttribute('aria-label')).toContain('More actions');
+
+    more.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flush();
+
+    const dialog = harness.root.querySelector('[role="dialog"]') as HTMLElement;
+    expect(dialog).not.toBeNull();
+    expect(dialog.textContent).toContain('Rename');
+    expect(dialog.textContent).toContain('Archive');
+    // The row underneath never fired: the rail is still the list.
+    expect(harness.rail.textContent).not.toContain('Channel · Travel Agency A');
+    expect(harness.rail.querySelector('[data-ch-act="back"]')).toBeNull();
+  });
+
+  it('keeps the destructive actions behind the menu, and opening behind the row', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    (harness.rail.querySelector('[data-ch-menu="ch_a"]') as HTMLElement)
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    const dialog = harness.root.querySelector('[role="dialog"]')!;
+    (dialog.querySelector('[data-ch-menu-act="archive"]') as HTMLElement).click();
+
+    expect(harness.root.querySelector('[role="dialog"]')!.textContent)
+      .toContain('Archive Travel Agency A');
+  });
+
+  it('gives a view-only token a card, never a door it cannot use', async () => {
+    const harness = mount({ view: true, manage: false });
+    harness.mode.enter();
+    await flush();
+
+    expect(harness.rail.querySelector('[data-ch-open]')).toBeNull();
+    expect(harness.rail.querySelector('[data-ch-menu]')).toBeNull();
+    expect(harness.rail.querySelector('[role="button"]')).toBeNull();
+  });
+
+  it('never makes Public sale look openable — it has no detail panel', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+
+    const rows = harness.rail.querySelectorAll('.slm-ch-row');
+    expect(rows[0].className).toContain('public');
+    expect(rows[0].getAttribute('role')).toBeNull();
+    expect(rows[0].hasAttribute('data-ch-open')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Loading / empty / error are three DIFFERENT answers on every channels surface.
+// ---------------------------------------------------------------------------
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(err: unknown): void } {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+describe('ChannelsMode honest states', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('shows a loading state, then the list — never a flash of empty', async () => {
+    const gate = deferred<ChannelListResult>();
+    const harness = mount({ view: true, manage: true }, makeClient({
+      channels: vi.fn().mockReturnValue(gate.promise),
+    }));
+    harness.mode.enter();
+
+    expect(harness.rail.querySelector('[data-ch-state="list-loading"]')).not.toBeNull();
+    expect(harness.rail.textContent).toContain('Loading channels and allocations…');
+    expect(harness.rail.querySelector('[data-ch-act="create"]')).toBeNull();
+
+    gate.resolve(listFixture());
+    await flush();
+
+    expect(harness.rail.querySelector('[data-ch-state="list-loading"]')).toBeNull();
+    expect(harness.rail.textContent).toContain('Travel Agency A');
+  });
+
+  it('shows a FAILED read as a failure with a retry, never as an empty list', async () => {
+    const channels = vi.fn().mockRejectedValueOnce(new ManageApiError(500, 'boom', 'server_error'));
+    const harness = mount({ view: true, manage: true }, makeClient({ channels }));
+    harness.mode.enter();
+    await flush();
+
+    const error = harness.rail.querySelector('[data-ch-state="list-error"]') as HTMLElement;
+    expect(error).not.toBeNull();
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(error.textContent).toContain("Couldn't load sales channels");
+    // The distinction the owner asked for, in words: a failure is not "nothing".
+    expect(error.textContent).toContain('we could not read them');
+    expect(harness.rail.querySelector('[data-ch-state="list-empty"]')).toBeNull();
+
+    channels.mockResolvedValue(listFixture());
+    (harness.rail.querySelector('[data-ch-act="retry"]') as HTMLElement).click();
+    await flush();
+
+    expect(harness.rail.querySelector('[data-ch-state="list-error"]')).toBeNull();
+    expect(harness.rail.textContent).toContain('Travel Agency A');
+  });
+
+  it('says an event with no private channel is on public sale, and offers the fix', async () => {
+    const list = listFixture();
+    list.channels = [];
+    const harness = mount({ view: true, manage: true }, makeClient({
+      channels: vi.fn().mockResolvedValue(list),
+    }));
+    harness.mode.enter();
+    await flush();
+
+    expect(harness.rail.querySelector('[data-ch-state="list-empty"]')!.textContent)
+      .toContain('every seat is on public sale');
+    expect(harness.rail.querySelector('[data-ch-act="create"]')).not.toBeNull();
+  });
+
+  it('paints the buyer-link section as loading before the read lands', async () => {
+    const gate = deferred<{ links: [] }>();
+    const harness = mount({ view: true, manage: true }, makeClient({
+      accessLinks: vi.fn().mockReturnValue(gate.promise),
+    }));
+    harness.mode.enter();
+    await flush();
+    channelRow(harness, 'ch_a').click();
+
+    // The panel is already open — the links slot says it is working, not empty.
+    expect(harness.rail.textContent).toContain('Channel · Travel Agency A');
+    expect(harness.rail.querySelector('[data-ch-state="links-loading"]')).not.toBeNull();
+
+    gate.resolve({ links: [] });
+    await flush();
+    await flush();
+    expect(harness.rail.querySelector('[data-ch-state="links-loading"]')).toBeNull();
+  });
+
+  it('distinguishes a failed link read from a channel with no links', async () => {
+    const harness = mount({ view: true, manage: true }, makeClient({
+      accessLinks: vi.fn().mockRejectedValue(new ManageApiError(500, 'boom', 'server_error')),
+    }));
+    harness.mode.enter();
+    await flush();
+    channelRow(harness, 'ch_a').click();
+    await flush();
+    await flush();
+
+    const error = harness.rail.querySelector('[data-ch-state="links-error"]') as HTMLElement;
+    expect(error).not.toBeNull();
+    expect(error.textContent).toContain('failed read, not an empty list');
+    expect(harness.rail.querySelector('[data-ch-act="link-reload"]')).not.toBeNull();
+  });
+
+  it('moves the buyer preview loading → error, with a retry that succeeds', async () => {
+    const gate = deferred<never>();
+    const channelPreview = vi.fn().mockReturnValueOnce(gate.promise);
+    const harness = mount({ view: true, manage: true }, makeClient({ channelPreview }));
+    harness.mode.enter();
+    await flush();
+
+    (harness.rail.querySelector('[data-ch-view="preview"]') as HTMLElement).click();
+    expect(harness.rail.querySelector('[data-ch-state="preview-loading"]')).not.toBeNull();
+    expect(harness.rail.querySelector('[data-ch-state="preview-error"]')).toBeNull();
+
+    gate.reject(new ManageApiError(500, 'boom', 'server_error'));
+    await flush();
+
+    const error = harness.rail.querySelector('[data-ch-state="preview-error"]') as HTMLElement;
+    expect(error).not.toBeNull();
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(error.textContent).toContain('the simulation itself failed to load');
+    // A 500 is NOT "your server is too old" — that stays its own state.
+    expect(harness.rail.querySelector('[data-ch-state="preview-unsupported"]')).toBeNull();
+
+    channelPreview.mockResolvedValue({ available: true, eligible: ['A1'], counts: { eligible: 1 } });
+    (harness.rail.querySelector('[data-ch-act="preview-retry"]') as HTMLElement).click();
+    await flush();
+
+    expect(harness.rail.querySelector('[data-ch-state="preview-error"]')).toBeNull();
+    expect(harness.rail.textContent).toContain('1 seat is available now');
+  });
+
+  it('explains a channel that disappeared instead of silently bouncing to the list', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    channelRow(harness, 'ch_a').click();
+    await flush();
+
+    const gone = listFixture();
+    gone.channels = gone.channels.filter((channel) => channel.id !== 'ch_a');
+    (harness.client.channels as ReturnType<typeof vi.fn>).mockResolvedValue(gone);
+    harness.mode.applyRealtimeHint();
+    await flush();
+
+    expect(harness.rail.querySelector('[data-ch-state="detail-gone"]')!.textContent)
+      .toContain('no longer on this event');
+    expect(harness.rail.querySelector('[data-ch-act="back"]')).not.toBeNull();
   });
 });

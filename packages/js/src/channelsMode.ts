@@ -311,7 +311,23 @@ export const CHANNELS_CSS = /* @sl-css */ `
 .slm-ch-counts b.bump{animation:slm-ch-bump var(--slm-mo-base) var(--slm-mo-spring)}
 @keyframes slm-ch-bump{0%,100%{transform:none}35%{transform:translateY(-2px) scale(1.08)}}
 .slm-ch-access{margin-top:6px;font-size:10.5px;color:var(--slm-muted)}
-.slm-ch-more{flex:none;color:var(--slm-muted);font-weight:800;padding:0 4px;min-height:28px}
+/* A row that opens its channel must READ as pressable, and be one for a keyboard
+   too. It is a role="button" div rather than a <button> because the ⋯ control
+   lives inside it, and a button inside a button is not valid HTML. */
+.slm-ch-row.open{cursor:pointer}
+.slm-ch-row.open:hover{border-color:var(--slm-accent);background:color-mix(in srgb,var(--slm-accent) 6%,var(--slm-surface))}
+.slm-ch-row.open:focus-visible{outline:2px solid var(--slm-accent);outline-offset:2px}
+.slm-ch-row.open:active{border-color:var(--slm-accent)}
+.slm-ch-more{flex:none;color:var(--slm-muted);font-weight:800;padding:0 4px;min-height:28px;border-radius:6px}
+.slm-ch-more:hover{color:var(--slm-text)}
+.slm-ch-more:focus-visible{outline:2px solid var(--slm-accent);outline-offset:1px;color:var(--slm-text)}
+.slm-ch-menu{display:flex;flex-direction:column;gap:8px}
+.slm-ch-menu .slm-btn{width:100%}
+/* loading is a state, never a flash of empty: same slot, visibly working */
+.slm-ch-busy{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--slm-muted);padding:12px 0}
+.slm-ch-busy::before{content:"";width:9px;height:9px;border-radius:50%;background:var(--slm-accent);flex:none;
+  animation:slm-ch-pulse var(--slm-mo-ambient) var(--slm-mo-in-out) infinite}
+@keyframes slm-ch-pulse{0%,100%{opacity:.25;transform:scale(.7)}50%{opacity:1;transform:scale(1)}}
 .slm-ch-selsrc{display:flex;flex-direction:column;gap:5px;margin:8px 0 12px}
 .slm-ch-selsrc-row{display:flex;align-items:center;gap:8px;font-size:12px;font-variant-numeric:tabular-nums}
 .slm-ch-selsrc-row .mk{width:15px;height:15px;border-radius:4px;display:grid;place-items:center;font-size:8px;
@@ -443,6 +459,7 @@ export const CHANNELS_CSS = /* @sl-css */ `
   .slm-ch-meter i,.slm-ch-radio{transition:none!important}
   .slm-ch-staged.shake,.slm-ch-tick,.slm-ch-bucket,.slm-ch-scrim,.slm-ch-dialog,
   .slm-ch-counts b.bump,.slm-ch-selnum.bump{animation:none!important}
+  .slm-ch-busy::before{animation:none!important;opacity:1}
   .slm-ch-staged.shake{outline:2px solid #e5484d;outline-offset:2px}
   .slm-ch-staged.done{outline:2px solid #5bd39b;outline-offset:2px}
 }
@@ -523,7 +540,7 @@ function selectSecret(dialog: HTMLElement): void {
 type Detent = 'collapsed' | 'medium' | 'full';
 
 type DialogKind =
-  | 'create' | 'review' | 'archive' | 'rename' | 'seatlist' | 'scope'
+  | 'create' | 'review' | 'archive' | 'rename' | 'seatlist' | 'scope' | 'menu'
   | 'linkCreate' | 'linkRotate' | 'linkRevoke';
 
 /**
@@ -563,6 +580,18 @@ export class ChannelsMode {
   private focusedSectionId: string | null = null;
   private showArchived = false;
   private detailChannelId: string | null = null;
+  /**
+   * Whether the organizer has asked to assign seats.
+   *
+   * The list rail leads with the CHANNELS. The assignment tooling — destination
+   * picker plus five select-by routes — used to paint unconditionally above that
+   * list, so a first-time organizer met a workbench for a job they had not asked
+   * to do, with the thing they came for pushed below the fold. It is now
+   * disclosed on intent: the "Assign seats to a channel" action under the list,
+   * the map's own "Assign seats" segment, or simply having a selection. The
+   * selection rail always shows the tools, because there the intent is proven.
+   */
+  private assignOpen = false;
   private targetChannelId = '';
   private conflict = false;
   private dialog: DialogState | null = null;
@@ -592,7 +621,16 @@ export class ChannelsMode {
   private previewAudience: string[] = [];
   private previewIncludePublic = false;
   private previewProjection: ChannelPreviewProjection | null = null;
-  private previewSupported: boolean | null = null; // null = not yet probed
+  /**
+   * The buyer-preview read, as one honest state rather than a boolean.
+   *
+   * `previewSupported: boolean | null` could say "this worker has no projection
+   * route", but it could not say "the read is in flight" or "the read failed" —
+   * both of those painted an audience picker with no result underneath, which
+   * reads as "this audience can buy nothing". Loading and error are now states
+   * of their own, and the error one offers a retry.
+   */
+  private previewState: 'idle' | 'loading' | 'ready' | 'unsupported' | 'error' = 'idle';
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private layer: HTMLDivElement | null = null;
@@ -635,6 +673,7 @@ export class ChannelsMode {
     if (this.active) return;
     this.active = true;
     this.mapIntent = 'pan';
+    this.assignOpen = false; // every entry starts on the channels, not the tools
     this.focusedSectionId = null;
     this.assignmentRowsCache = null; // the chart may have changed since last entry
     this.railHtml = null; // the rail belonged to another mode a moment ago
@@ -1231,6 +1270,7 @@ export class ChannelsMode {
     this.view = view;
     if (view === 'inspect') {
       this.previewProjection = null;
+      this.previewState = 'idle';
       this.setBanner(false);
     } else {
       if (!this.previewAudience.length) {
@@ -1252,6 +1292,11 @@ export class ChannelsMode {
     const audience = [...this.previewAudience];
     const names = audience.map((id) => this.nameOf(id) ?? PUBLIC_CHANNEL_NAME).join(' + ');
     this.setBanner(true, names);
+    // Switching audience must not leave the previous audience's projection on
+    // screen under the new name — that is a wrong answer, not a stale one.
+    this.previewProjection = null;
+    this.previewState = 'loading';
+    if (this.active) this.paintRail();
     try {
       this.previewProjection = await this.host.api.channelPreview(this.host.eventKey, audience, {
         // Naming Public sale as the audience IS asking for public inventory; the
@@ -1259,7 +1304,7 @@ export class ChannelsMode {
         // this the request would resolve to an empty scope and 422.
         includePublic: this.previewIncludePublic || audience.some(isPublicChannelId),
       });
-      this.previewSupported = true;
+      this.previewState = 'ready';
       // `eligible` is the server's exact current buyer scope. Older workers may
       // omit its redundant aggregate count, so use the returned label count
       // rather than hiding the organiser's most useful confirmation.
@@ -1271,9 +1316,9 @@ export class ChannelsMode {
       // 404/405 = the projection endpoint has not shipped on this worker yet.
       // Say so plainly; never substitute a local approximation for a server view.
       const status = err instanceof ManageApiError ? err.status : 0;
-      this.previewSupported = !(status === 404 || status === 405 || status === 501);
+      this.previewState = status === 404 || status === 405 || status === 501 ? 'unsupported' : 'error';
       this.previewProjection = null;
-      if (this.previewSupported) this.host.onError(err);
+      if (this.previewState === 'error') this.host.onError(err);
     }
     if (this.active) { this.paintRail(); this.paintOverlay(); }
   }
@@ -1313,13 +1358,14 @@ export class ChannelsMode {
     }
     if (this.loading && !this.list) {
       this.setRailHtml(`<p class="slm-eyebrow">Sales channels</p>
-        <div class="slm-empty">Loading allocations…</div>`);
+        <div class="slm-ch-busy" role="status" data-ch-state="list-loading">Loading channels and allocations…</div>`);
       return;
     }
     if (!this.list && this.loadError) {
       if (this.setRailHtml(`<p class="slm-eyebrow">Sales channels</p>
-        <div class="slm-ch-alert err" role="alert"><span>⚠</span>
-        <span><b>Couldn't load sales channels.</b> Everything else on this event still works.
+        <div class="slm-ch-alert err" role="alert" data-ch-state="list-error"><span>⚠</span>
+        <span><b>Couldn't load sales channels.</b> This event may well have channels — we could not read them.
+        Everything else on this event still works.
         <button type="button" data-ch-act="retry">Try again</button></span></div>`)) {
         rail.querySelector('[data-ch-act="retry"]')?.addEventListener('click', () => { void this.refresh(); });
       }
@@ -1400,14 +1446,25 @@ export class ChannelsMode {
     const marker = this.markerFor(channel.id);
     const badgeKind = opts.builtin ? 'builtin' : channel.state;
     const dim = channel.state === 'paused' || channel.state === 'archived' ? ' dim' : '';
+    // The whole row opens the channel. It is only a control where there is a
+    // channel to open and authority to act on it: Public sale is built in and
+    // has no detail panel, and the detail panel is where every mutation lives,
+    // so a view-only token is shown a card, not a door it cannot use.
+    const opens = !opts.builtin && this.caps.manage && this.detailChannelId !== channel.id;
     const cls = `slm-ch-row${opts.builtin ? ' public' : ''}${channel.state === 'archived' ? ' archived' : ''}`
-      + `${this.detailChannelId === channel.id ? ' on' : ''}`;
+      + `${this.detailChannelId === channel.id ? ' on' : ''}${opens ? ' open' : ''}`;
     // Mutation affordances are ABSENT for a view-only token, never disabled.
+    // ⋯ is now the SECONDARY route: rename, pause and archive live behind it,
+    // while opening the channel is the row itself.
     const more = !opts.builtin && this.caps.manage
-      ? `<button type="button" class="slm-ch-more" data-ch-detail="${esc(channel.id)}"
-          aria-label="Manage ${esc(channel.name)}">⋯</button>`
+      ? `<button type="button" class="slm-ch-more" data-ch-menu="${esc(channel.id)}"
+          aria-label="More actions for ${esc(channel.name)}" aria-haspopup="dialog">⋯</button>`
       : '';
-    return `<div class="${cls}">
+    const rowAttrs = opens
+      ? ` role="button" tabindex="0" data-ch-open="${esc(channel.id)}"
+          aria-label="Open ${esc(channel.name)}"`
+      : '';
+    return `<div class="${cls}"${rowAttrs}>
       <span class="slm-ch-head">
         <span class="slm-ch-mk${dim}" style="background:${esc(marker.color)}" aria-hidden="true">${esc(marker.letter)}</span>
         <span class="slm-ch-name">${esc(channel.name)}</span>
@@ -1422,28 +1479,56 @@ export class ChannelsMode {
   private listRailHtml(): string {
     const list = this.list!;
     const archivedCount = list.channels.filter((channel) => channel.state === 'archived').length;
+    const visible = list.channels.filter((channel) => this.showArchived || channel.state !== 'archived');
     const rows = [
       this.channelRowHtml(list.publicSale, { builtin: true }),
-      ...list.channels
-        .filter((channel) => this.showArchived || channel.state !== 'archived')
-        .map((channel, index) => this.channelRowHtml(channel, { index })),
+      ...visible.map((channel, index) => this.channelRowHtml(channel, { index })),
     ].join('');
+    // An event with no private channel is not an error and not a blank slot: every
+    // seat is on public sale, which is a real and correct answer. Say that, and
+    // put the one action that changes it directly underneath.
+    const empty = visible.length ? '' : `<p class="slm-note" data-ch-state="list-empty">${
+      archivedCount && !this.showArchived
+        ? `No open channels — every seat is on public sale. ${archivedCount.toLocaleString()} archived channel${archivedCount === 1 ? ' is' : 's are'} hidden below.`
+        : 'No private channels yet — every seat is on public sale.'}</p>`;
     const create = this.caps.manage
       ? `<button type="button" class="slm-btn ghost" style="width:100%" data-ch-act="create">+ Create channel</button>`
       : '';
     const readOnly = this.caps.manage ? '' :
       `<p class="slm-note">You can see how inventory is allocated. Changing it needs channel-management permission.</p>`;
     return `
-      ${this.caps.manage ? this.assignmentToolsHtml() : ''}
       <p class="slm-eyebrow">Sales channels</p>
       <p class="slm-hint">Channel colours and names are only visible to organizers, never to buyers.</p>
       <div class="slm-ch-list">${rows}</div>
+      ${empty}
       ${create}
       ${readOnly}
+      ${this.assignEntryHtml()}
       <p class="slm-note" style="margin-top:10px">
         <button type="button" class="slm-linkbtn" data-ch-act="toggle-archived" aria-pressed="${this.showArchived}"
           style="text-align:left">${this.showArchived ? 'Hide' : 'Show'} archived${archivedCount ? ` (${archivedCount})` : ''}</button>
       </p>`;
+  }
+
+  /**
+   * The assignment entry point on the list rail.
+   *
+   * Collapsed it is ONE plain-language action, so the channels the organizer came
+   * for stay at the top of the panel. Opened it is the same tool set that has
+   * always worked, in the same order, plus the way back out — and opening it is
+   * also what the map's "Assign seats" segment does, so the two routes into the
+   * job cannot disagree about whether it is running.
+   */
+  private assignEntryHtml(): string {
+    if (!this.caps.manage) return '';
+    if (!this.assignOpen) {
+      return `
+        <button type="button" class="slm-btn ghost" style="width:100%;margin-top:8px"
+          data-ch-act="assign-open" aria-expanded="false">Assign seats to a channel</button>
+        <p class="slm-note">Move whole sections, rows, a dragged area or single seats out of public sale
+          and into a channel. Nothing moves until you review and apply.</p>`;
+    }
+    return `<div style="margin-top:8px">${this.assignmentToolsHtml({ collapsible: true })}</div>`;
   }
 
   /**
@@ -1452,11 +1537,13 @@ export class ChannelsMode {
    * These used to live only inside the selection rail, which meant every route
    * into them was gated behind "select a seat on the map first" — the section,
    * row and category choosers were invisible until the organizer had already
-   * done the work by hand. They now paint above the channel list too, so the
-   * destination is chosen first and whole sections and rows are discoverable
-   * without learning a hidden seat-first workflow.
+   * done the work by hand. They are still reachable before a seat is selected,
+   * but they are no longer the first thing in the panel: on the list rail they
+   * are disclosed by `assignEntryHtml`, and there they carry a way back out
+   * (`collapsible`). In the selection rail there is nothing to disclose — a
+   * selection IS the intent — so they paint unconditionally and without Done.
    */
-  private assignmentToolsHtml(): string {
+  private assignmentToolsHtml(opts: { collapsible?: boolean } = {}): string {
     const options = this.assignableChannels()
       .map((channel) => `<option value="${esc(channel.id)}"${channel.id === this.targetChannelId ? ' selected' : ''}>${esc(channel.name)}</option>`)
       .join('');
@@ -1467,8 +1554,12 @@ export class ChannelsMode {
     // Drag box is a map INTENT, not a dialog: it arms the marquee, so it shows
     // its armed state the same way the map-navigation segment does.
     const dragClass = this.mapIntent === 'assign' ? 'slm-btn' : 'slm-btn ghost';
+    const done = opts.collapsible
+      ? `<button type="button" class="slm-linkbtn" data-ch-act="assign-close"
+          aria-expanded="true" style="float:right;font-weight:800">Done</button>`
+      : '';
     return `
-      <p class="slm-eyebrow">Assign inventory</p>
+      <p class="slm-eyebrow">${done}Assign inventory</p>
       <div class="slm-field">
         <label for="slm-ch-target">Assign to</label>
         <select class="slm-select" id="slm-ch-target" data-ch-target>${options}</select>
@@ -1522,8 +1613,20 @@ export class ChannelsMode {
   }
 
   private detailRailHtml(channelId: string): string {
+    const back = `<p class="slm-eyebrow">
+      <button type="button" class="slm-linkbtn" data-ch-act="back" style="text-align:left">‹ All channels</button>
+    </p>`;
     const channel = this.list?.channels.find((item) => item.id === channelId);
-    if (!channel) return this.listRailHtml();
+    // Silently falling back to the list here was a lie of omission: an organizer
+    // who opened a channel that has since been archived (by them elsewhere, or by
+    // a colleague) was returned to the list with no explanation, as though the
+    // press had missed. The channel is gone; say so, and leave the way back.
+    if (!channel) {
+      return `${back}
+        <div class="slm-ch-alert warn" role="status" data-ch-state="detail-gone"><span>ℹ</span>
+          <span><b>This channel is no longer on this event.</b> It was archived or removed while you had it open.
+          ${this.showArchived ? '' : 'Archived channels are hidden — use “Show archived” on the list to see it.'}</span></div>`;
+    }
     const lifecycle = this.caps.manage ? `
       <p class="slm-eyebrow" style="margin-top:18px">Lifecycle</p>
       <div class="slm-ch-row2" style="margin-top:2px">
@@ -1534,9 +1637,7 @@ export class ChannelsMode {
       <p class="slm-note">Archive returns the allocation to a destination you choose. Nothing is ever deleted silently.</p>` : '';
     const access = this.caps.manage ? this.distributeHtml(channel) : '';
     return `
-      <p class="slm-eyebrow">
-        <button type="button" class="slm-linkbtn" data-ch-act="back" style="text-align:left">‹ All channels</button>
-      </p>
+      ${back}
       <p class="slm-eyebrow">Channel · ${esc(channel.name)}</p>
       <div class="slm-ch-list">${this.channelRowHtml(channel)}</div>
       ${access}
@@ -1649,16 +1750,21 @@ export class ChannelsMode {
   private hostedLinksHtml(): string {
     const eyebrow = `<p class="slm-eyebrow" style="margin-top:18px">Buyer links</p>`;
     if (this.linksState === 'unsupported') {
-      return `${eyebrow}<div class="slm-ch-alert warn"><span>ℹ</span>
+      return `${eyebrow}<div class="slm-ch-alert warn" data-ch-state="links-unsupported"><span>ℹ</span>
         <span><b>Buyer links need a newer server.</b> Everything else on this channel works normally.</span></div>`;
     }
     if (this.linksState === 'error') {
-      return `${eyebrow}<div class="slm-ch-alert err" role="alert"><span>⚠</span>
-        <span><b>Couldn't load this channel's links.</b>
+      return `${eyebrow}<div class="slm-ch-alert err" role="alert" data-ch-state="links-error"><span>⚠</span>
+        <span><b>Couldn't load this channel's links.</b> This is a failed read, not an empty list —
+        any live link is still working.
         <button type="button" data-ch-act="link-reload">Try again</button></span></div>`;
     }
-    if (this.linksState === 'loading' && !this.links.length) {
-      return `${eyebrow}<div class="slm-empty">Loading links…</div>`;
+    // `idle` is the first paint of a channel the organizer has only just opened —
+    // `openChannel` paints before `loadLinks` has even been awaited. Rendering
+    // nothing there was a flash of empty that reads as "this channel has no
+    // links", one tick before the real answer arrives.
+    if (this.linksState === 'idle' || (this.linksState === 'loading' && !this.links.length)) {
+      return `${eyebrow}<div class="slm-ch-busy" role="status" data-ch-state="links-loading">Loading buyer links…</div>`;
     }
     if (!this.links.length) return '';
     return `${eyebrow}
@@ -1715,10 +1821,21 @@ export class ChannelsMode {
     const options = audienceOptions
       .map((entry) => `<option value="${esc(entry.id)}"${entry.id === current ? ' selected' : ''}>${esc(entry.name)}</option>`)
       .join('');
-    const unsupported = this.previewSupported === false
-      ? `<div class="slm-ch-alert warn"><span>ℹ</span>
+    const unsupported = this.previewState === 'unsupported'
+      ? `<div class="slm-ch-alert warn" data-ch-state="preview-unsupported"><span>ℹ</span>
           <span><b>Preview needs a newer server.</b> Allocation management works normally;
           the buyer-view simulation will appear once this event's API is updated.</span></div>`
+      : '';
+    // Loading and failure are distinct from "this audience can buy nothing",
+    // which is what an empty result area used to imply for all three.
+    const busy = this.previewState === 'loading'
+      ? `<div class="slm-ch-busy" role="status" data-ch-state="preview-loading">Asking the server what this audience sees…</div>`
+      : '';
+    const failed = this.previewState === 'error'
+      ? `<div class="slm-ch-alert err" role="alert" data-ch-state="preview-error"><span>⚠</span>
+          <span><b>Couldn't load the buyer preview.</b> Nothing is wrong with this audience's seats —
+          the simulation itself failed to load.
+          <button type="button" data-ch-act="preview-retry">Try again</button></span></div>`
       : '';
     // The server decides an audience is unpreviewable, not the client: a paused
     // or archived channel comes back `available:false` and we show the landing
@@ -1750,7 +1867,7 @@ export class ChannelsMode {
       ${includePublic}
       <p class="slm-hint">This is the same projection the buyer SDK receives for this audience — not a local
         approximation. It is read-only: clicks open seat details, and no holds are created.</p>
-      ${unsupported}${unavailable}
+      ${busy}${failed}${unsupported}${unavailable}
       <div class="slm-ch-legend">
         <div class="r"><span class="sw" style="background:#6e7bff"></span> Eligible &amp; free — buyable by this audience</div>
         <div class="r"><span class="sw" style="background:#3a4051"></span> Unavailable to this audience (one neutral state)</div>
@@ -1760,6 +1877,10 @@ export class ChannelsMode {
   }
 
   private paintSelection(): void {
+    // A selection proves the intent the disclosure was waiting for, so clearing
+    // it later returns the organizer to the tools rather than to the collapsed
+    // action they would have to press again.
+    if (this.caps.manage && this.host.selectionLabels().length) this.assignOpen = true;
     // A selection change swaps the rail between list and staged-selection bodies,
     // so repaint rather than patch — the rail is small and this keeps one path.
     if (this.view === 'inspect' && !this.detailChannelId) this.paintRail();
@@ -1773,17 +1894,33 @@ export class ChannelsMode {
     rail.querySelectorAll<HTMLElement>('[data-ch-map]').forEach((button) => {
       button.addEventListener('click', () => {
         this.mapIntent = button.dataset.chMap === 'assign' ? 'assign' : 'pan';
+        // Arming the marquee IS asking to assign, so the tools that finish the
+        // job come with it. This is the discoverable route for an organizer who
+        // never pressed "Assign seats to a channel" under the list.
+        if (this.mapIntent === 'assign') this.assignOpen = true;
         this.paintRail();
         this.onInteractionChange?.();
       });
     });
-    rail.querySelectorAll<HTMLElement>('[data-ch-detail]').forEach((button) => {
-      button.addEventListener('click', () => {
-        const channelId = button.dataset.chDetail!;
-        this.detailChannelId = channelId;
-        this.paintRail();
-        void this.loadLinks(channelId).then(() => this.paintRail());
+    // The whole row is the door. It is a role="button" element, so it owes the
+    // keyboard the two keys a real button answers to — and Space must not scroll
+    // the rail on the way.
+    rail.querySelectorAll<HTMLElement>('[data-ch-open]').forEach((row) => {
+      const open = (): void => this.openChannel(row.dataset.chOpen!);
+      row.addEventListener('click', open);
+      row.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return;
+        event.preventDefault();
+        open();
       });
+    });
+    // ⋯ sits INSIDE that door, so it must not also open it.
+    rail.querySelectorAll<HTMLElement>('[data-ch-menu]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.openDialog({ kind: 'menu', channelId: button.dataset.chMenu! });
+      });
+      button.addEventListener('keydown', (event) => { event.stopPropagation(); });
     });
     rail.querySelectorAll<HTMLElement>('[data-ch-rotate]').forEach((button) => {
       button.addEventListener('click', () => this.openDialog({
@@ -1816,6 +1953,16 @@ export class ChannelsMode {
     rail.querySelectorAll<HTMLElement>('[data-ch-act]').forEach((button) => {
       button.addEventListener('click', () => this.railAction(button.dataset.chAct!));
     });
+  }
+
+  /** Open a channel's detail panel and start its buyer-link read. */
+  private openChannel(channelId: string): void {
+    this.detailChannelId = channelId;
+    // Paint the panel FIRST so the organizer lands on the channel immediately,
+    // with the links section showing its own loading state, rather than waiting
+    // on a network read behind an unchanged rail.
+    this.paintRail();
+    void this.loadLinks(channelId).then(() => this.paintRail());
   }
 
   private railAction(action: string): void {
@@ -1867,6 +2014,20 @@ export class ChannelsMode {
         this.onInteractionChange?.();
         break;
       case 'pick-category': this.pickCategory(); break;
+      case 'assign-open':
+        this.assignOpen = true;
+        this.paintRail();
+        break;
+      // Collapsing the tools must also disarm the marquee. Leaving it armed
+      // would hide a mode the map is still in — the organizer would drag to pan
+      // and select seats instead, with no control on screen saying why.
+      case 'assign-close':
+        this.assignOpen = false;
+        this.mapIntent = 'pan';
+        this.paintRail();
+        this.onInteractionChange?.();
+        break;
+      case 'preview-retry': void this.loadPreview(); break;
       default: break;
     }
   }
@@ -2036,8 +2197,13 @@ export class ChannelsMode {
               blocks.push(`<p class="slm-ch-scopehint">${(matches.length - visible.length).toLocaleString()} more row${matches.length - visible.length === 1 ? '' : 's'}. Search to narrow the list.</p>`);
             }
           });
+          // Two different nothings: nothing matched the search, versus this chart
+          // has no assignable rows at all. The second one is not a search result.
           list.innerHTML = blocks.join('')
-            || `<div class="slm-ch-scope-empty">No sections or rows match “${esc(query)}”.</div>`;
+            || (query
+              ? `<div class="slm-ch-scope-empty" data-ch-state="scope-nomatch">No sections or rows match “${esc(query)}”.</div>`
+              : `<div class="slm-ch-scope-empty" data-ch-state="scope-empty">This chart has no rows with selectable seats.
+                  Use Drag box or the seat list instead.</div>`);
           filterHint.textContent = query
             ? `Showing ${rendered.toLocaleString()} of ${totalMatches.toLocaleString()} matching rows. Section checkboxes still select every row in that section.`
             : 'Showing section groups. Expand one or search to see rows.';
@@ -2091,7 +2257,8 @@ export class ChannelsMode {
     this.renderScrim(`
       <h3 id="slm-ch-dlg-title">Add whole sections</h3>
       <p class="sub">Choose one or more. They are added to the seats already selected on the map.</p>
-      <div class="slm-ch-seatlist">${body || `<div class="slm-empty">No sections are available.</div>`}</div>
+      <div class="slm-ch-seatlist">${body || `<div class="slm-ch-scope-empty" data-ch-state="scope-empty">This chart has no sections with selectable seats.
+        Use Drag box or the seat list instead.</div>`}</div>
       <p class="slm-ch-err" data-ch-error hidden></p>
       <div class="foot">
         <button type="button" class="quiet" data-ch-close>Cancel</button>
@@ -2155,6 +2322,7 @@ export class ChannelsMode {
     else if (state.kind === 'archive') this.renderArchiveDialog(state);
     else if (state.kind === 'rename') this.renderRenameDialog(state);
     else if (state.kind === 'seatlist') this.renderSeatListDialog();
+    else if (state.kind === 'menu') this.renderMenuDialog(state);
     else if (state.kind === 'linkCreate') this.renderLinkCreateDialog(state);
     else if (state.kind === 'linkRotate') this.renderLinkRotateDialog(state);
     else if (state.kind === 'linkRevoke') this.renderLinkRevokeDialog(state);
@@ -2442,6 +2610,47 @@ export class ChannelsMode {
     bar.classList.add('shake');
   }
 
+  /**
+   * The ⋯ menu.
+   *
+   * Opening a channel is the ROW's job now, so ⋯ carries what is left: the
+   * secondary and destructive lifecycle actions. It is rendered through the same
+   * scrim primitive as every other sheet, which is what gives it a focus trap,
+   * Escape, and a name — a bare absolutely-positioned popup would have had none
+   * of those. Archive keeps its own confirmation dialog; this menu never
+   * destroys anything by itself.
+   */
+  private renderMenuDialog(state: DialogState): void {
+    const channel = this.list?.channels.find((item) => item.id === state.channelId);
+    if (!channel || !this.caps.manage) { this.closeDialog(); return; }
+    const paused = channel.state === 'paused';
+    this.renderScrim(`
+      <h3 id="slm-ch-dlg-title">${esc(channel.name)}</h3>
+      <p class="sub">Open the channel to allocate seats and hand out buyer access.
+        These are the rest of its actions.</p>
+      <div class="slm-ch-menu">
+        <button type="button" class="slm-btn" data-ch-menu-act="open">Open channel</button>
+        <button type="button" class="slm-btn ghost" data-ch-menu-act="rename">Rename</button>
+        <button type="button" class="slm-btn ghost" data-ch-menu-act="pause">${paused ? 'Resume selling' : 'Pause selling'}</button>
+        <button type="button" class="slm-btn ghost" data-ch-menu-act="archive">Archive…</button>
+      </div>
+      <p class="slm-note">Pausing stops new buyer access; checkouts already running can finish.
+        Archiving closes the channel for good and returns its free seats to a destination you choose.
+        Nothing is ever deleted silently.</p>
+      <div class="foot"><button type="button" class="quiet" data-ch-close>Cancel</button></div>`, (dialog) => {
+      dialog.querySelectorAll<HTMLElement>('[data-ch-menu-act]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const act = button.dataset.chMenuAct;
+          if (act === 'open') { this.closeDialog(); this.openChannel(channel.id); return; }
+          if (act === 'rename') { this.openDialog({ kind: 'rename', channelId: channel.id }); return; }
+          if (act === 'archive') { this.openDialog({ kind: 'archive', channelId: channel.id }); return; }
+          this.closeDialog();
+          void this.togglePause(channel.id);
+        });
+      });
+    });
+  }
+
   private renderRenameDialog(state: DialogState): void {
     const channel = this.list?.channels.find((item) => item.id === state.channelId);
     if (!channel) { this.closeDialog(); return; }
@@ -2500,9 +2709,11 @@ export class ChannelsMode {
     }
   }
 
-  private async togglePause(): Promise<void> {
-    const channel = this.list?.channels.find((item) => item.id === this.detailChannelId);
-    if (!channel) return;
+  /** `channelId` is explicit because this is reachable from the ⋯ menu on a row
+   *  that is NOT the open channel, as well as from the detail panel itself. */
+  private async togglePause(channelId = this.detailChannelId): Promise<void> {
+    const channel = this.list?.channels.find((item) => item.id === channelId);
+    if (!channel || !this.caps.manage) return;
     const paused = channel.state !== 'paused';
     try {
       await this.host.api.setChannelPaused(this.host.eventKey, channel.id, paused);
