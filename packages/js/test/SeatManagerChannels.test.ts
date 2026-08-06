@@ -739,6 +739,47 @@ describe('ChannelsMode distribute', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Rail scrolling + poll hygiene — the owner's "the rail gets stuck" report
+// ---------------------------------------------------------------------------
+
+describe('ChannelsMode rail repaints', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('does not touch the rail at all when a repaint would change nothing', async () => {
+    const harness = mount({ view: true, manage: true });
+    harness.mode.enter();
+    await flush();
+    const before = harness.rail.firstElementChild;
+
+    harness.mode.applyRealtimeHint(); // exactly what a poll tick does
+    await flush();
+
+    // Same nodes, so the scroll offset, focus and any open <select> all survive.
+    expect(harness.rail.firstElementChild).toBe(before);
+  });
+
+  it('restores the scroll offset when the rail really is rewritten', async () => {
+    const harness = mount({ view: true, manage: true });
+    // jsdom has no layout, so scrollTop is a fixed 0 — model it as a real one.
+    let scrollTop = 0;
+    Object.defineProperty(harness.rail, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; },
+    });
+    harness.mode.enter();
+    await flush();
+    scrollTop = 260;
+
+    harness.setSelection(['P1']); // a genuinely different rail body
+    harness.mode.handleSelectionChange();
+
+    expect(harness.rail.innerHTML).toContain('selected');
+    expect(scrollTop).toBe(260);
+  });
+});
+
 describe('ChannelsMode archive + preview', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
 

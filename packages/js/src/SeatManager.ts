@@ -274,7 +274,12 @@ const LEGEND: { key: 'free' | 'held' | 'booked' | 'blocked'; label: string; colo
  *  see `SeatManagerMotion.test.ts`. Not part of the public package surface.
  *  `@sl-css` opts it into build-time minification (cdn/minifyCssLiterals.ts). */
 export const MANAGER_CSS = /* @sl-css */ `
-.slm{position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-height:480px;overflow:hidden;
+/* The floor was 480px, which trapped the cockpit in any host shorter than that:
+   every ancestor here is overflow:hidden, so the bottom of the rail (Create
+   channel, Show archived) was rendered but clipped away by the host and could
+   not be reached by scrolling anything. 320px still keeps an unsized host from
+   collapsing to the top bar, and the rail scrolls to its full content below. */
+.slm{position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-height:320px;overflow:hidden;
   background:var(--slm-bg);color:var(--slm-text);font-family:var(--slm-font);border-radius:var(--slm-radius);
   /* Motion tokens (motion-system §2), declared by the cockpit ROOT rather than
      borrowed from CHANNELS_CSS. The base cockpit animates whether or not
@@ -342,7 +347,7 @@ export const MANAGER_CSS = /* @sl-css */ `
 .slm-liveeventdot{width:8px;height:8px;border-radius:50%;flex:none}.slm-liveeventcopy{min-width:0;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;font-size:12px;font-weight:800}.slm-liveeventhint{color:var(--slm-muted);font-size:10px;white-space:nowrap}
 .slm-rail{width:320px;flex:none;border-left:1px solid var(--slm-line);display:flex;flex-direction:column;min-height:0}
-.slm-railscroll{flex:1;overflow-y:auto;padding:16px}
+.slm-railscroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:16px}
 .slm-eyebrow{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--slm-muted);font-weight:800;margin-bottom:6px}
 .slm-hint{font-size:12.5px;color:var(--slm-muted);line-height:1.5;margin-bottom:14px}
 
@@ -407,7 +412,8 @@ export const MANAGER_CSS = /* @sl-css */ `
   color:var(--slm-muted);font-size:10.5px}
 .slm-linkbtn{font-size:11px!important;font-weight:800!important;color:var(--slm-accent)!important;text-align:right}
 .slm-linkbtn:disabled{opacity:.45;cursor:not-allowed}
-.slm-blockedlist{max-height:246px;overflow:auto;border:1px solid var(--slm-line);border-radius:10px;background:var(--slm-surface)}
+.slm-blockedlist{max-height:246px;overflow:auto;overscroll-behavior:contain;border:1px solid var(--slm-line);
+  border-radius:10px;background:var(--slm-surface)}
 .slm-blockeditem{display:grid!important;grid-template-columns:18px minmax(0,1fr);width:100%;gap:8px;padding:8px 9px!important;
   border-bottom:1px solid var(--slm-line)!important;text-align:left!important}
 .slm-blockeditem:last-child{border-bottom:0!important}.slm-blockeditem:hover{background:rgba(255,255,255,.035)!important}

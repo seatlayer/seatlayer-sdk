@@ -312,7 +312,7 @@ export const CHANNELS_CSS = /* @sl-css */ `
 /* dialogs */
 .slm-ch-scrim{position:absolute;inset:0;z-index:12;background:rgba(4,6,12,.62);display:grid;place-items:center;
   padding:18px;animation:slm-ch-fade var(--slm-mo-quick) var(--slm-mo-out)}
-.slm-ch-dialog{width:min(460px,100%);max-height:100%;overflow:auto;background:#12151f;border:1px solid var(--slm-line);
+.slm-ch-dialog{width:min(460px,100%);max-height:100%;overflow:auto;overscroll-behavior:contain;background:#12151f;border:1px solid var(--slm-line);
   border-radius:14px;padding:20px;box-shadow:0 24px 70px rgba(0,0,0,.6);
   animation:slm-ch-rise var(--slm-mo-base) var(--slm-mo-out)}
 .slm-ch-dialog h3{margin:0 0 4px;font-size:16px;font-weight:800;letter-spacing:-.01em}
@@ -358,8 +358,8 @@ export const CHANNELS_CSS = /* @sl-css */ `
 .slm-ch-radio input{flex:none;margin-top:2px}
 .slm-ch-radio b{display:block;font-weight:800;margin-bottom:2px}
 .slm-ch-radio .why{display:block;color:var(--slm-muted);font-size:11.5px;line-height:1.45}
-.slm-ch-seatlist{max-height:44vh;overflow:auto;border:1px solid var(--slm-line);border-radius:10px;
-  background:var(--slm-surface);margin-top:10px}
+.slm-ch-seatlist{max-height:44vh;overflow:auto;overscroll-behavior:contain;border:1px solid var(--slm-line);
+  border-radius:10px;background:var(--slm-surface);margin-top:10px}
 .slm-ch-seatgroup{padding:8px 10px;border-bottom:1px solid var(--slm-line);display:flex;align-items:center;
   justify-content:space-between;gap:8px;font-size:11px;font-weight:800;color:var(--slm-muted);position:sticky;top:0;
   background:var(--slm-surface)}
@@ -556,6 +556,9 @@ export class ChannelsMode {
   private stagedDoneTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSelectionCount = 0;
   private lastCounts = new Map<string, number>();
+  /** The markup currently in the rail. An identical repaint is skipped, which is
+   *  what keeps the organizer's scroll position (and open <select>) alive. */
+  private railHtml: string | null = null;
 
   constructor(host: ChannelsModeHost, capabilities: ChannelsCapabilities) {
     this.host = host;
@@ -570,6 +573,7 @@ export class ChannelsMode {
     this.active = true;
     this.mapIntent = 'pan';
     this.focusedSectionId = null;
+    this.railHtml = null; // the rail belonged to another mode a moment ago
     this.ensureLayer();
     this.host.root.classList.add('ch-mode');
     this.applySheetClasses();
@@ -589,6 +593,7 @@ export class ChannelsMode {
     this.active = false;
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
+    this.railHtml = null;
     this.closeDialog({ restoreFocus: false });
     // Link status is per-channel and short-lived; nothing about it survives the
     // mode, and there was never a secret in it to survive.
@@ -1181,25 +1186,51 @@ export class ChannelsMode {
     if (this.active) { this.paintRail(); this.paintOverlay(); }
   }
 
+  /**
+   * Replace the rail's markup — but only when it actually differs, and never at
+   * the cost of where the organizer had scrolled to.
+   *
+   * The rail repaints on a clock, on every selection change and after every
+   * mutation. Rewriting `innerHTML` each time resets `scrollTop`, which is
+   * exactly what "the rail gets stuck" was: scroll down to Create channel, the
+   * poll ticks, and the list snaps back to the top under the cursor. So skip the
+   * write when the markup is byte-identical, and restore the offset when it is
+   * not.
+   *
+   * Returns whether the DOM was rewritten. Callers must only re-wire listeners
+   * when it was — a skipped paint keeps the old nodes AND their listeners, so
+   * re-wiring would double every handler.
+   */
+  private setRailHtml(html: string): boolean {
+    if (html === this.railHtml) return false;
+    const rail = this.host.rail;
+    const scrollTop = rail.scrollTop;
+    rail.innerHTML = html;
+    this.railHtml = html;
+    if (scrollTop) rail.scrollTop = scrollTop;
+    return true;
+  }
+
   paintRail(): void {
     if (!this.active) return;
     const rail = this.host.rail;
     if (!this.caps.view) {
-      rail.innerHTML = `<p class="slm-eyebrow">Sales channels</p>
-        <p class="slm-hint">You need channel-management permission on this event to see allocations.</p>`;
+      this.setRailHtml(`<p class="slm-eyebrow">Sales channels</p>
+        <p class="slm-hint">You need channel-management permission on this event to see allocations.</p>`);
       return;
     }
     if (this.loading && !this.list) {
-      rail.innerHTML = `<p class="slm-eyebrow">Sales channels</p>
-        <div class="slm-empty">Loading allocations…</div>`;
+      this.setRailHtml(`<p class="slm-eyebrow">Sales channels</p>
+        <div class="slm-empty">Loading allocations…</div>`);
       return;
     }
     if (!this.list && this.loadError) {
-      rail.innerHTML = `<p class="slm-eyebrow">Sales channels</p>
+      if (this.setRailHtml(`<p class="slm-eyebrow">Sales channels</p>
         <div class="slm-ch-alert err" role="alert"><span>⚠</span>
         <span><b>Couldn't load sales channels.</b> Everything else on this event still works.
-        <button type="button" data-ch-act="retry">Try again</button></span></div>`;
-      rail.querySelector('[data-ch-act="retry"]')?.addEventListener('click', () => { void this.refresh(); });
+        <button type="button" data-ch-act="retry">Try again</button></span></div>`)) {
+        rail.querySelector('[data-ch-act="retry"]')?.addEventListener('click', () => { void this.refresh(); });
+      }
       return;
     }
 
@@ -1215,8 +1246,7 @@ export class ChannelsMode {
         : selection.length && this.caps.manage
           ? this.selectionRailHtml(selection)
           : this.listRailHtml();
-    rail.innerHTML = `${grab}${segment}${body}`;
-    this.wireRail();
+    if (this.setRailHtml(`${grab}${segment}${body}`)) this.wireRail();
     this.paintStagedBar();
   }
 
