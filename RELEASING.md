@@ -16,6 +16,40 @@ The rule that makes everything else work:
 | `@seatlayer/react` (`packages/react/src`) | This repo | Edit here |
 | CDN-only entry (`cdn/src`) | This repo | Edit here |
 
+### The `manager` subpath (npm only)
+
+`@seatlayer/js/manager` and `@seatlayer/react/manager` export the organizer
+cockpit — `SeatManager` and its types — and nothing else. They exist because the
+package roots are buyer SDKs that *also* export the cockpit, so importing
+`SeatManager` from the root drags `SeatPicker`, `SeatingChart`,
+`EmbeddedDesigner` and the engine code only those reach (`PickerController`,
+`generatePanorama`, `renderedQuality`) into a bundle that never renders any of
+it. Measured on the dashboard's own Control Room route: **~220 KB of minified JS
+that the surface cannot run.**
+
+Bundlers cannot fix that from the outside. The published `dist/index.js` is one
+file and its classes are not provably side-effect-free at the granularity a
+tree-shaker needs, so the buyer half survives an import that names one symbol.
+The split has to be made here, where the module graph is still real.
+
+Two rules keep the saving from silently evaporating, and nothing fails loudly if
+either is broken:
+
+- `packages/react/src/{manager.ts,SeatManager.tsx}` import from
+  `@seatlayer/js/manager`, **never** from `@seatlayer/js`. One bare-barrel
+  import anywhere in that graph re-admits the whole buyer SDK.
+- The roots keep exporting `SeatManager` unchanged. This is a cheaper door to
+  the same class, not a move — every existing integration is untouched.
+
+Each subpath needs an `exports` entry **and** a `typesVersions` entry (node10
+resolution ignores `exports`, and `attw` in `pnpm lint:packages` fails the
+release without it) — the same pair `@seatlayer/core` already carries for
+`./view3d`.
+
+This is an **npm-only** split. There is no CDN counterpart and none of the CDN
+scripts change: the IIFE cannot code-split, so a browser consumer keeps getting
+one bundle with everything in it.
+
 ### The CDN bundle is a superset of npm
 
 `cdn/src/index.ts` re-exports the whole `@seatlayer/js` public API **plus** the

@@ -16,6 +16,14 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "//typesVersions": "Legacy (pre-`exports`) TypeScript resolution for the ./manager subpath, mirroring @seatlayer/core's ./view3d. `exports` alone leaves node10 consumers unable to see the types, which attw fails the release on.",
+  "typesVersions": {
+    "*": {
+      "manager": [
+        "./dist/manager.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "import": {
@@ -25,6 +33,16 @@
       "require": {
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
+      }
+    },
+    "./manager": {
+      "import": {
+        "types": "./dist/manager.d.ts",
+        "default": "./dist/manager.js"
+      },
+      "require": {
+        "types": "./dist/manager.d.cts",
+        "default": "./dist/manager.cjs"
       }
     }
   },

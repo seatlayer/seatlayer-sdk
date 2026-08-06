@@ -17,7 +17,12 @@ import {
   type ControlRoomSnapshot,
   type LogEntry,
   type ExpandedSeat,
-} from '@seatlayer/js';
+// `@seatlayer/js/manager`, NOT the bare `@seatlayer/js` barrel. The barrel is a
+// buyer SDK that also exports the cockpit, so importing the cockpit through it
+// drags SeatPicker, SeatingChart, EmbeddedDesigner and the engine code only
+// those reach into every bundle that renders a control room. See the header of
+// `@seatlayer/js`'s `src/manager.ts` for the measurement.
+} from '@seatlayer/js/manager';
 
 export type {
   SeatManagerOptions,
@@ -26,7 +31,7 @@ export type {
   SeatManagerActivity,
   SeatManagerActionResult,
   SeatManagerConnection,
-} from '@seatlayer/js';
+} from '@seatlayer/js/manager';
 
 /** Imperative handle for the organizer manage board. */
 export interface SeatManagerHandle {
