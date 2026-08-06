@@ -1435,7 +1435,7 @@ export class ChannelsMode {
       `<p class="slm-note">You can see how inventory is allocated. Changing it needs channel-management permission.</p>`;
     return `
       ${this.caps.manage ? this.assignmentToolsHtml() : ''}
-      <p class="slm-eyebrow"${this.caps.manage ? ' style="margin-top:18px"' : ''}>Sales channels</p>
+      <p class="slm-eyebrow">Sales channels</p>
       <p class="slm-hint">Channel colours and names are only visible to organizers, never to buyers.</p>
       <div class="slm-ch-list">${rows}</div>
       ${create}
@@ -1482,7 +1482,8 @@ export class ChannelsMode {
         <button type="button" class="slm-btn ghost" data-ch-act="pick-category">Category</button>
         <button type="button" class="slm-btn ghost" data-ch-act="seatlist">Seat list ⌨</button>
       </div>
-      <p class="slm-note">Choose a destination, then add whole sections, multiple rows, a dragged area, or individual seats.</p>`;
+      <p class="slm-note" style="margin-bottom:18px">Choose a destination, then add whole sections,
+        multiple rows, a dragged area, or individual seats.</p>`;
   }
 
   private selectionRailHtml(selection: string[]): string {
