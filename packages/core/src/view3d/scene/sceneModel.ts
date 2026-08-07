@@ -10,7 +10,7 @@
  * (docs/3d-program-workorder §Architecture) — no new chart data is invented.
  */
 
-import type { ChartDoc, ChartObject, ExpandedSeat, Point, SectionObject } from '../../core/types';
+import type { ChartDoc, ChartObject, ExpandedSeat, Point, SectionObject, ShapeObject } from '../../core/types';
 import { CHART_UNITS_PER_METRE } from '../../core/units';
 import { SEAT_STATES, STRUCTURE, hexToRgb, mix, desaturate, scaleRgb, type RGB } from '../palette';
 import { resolveTheme3D, themeSeatColorLUT, type Theme3D } from '../theme';
@@ -84,6 +84,16 @@ export interface SceneSection {
   focalWorld: [number, number, number];
 }
 
+/** One authored row resolved for guided large-venue navigation. */
+export interface SceneRow {
+  id: string;
+  label: string;
+  sectionId?: string;
+  seatCount: number;
+  center: [number, number, number];
+  radius: number;
+}
+
 /** A navigable floor — a logical level of the venue. */
 export interface SceneFloor {
   index: number;
@@ -126,6 +136,8 @@ export interface SceneModel {
   stages: StageBounds[];
   /** Seated sections, in authored order — the navigable middle rung. */
   sections: SceneSection[];
+  /** Rows used by the Section → Row → Seat locator. */
+  rows: SceneRow[];
   /**
    * The venue's floors, in authored order. A single-floor chart reports one.
    *
@@ -143,15 +155,29 @@ export interface SceneModel {
   labels: SceneLabel[];
 }
 
-function floorUnits(doc: ChartDoc): FloorUnit[] {
+export function shapeVisibleInConfiguration(
+  shape: Pick<ShapeObject, 'eventConfigurationIds'>,
+  activeConfigurationId?: string,
+): boolean {
+  const ids = shape.eventConfigurationIds;
+  return !ids?.length || (!!activeConfigurationId && ids.includes(activeConfigurationId));
+}
+
+function visibleObjects(objects: ChartObject[], activeConfigurationId?: string): ChartObject[] {
+  return objects.filter((object) => (
+    object.type !== 'shape' || shapeVisibleInConfiguration(object, activeConfigurationId)
+  ));
+}
+
+function floorUnits(doc: ChartDoc, activeConfigurationId?: string): FloorUnit[] {
   if (doc.floors?.length) {
     return doc.floors.map((f) => ({
-      objects: f.objects,
+      objects: visibleObjects(f.objects, activeConfigurationId),
       focal: f.focalPoint ?? doc.focalPoint,
       baseHeightM: f.baseHeightM ?? 0,
     }));
   }
-  return [{ objects: doc.objects, focal: doc.focalPoint, baseHeightM: 0 }];
+  return [{ objects: visibleObjects(doc.objects, activeConfigurationId), focal: doc.focalPoint, baseHeightM: 0 }];
 }
 
 const AO = { top: 1.0, wallBottom: 0.5, bottomCap: 0.4 };
@@ -577,32 +603,162 @@ function buildTable(
     tintTop(fill, S.tableTop), S.tableWall, AO);
 }
 
-/** Resolve a shape object to a closed chart-unit polygon (or null to skip). */
+function rotateShapePolygon(poly: Point[], degrees: number | undefined): Point[] {
+  if (!degrees) return poly;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const point of poly) {
+    minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x);
+    minY = Math.min(minY, point.y); maxY = Math.max(maxY, point.y);
+  }
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const radians = (degrees * Math.PI) / 180;
+  const cos = Math.cos(radians), sin = Math.sin(radians);
+  return poly.map((point) => {
+    const dx = point.x - cx, dy = point.y - cy;
+    return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+  });
+}
+
+/** Resolve a shape object to its rotated closed chart-unit polygon. */
 function shapePolygon(shape: Extract<ChartObject, { type: 'shape' }>): Point[] | null {
-  if (shape.kind === 'polygon' && shape.points && shape.points.length >= 3) return shape.points;
+  let poly: Point[] | null = null;
+  if (shape.kind === 'polygon' && shape.points && shape.points.length >= 3) poly = shape.points;
   if (shape.kind === 'rect' && shape.width && shape.height) {
-    return rectPolygon(shape.x ?? 0, shape.y ?? 0, shape.width, shape.height);
+    poly = rectPolygon(shape.x ?? 0, shape.y ?? 0, shape.width, shape.height);
   }
   if (shape.kind === 'ellipse' && shape.width && shape.height) {
     const cx = (shape.x ?? 0) + shape.width / 2;
     const cy = (shape.y ?? 0) + shape.height / 2;
-    return ellipsePolygon(cx, cy, shape.width / 2, shape.height / 2);
+    poly = ellipsePolygon(cx, cy, shape.width / 2, shape.height / 2);
   }
-  return null; // line / polyline are stroke-only
+  return poly ? rotateShapePolygon(poly, shape.rotation) : null; // line / polyline are stroke-only
+}
+
+export type ShapeArchitectureKind = 'plate' | 'stage' | 'solid' | 'portal' | 'suite';
+export interface ShapeArchitecture {
+  kind: ShapeArchitectureKind;
+  heightM: number;
+}
+
+/** Physical interpretation of the chart's existing décor vocabulary. */
+export function architectureForShape(shape: Pick<ShapeObject, 'role' | 'heightM'>): ShapeArchitecture {
+  const role = shape.role ?? '';
+  const defaults: Record<string, ShapeArchitecture> = {
+    stage: { kind: 'stage', heightM: 1 },
+    entrance: { kind: 'portal', heightM: 2.7 },
+    exit: { kind: 'portal', heightM: 2.7 },
+    screen: { kind: 'solid', heightM: 6 },
+    wall: { kind: 'solid', heightM: 2.8 },
+    rail: { kind: 'solid', heightM: 1.1 },
+    suite: { kind: 'suite', heightM: 3 },
+    obstruction: { kind: 'solid', heightM: 4.5 },
+    sound: { kind: 'solid', heightM: 1.45 },
+    restroom: { kind: 'solid', heightM: 2.4 },
+    bar: { kind: 'solid', heightM: 1.1 },
+    concession: { kind: 'solid', heightM: 1.1 },
+    coat: { kind: 'solid', heightM: 1.1 },
+  };
+  const resolved = defaults[role] ?? { kind: 'plate' as const, heightM: 0.25 };
+  return { ...resolved, heightM: shape.heightM ?? resolved.heightM };
+}
+
+interface ShapeLayerFootprint {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  topOffsetM: number;
+}
+
+/**
+ * Flat authored shapes share one solid draw call, so polygonOffset cannot
+ * separate a marking from the surface below it. Preserve the 2D object order by
+ * lifting only shapes whose footprints overlap something already emitted.
+ * Eight centimetres remains visually flush at venue scale while clearing the
+ * depth precision that made Cricket Oval's wicket strip flicker into slivers.
+ */
+const SHAPE_LAYER_LIFT_M = 0.08;
+
+function claimShapeTopOffset(
+  shape: Extract<ChartObject, { type: 'shape' }>,
+  claimed: ShapeLayerFootprint[],
+): number {
+  const poly = shapePolygon(shape);
+  const architecture = architectureForShape(shape);
+  const defaultTop = architecture.heightM;
+  if (!poly) return defaultTop;
+  // Vertical architecture occupies real space; it does not participate in the
+  // tiny z-fight lifts used to order overlapping painted floor plates.
+  if (architecture.kind !== 'plate' && architecture.kind !== 'stage') return defaultTop;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of poly) {
+    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+  }
+  let topOffsetM = defaultTop;
+  for (const prior of claimed) {
+    const overlaps = maxX > prior.minX && minX < prior.maxX
+      && maxY > prior.minY && minY < prior.maxY;
+    if (overlaps && topOffsetM <= prior.topOffsetM + 1e-6) {
+      topOffsetM = prior.topOffsetM + SHAPE_LAYER_LIFT_M;
+    }
+  }
+  claimed.push({ minX, minY, maxX, maxY, topOffsetM });
+  return topOffsetM;
+}
+
+function lerpPoint(a: Point, b: Point, t: number): Point {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+function orientQuadLong(poly: Point[]): Point[] {
+  if (poly.length !== 4) return poly;
+  const edge0 = Math.hypot(poly[1].x - poly[0].x, poly[1].y - poly[0].y);
+  const edge1 = Math.hypot(poly[2].x - poly[1].x, poly[2].y - poly[1].y);
+  return edge0 >= edge1 ? poly : [poly[1], poly[2], poly[3], poly[0]];
+}
+
+function quadWidthSlice(poly: Point[], t0: number, t1: number): Point[] {
+  return [
+    lerpPoint(poly[0], poly[1], t0), lerpPoint(poly[0], poly[1], t1),
+    lerpPoint(poly[3], poly[2], t1), lerpPoint(poly[3], poly[2], t0),
+  ];
+}
+
+function quadDepthSlice(poly: Point[], t0: number, t1: number): Point[] {
+  return [
+    lerpPoint(poly[0], poly[3], t0), lerpPoint(poly[1], poly[2], t0),
+    lerpPoint(poly[1], poly[2], t1), lerpPoint(poly[0], poly[3], t1),
+  ];
+}
+
+function emitArchitecturalPrism(
+  builder: MeshBuilder,
+  poly: Point[],
+  top: number,
+  bottom: number,
+  colTop: RGB,
+  colWall: RGB,
+): void {
+  extrudePrism(builder, poly, undefined, () => top, bottom, colTop, colWall, AO);
 }
 
 function buildShape(
   builder: MeshBuilder,
   shape: Extract<ChartObject, { type: 'shape' }>,
   base: number,
+  topOffsetM: number,
   S: typeof STRUCTURE,
+  focal: Point,
   /** Collects the footprint of each STAGE, for the lighting rig above it. */
   stages?: StageBounds[],
 ): void {
   const poly = shapePolygon(shape);
   if (!poly) return;
   const isStage = shape.role === 'stage';
-  const height = isStage ? base + 1.0 : base + 0.25;
+  const architecture = architectureForShape(shape);
+  const height = base + topOffsetM;
   if (isStage && stages) {
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const pt of poly) {
@@ -626,8 +782,36 @@ function buildShape(
   // the moment they switched to 3D. Muted through `tintTop` like every other
   // authored colour, so it keeps its hue without out-shouting the seating.
   const colTop = tintTop(hexToRgb(shape.fill), isStage ? S.stageTop : S.decorTop);
-  const colWall = isStage ? S.stageWall : S.decorWall;
-  extrudePrism(builder, poly, undefined, () => height, base, colTop, colWall, AO);
+  // A screen's useful surface is vertical, so it needs to read from its WALL
+  // faces rather than its almost invisible top cap. Treat it like a powered LED
+  // panel; every other structure remains inside the muted architectural palette.
+  const colWall: RGB = isStage
+    ? S.stageWall
+    : shape.role === 'screen'
+      ? [0.24, 0.46, 0.82]
+      : tintTop(hexToRgb(shape.fill), S.decorWall);
+  if (architecture.kind === 'portal' && poly.length === 4) {
+    const quad = orientQuadLong(poly);
+    emitArchitecturalPrism(builder, quadWidthSlice(quad, 0, 0.16), height, base, colTop, colWall);
+    emitArchitecturalPrism(builder, quadWidthSlice(quad, 0.84, 1), height, base, colTop, colWall);
+    emitArchitecturalPrism(builder, quad, height, Math.max(base, height - 0.35), colTop, colWall);
+    return;
+  }
+  if (architecture.kind === 'suite' && poly.length === 4) {
+    const edgeDistances = poly.map((point, index) => {
+      const next = poly[(index + 1) % 4];
+      const mx = (point.x + next.x) / 2, my = (point.y + next.y) / 2;
+      return Math.hypot(mx - focal.x, my - focal.y);
+    });
+    const front = edgeDistances.indexOf(Math.min(...edgeDistances));
+    const quad = [0, 1, 2, 3].map((offset) => poly[(front + offset) % 4]);
+    emitArchitecturalPrism(builder, quadWidthSlice(quad, 0, 0.08), height, base, colTop, colWall);
+    emitArchitecturalPrism(builder, quadWidthSlice(quad, 0.92, 1), height, base, colTop, colWall);
+    emitArchitecturalPrism(builder, quadDepthSlice(quad, 0.88, 1), height, base, colTop, colWall);
+    emitArchitecturalPrism(builder, quad, height, Math.max(base, height - 0.18), colTop, colWall);
+    return;
+  }
+  emitArchitecturalPrism(builder, poly, height, base, colTop, colWall);
 }
 
 /**
@@ -757,6 +941,8 @@ function chartFootprint(units: FloorUnit[], seats: ExpandedSeat[]): { minX: numb
 export interface SceneModelInput {
   doc: ChartDoc;
   seats: ExpandedSeat[];
+  /** Overrides the chart's active layout without mutating its authored data. */
+  eventConfigurationId?: string;
   /** Optional initial per-seat state (default all available). */
   initialState?: (seat: ExpandedSeat) => import('../palette').SeatState3D;
 }
@@ -767,7 +953,7 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
   // palette and quietly ignores an organizer's branding.
   const theme = resolveTheme3D(doc.theme);
   const S = theme.structure;
-  const units = floorUnits(doc);
+  const units = floorUnits(doc, input.eventConfigurationId ?? doc.eventConfigurationId);
   const builder = new MeshBuilder();
 
   // Ground slab sized to the footprint (+ margin), sitting at datum 0.
@@ -794,10 +980,19 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
     const unit = units[unitIndex];
     builder.setFloor(unitIndex);
     const claimed = new ClaimedArea();
+    const claimedShapeLayers: ShapeLayerFootprint[] = [];
     const siblings = unit.objects.filter((o): o is SectionObject => o.type === 'section' && !!o.outline && o.outline.length >= 3);
     for (const o of unit.objects) {
       if (o.type === 'section') buildTier(builder, o, unit, sectionFill(o, sectionFills), surfaces.bySection.get(o.id), claimed, siblings, S);
-      else if (o.type === 'shape') buildShape(builder, o, unit.baseHeightM, S, stageBounds);
+      else if (o.type === 'shape') buildShape(
+        builder,
+        o,
+        unit.baseHeightM,
+        claimShapeTopOffset(o, claimedShapeLayers),
+        S,
+        unit.focal,
+        stageBounds,
+      );
       else if (o.type === 'gaArea') buildGa(builder, o, unit.baseHeightM, hexToRgb(catColor.get(o.categoryKey)), S);
       else if (o.type === 'booth') buildBooth(builder, o, unit.baseHeightM, hexToRgb(catColor.get(o.categoryKey)), S);
       else if (o.type === 'table') buildTable(builder, o, unit.baseHeightM, hexToRgb(catColor.get(o.categoryKey)), S);
@@ -883,6 +1078,7 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
   // --- Labels ----------------------------------------------------------------
   const labels: SceneLabel[] = [];
   const sections: SceneSection[] = [];
+  const rows: SceneRow[] = [];
   for (const z of zones) {
     if (z.seatCount === 0) continue;
     // Zone labels float above the seating they name, so they read as belonging
@@ -990,6 +1186,43 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
       });
     }
 
+    const rowAcc = new Map<string, {
+      n: number; x: number; y: number; z: number;
+      minX: number; maxX: number; minZ: number; maxZ: number;
+      label: string; sectionId?: string;
+    }>();
+    for (let i = 0; i < seats.length; i++) {
+      const seat = seats[i];
+      const cut = seat.label ? seat.label.lastIndexOf('-') : -1;
+      let acc = rowAcc.get(seat.rowId);
+      if (!acc) {
+        acc = {
+          n: 0, x: 0, y: 0, z: 0,
+          minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity,
+          label: cut > 0 ? seat.label.slice(0, cut) : seat.rowId,
+          sectionId: seat.sectionId,
+        };
+        rowAcc.set(seat.rowId, acc);
+      }
+      const offset = i * 3;
+      const x = seatData.iPosition[offset];
+      const y = seatData.iPosition[offset + 1];
+      const z = seatData.iPosition[offset + 2];
+      acc.n++; acc.x += x; acc.y += y; acc.z += z;
+      acc.minX = Math.min(acc.minX, x); acc.maxX = Math.max(acc.maxX, x);
+      acc.minZ = Math.min(acc.minZ, z); acc.maxZ = Math.max(acc.maxZ, z);
+    }
+    for (const [id, acc] of rowAcc) {
+      rows.push({
+        id,
+        label: acc.label,
+        sectionId: acc.sectionId,
+        seatCount: acc.n,
+        center: [acc.x / acc.n, acc.y / acc.n, acc.z / acc.n],
+        radius: Math.max(0.8, Math.hypot(acc.maxX - acc.minX, acc.maxZ - acc.minZ) * 0.5),
+      });
+    }
+
     // Seat labels are the densest rung by far, and unlike every other kind their
     // count is the seat count. On a 52,000-seat ground that is 52,000 DOM-backed
     // labels to hold and project, for text that is only legible when a handful
@@ -1013,7 +1246,18 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
 
   for (const unit of units) {
     for (const o of unit.objects) {
-      if (o.type === 'text') {
+      if (o.type === 'shape' && o.role && ['entrance', 'exit', 'screen', 'suite', 'obstruction'].includes(o.role)) {
+        const poly = shapePolygon(o);
+        const centre = poly ? centroidOf(poly) : null;
+        if (!centre || !o.label) continue;
+        labels.push({
+          id: `architecture:${o.id}`,
+          kind: 'annotation',
+          text: o.label,
+          anchor: [centre.x * M, unit.baseHeightM + architectureForShape(o).heightM + ANNOTATION_LIFT_M, centre.y * M],
+          color: o.fill,
+        });
+      } else if (o.type === 'text') {
         // Authored wayfinding sits just above the floor it annotates — a door or
         // aisle name belongs to the ground, not to the air above it.
         if (!o.text) continue;
@@ -1108,6 +1352,7 @@ export function buildSceneModel(input: SceneModelInput): SceneModel {
     zones,
     stages: stageBounds,
     sections,
+    rows,
     labels,
     floors,
   };

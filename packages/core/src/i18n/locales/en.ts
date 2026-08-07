@@ -52,7 +52,7 @@ export const en: Dict = {
   'picker.viewFromSeat': 'View from seat {label}',
   'picker.real360': 'REAL 360°',
   'picker.preview': 'PREVIEW',
-  'picker.sightline': '≈ {m} m to stage · clear sightline',
+  'picker.sightline': '≈ {m} m to stage',
   'picker.panorama360': '360° venue photo',
   'picker.illustrationCaption': 'illustration · ≈ {m} m from stage',
   'picker.restrictedView': 'Restricted view',
@@ -61,4 +61,7 @@ export const en: Dict = {
   'picker.hideLimitedView': 'Hide limited-view seats',
   'picker.bestSeatsPremium': 'Best seats',
   'picker.premiumFallbackNote': 'No premium block of {count} — showing best overall',
+  'picker.loading3d': 'Building the 3D venue…',
+  'picker.unavailable3d': '3D could not start. The seat map is still available.',
+  'picker.jumpToSection': 'Jump to section',
 };

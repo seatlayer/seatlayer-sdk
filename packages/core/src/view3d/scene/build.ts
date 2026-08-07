@@ -120,6 +120,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
     // Per-seat world-radius ceiling: what stops distant rows merging into one
     // mass when the shader grows a dot to hold its minimum pixel size.
     iMaxRadius: { size: 1, data: model.seats.iMaxRadius, instanced: 1 },
+    iPhysicalSeat: { size: 1, data: model.seats.iPhysicalSeat, instanced: 1 },
     // Accommodation ring colour; (0,0,0) means the seat carries no access type.
     iRing: { size: 3, data: model.seats.iRing, instanced: 1 },
     iFloor: { size: 1, data: model.seats.iFloor, instanced: 1 },
@@ -144,6 +145,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
   const cYaw = new Float32Array(CAP);
   const cRing = new Float32Array(CAP * 3);
   const cFloor = new Float32Array(CAP);
+  const cPhysicalSeat = new Float32Array(CAP);
   // Occupancy + a stable per-person variation, in one attribute.
   //
   // Negative means the seat is EMPTY and the occupant geometry collapses. A
@@ -162,6 +164,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
     iYaw: { size: 1, data: cYaw, instanced: 1 },
     iRing: { size: 3, data: cRing, instanced: 1 },
     iFloor: { size: 1, data: cFloor, instanced: 1 },
+    iPhysicalSeat: { size: 1, data: cPhysicalSeat, instanced: 1 },
     iSeed: { size: 1, data: cSeed, instanced: 1 },
   });
   const chairMesh = new Mesh(gl, { geometry: chairGeo, program: chairProg });
@@ -229,6 +232,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
         cRing[k * 3 + 1] = src.iRing[i * 3 + 1];
         cRing[k * 3 + 2] = src.iRing[i * 3 + 2];
         cFloor[k] = src.iFloor[i];
+        cPhysicalSeat[k] = src.iPhysicalSeat[i];
         cSeed[k] = seatOccupantSeed(src.iState[i], i);
       }
       writeChairColors();
@@ -237,6 +241,7 @@ export function buildGpuScene(gl: OGLRenderingContext, model: SceneModel): GpuSc
       chairGeo.attributes.iYaw.needsUpdate = true;
       chairGeo.attributes.iRing.needsUpdate = true;
       chairGeo.attributes.iFloor.needsUpdate = true;
+      chairGeo.attributes.iPhysicalSeat.needsUpdate = true;
       chairGeo.attributes.iSeed.needsUpdate = true;
       chairGeo.instancedCount = n;
       if (!chairMesh.parent) chairMesh.setParent(main);

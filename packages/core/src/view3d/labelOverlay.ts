@@ -75,6 +75,7 @@ export class LabelOverlay {
   private nodes = new Map<string, HTMLDivElement>();
   private labels: SceneLabel[] = [];
   private opts: LabelOverlayOptions;
+  private forcedDense = false;
 
   constructor(container: HTMLElement, opts: LabelOverlayOptions = {}) {
     this.opts = opts;
@@ -112,6 +113,12 @@ export class LabelOverlay {
     }
   }
 
+  /** Section/row drill-in makes their dense labels explicit, regardless of the
+   * whole-venue distance heuristic used during free orbit. */
+  setForcedDense(enabled: boolean): void {
+    this.forcedDense = enabled;
+  }
+
   /**
    * Reposition every label for the current camera.
    *
@@ -132,6 +139,10 @@ export class LabelOverlay {
   ): void {
     if (!this.labels.length) return;
     const kinds = visibleLabelKinds(cameraDistance, venueRadius);
+    if (this.forcedDense) {
+      kinds.add('row');
+      kinds.add('seat');
+    }
 
     const candidates: Array<{
       label: SceneLabel;

@@ -59,6 +59,12 @@ export class GLContext {
     this.canvas.style.width = '100%';
     this.canvas.style.height = '100%';
     this.canvas.style.touchAction = 'none';
+    this.canvas.tabIndex = 0;
+    this.canvas.setAttribute('role', 'application');
+    this.canvas.setAttribute(
+      'aria-label',
+      'Interactive 3D venue. Drag or use arrow keys to look around; pinch, scroll, plus or minus to zoom.',
+    );
 
     this.renderer = new Renderer({
       canvas: this.canvas,

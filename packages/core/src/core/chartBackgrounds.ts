@@ -64,6 +64,7 @@ function buyerObject(object: ChartObject): ChartObject {
   delete clean.referenceInventorySource;
   delete clean.referenceSource;
   delete clean.referenceInventoryExclusion;
+  delete clean.editor;
   return clean;
 }
 

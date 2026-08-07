@@ -125,6 +125,8 @@ export interface SeatInstanceData {
    * Real seats very nearly touch. See `chairHalfWidth`.
    */
   iChairWidth: Float32Array;
+  /** 1 = physical chair; 0 = sellable empty wheelchair bay. */
+  iPhysicalSeat: Float32Array;
   /** seatId → instance index (drives targeted availability updates). */
   idToIndex: Map<string, number>;
 }
@@ -225,6 +227,7 @@ export function buildSeatInstances(
   const iCategory = new Float32Array(count * 3);
   const iMaxRadius = new Float32Array(count);
   const iChairWidth = new Float32Array(count);
+  const iPhysicalSeat = new Float32Array(count);
   const iRing = new Float32Array(count * 3);
   const idToIndex = new Map<string, number>();
   const spacing = nearestNeighbourSpacing(seats);
@@ -247,6 +250,7 @@ export function buildSeatInstances(
       : SEAT_DOT_RADIUS_M;
     // The chair reads the SAME pitch but through its own rule — see iChairWidth.
     iChairWidth[i] = chairHalfWidth(Number.isFinite(pitchM) ? pitchM : undefined);
+    iPhysicalSeat[i] = seat.wheelchairSpaceType === 'no-seat' ? 0 : 1;
     iPosition[i * 3] = seat.x * M;
     // The venue surface wins when present: it is the same function the tier cap
     // is built from, which is what guarantees a seat can never sit inside it.
@@ -273,7 +277,7 @@ export function buildSeatInstances(
     idToIndex.set(seat.id, i);
   }
   return {
-    count, iPosition, iState, iCategory, iMaxRadius, iRing, idToIndex, iChairWidth,
+    count, iPosition, iState, iCategory, iMaxRadius, iRing, idToIndex, iChairWidth, iPhysicalSeat,
     iFloor: seatFloor ?? new Float32Array(count),
     iYaw: new Float32Array(count),
   };

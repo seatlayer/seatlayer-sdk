@@ -167,6 +167,8 @@ export interface PanoSphereHandle {
   mesh: Mesh;
   /** Cross-fade control: 0 hides the sphere, 1 fully replaces the venue. */
   setOpacity(value: number): void;
+  /** Replace the decoded source on the existing GPU texture. */
+  setImage(image: HTMLImageElement | HTMLCanvasElement): void;
   dispose(): void;
 }
 
@@ -232,6 +234,10 @@ export function createPanoSphere(
     mesh,
     setOpacity(value: number): void {
       program.uniforms.uOpacity.value = Math.max(0, Math.min(1, value));
+    },
+    setImage(nextImage: HTMLImageElement | HTMLCanvasElement): void {
+      texture.image = nextImage;
+      texture.needsUpdate = true;
     },
     dispose(): void {
       mesh.setParent(null);

@@ -51,7 +51,7 @@ export const de: Dict = {
   'picker.viewFromSeat': 'Ansicht von Platz {label}',
   'picker.real360': 'REAL 360°',
   'picker.preview': 'VORSCHAU',
-  'picker.sightline': '≈ {m} m zur Bühne · freie Sicht',
+  'picker.sightline': '≈ {m} m zur Bühne',
   'picker.panorama360': '360°-Veranstaltungsfotos',
   'picker.illustrationCaption': 'Illustration · ≈ {m} m von der Bühne',
   'picker.restrictedView': 'Eingeschränkte Sicht',
@@ -60,4 +60,7 @@ export const de: Dict = {
   'picker.hideLimitedView': 'Plätze mit eingeschränkter Sicht ausblenden',
   'picker.bestSeatsPremium': 'Beste Plätze',
   'picker.premiumFallbackNote': 'Kein Premium-Block mit {count} Plätzen — beste verfügbare werden angezeigt',
+  'picker.loading3d': '3D-Veranstaltungsort wird aufgebaut…',
+  'picker.unavailable3d': '3D konnte nicht gestartet werden. Der Sitzplan bleibt verfügbar.',
+  'picker.jumpToSection': 'Zum Bereich springen',
 };

@@ -32,6 +32,8 @@ export interface OrbitBounds {
   radius: number;
 }
 
+export type PrimaryDragMode = 'orbit' | 'pan';
+
 export class OrbitCamera {
   readonly camera: Camera;
   readonly fovY = FOV;
@@ -64,11 +66,16 @@ export class OrbitCamera {
   /** Venue centre + radius, so pan can be clamped to somewhere still useful. */
   private panAnchor = new Vec3();
   private panLimit = 0;
+  /** What an unmodified primary-button / one-finger drag does. Section drill-in
+   * switches this to pan so a buyer can slide hidden seats into view without
+   * discovering a modifier gesture. Shift temporarily inverts the mode. */
+  private primaryDragMode: PrimaryDragMode = 'orbit';
 
   private onPointerDown: (e: PointerEvent) => void;
   private onPointerMove: (e: PointerEvent) => void;
   private onPointerUp: (e: PointerEvent) => void;
   private onWheel: (e: WheelEvent) => void;
+  private onKeyDown: (e: KeyboardEvent) => void;
   private onContextMenu: (e: Event) => void;
 
   constructor(gl: OGLRenderingContext, canvas: HTMLElement, requestRender: () => void, onGesture?: () => void) {
@@ -82,9 +89,13 @@ export class OrbitCamera {
       try { this.canvas.setPointerCapture?.(e.pointerId); } catch { /* no active pointer */ }
       this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (this.activePointers.size === 1) {
-        // Secondary/middle button or shift = pan, matching every 3D viewer people
-        // already know. Left-drag stays orbit, which is the common case.
-        this.panning = e.button === 2 || e.button === 1 || e.shiftKey;
+        // Secondary/middle always pans. For the primary button, Shift inverts
+        // the visible Rotate/Move mode so both operations remain one gesture
+        // away without a toolbar round-trip.
+        const secondaryPan = e.button === 2 || e.button === 1;
+        const primaryPan = e.button === 0
+          && (e.shiftKey ? this.primaryDragMode === 'orbit' : this.primaryDragMode === 'pan');
+        this.panning = secondaryPan || primaryPan;
         this.dragging = !this.panning;
         this.lastX = e.clientX;
         this.lastY = e.clientY;
@@ -139,12 +150,35 @@ export class OrbitCamera {
     this.onContextMenu = (e) => { e.preventDefault(); };
     this.onWheel = (e) => {
       e.preventDefault();
-      // Normalise wheel delta across px / line / page modes to ~±1 per notch,
-      // then zoom multiplicatively so every notch makes a real difference.
+      // Normalise wheel delta across px / line / page modes, then clamp large
+      // mouse-wheel bursts. Trackpads stay smooth while one wheel notch no
+      // longer launches the camera through (or far away from) the venue.
       const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
-      const norm = (e.deltaY * unit) / 100;
-      this.dollyBy(Math.exp(norm * 0.4));
+      const norm = Math.max(-2, Math.min(2, (e.deltaY * unit) / 100));
+      this.dollyBy(Math.exp(norm * 0.22));
       this.fireGesture();
+    };
+    this.onKeyDown = (e) => {
+      const step = 7 * DEG;
+      if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        this.panBy(
+          e.key === 'ArrowLeft' ? -32 : e.key === 'ArrowRight' ? 32 : 0,
+          e.key === 'ArrowUp' ? -32 : e.key === 'ArrowDown' ? 32 : 0,
+        );
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        this.azT += e.key === 'ArrowLeft' ? -step : step;
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        this.polT = Math.max(POLAR_MIN, Math.min(POLAR_MAX, this.polT + (e.key === 'ArrowUp' ? -step : step)));
+      } else if (e.key === '+' || e.key === '=') {
+        this.dollyBy(0.82);
+      } else if (e.key === '-' || e.key === '_') {
+        this.dollyBy(1.22);
+      } else {
+        return;
+      }
+      e.preventDefault();
+      this.fireGesture();
+      this.requestRender();
     };
 
     canvas.addEventListener('pointerdown', this.onPointerDown);
@@ -152,6 +186,7 @@ export class OrbitCamera {
     canvas.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('pointercancel', this.onPointerUp);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
+    canvas.addEventListener('keydown', this.onKeyDown);
     canvas.addEventListener('contextmenu', this.onContextMenu);
   }
 
@@ -227,13 +262,27 @@ export class OrbitCamera {
     this.requestRender();
   }
 
+  /** Programmatic zoom used by the visible camera controls. Keeping it on the
+   * same dolly path as wheel, pinch and keyboard preserves all distance limits. */
+  zoomBy(factor: number): void {
+    this.dollyBy(factor);
+    this.fireGesture();
+  }
+
+  /** Choose what a normal left/one-finger drag does. Shift temporarily performs
+   * the other action. This is intentionally public so the view can make the
+   * currently active gesture visible rather than hiding it in documentation. */
+  setPrimaryDragMode(mode: PrimaryDragMode): void {
+    this.primaryDragMode = mode;
+  }
+
   /**
    * Fit a flattering 3/4 view to the bounds sphere. With `intro`, the camera
    * STARTS nearly top-down (matching the 2D map's orientation) and further out,
    * then the damped `update()` eases it up into the 3/4 architectural angle and
    * dollies in — the venue "stands up" instead of teleporting (~600ms).
    */
-  frame(bounds: OrbitBounds, intro = false, stageAzimuth?: number): void {
+  frame(bounds: OrbitBounds, intro = false, stageAzimuth?: number, portraitCrop = false): void {
     this.target.set(bounds.center[0], bounds.center[1], bounds.center[2]);
     this.targetT.copy(this.target);
     this.panAnchor.copy(this.target);
@@ -244,7 +293,11 @@ export class OrbitCamera {
     // chart centred with margin instead of parking it low-left. `setAspect` must
     // run before `frame` for the horizontal term to be correct.
     const halfV = (this.fovY * DEG) / 2;
-    const aspect = this.camera.aspect || 1;
+    // A strict horizontal contain fit makes a wide bowl postage-stamp small in
+    // portrait. UX prototypes may opt into a bounded crop: treat very narrow
+    // screens as 0.82 aspect for OVERVIEW distance only, allowing the venue's
+    // outer edges to sit just beyond the screen while its seats remain useful.
+    const aspect = portraitCrop ? Math.max(0.82, this.camera.aspect || 1) : (this.camera.aspect || 1);
     const halfH = Math.atan(Math.tan(halfV) * aspect);
     const fit = Math.max(r / Math.tan(halfV), r / Math.tan(halfH));
     // Enter from the STAGE side when the caller knows where the stage is: the
@@ -279,7 +332,7 @@ export class OrbitCamera {
    * seat, behind the shell, anywhere): re-pivot on the venue centre without
    * moving the camera, then glide targets back to the 3/4 architectural pose.
    */
-  frameSoft(bounds: OrbitBounds, stageAzimuth?: number): void {
+  frameSoft(bounds: OrbitBounds, stageAzimuth?: number, portraitCrop = false): void {
     this.target.set(bounds.center[0], bounds.center[1], bounds.center[2]);
     this.targetT.copy(this.target);
     this.panAnchor.copy(this.target);
@@ -288,7 +341,7 @@ export class OrbitCamera {
     this.camera.perspective({ fov: this.fovY, aspect: this.camera.aspect });
     const r = Math.max(1, bounds.radius);
     const halfV = (this.fovY * DEG) / 2;
-    const aspect = this.camera.aspect || 1;
+    const aspect = portraitCrop ? Math.max(0.82, this.camera.aspect || 1) : (this.camera.aspect || 1);
     const halfH = Math.atan(Math.tan(halfV) * aspect);
     const fit = Math.max(r / Math.tan(halfV), r / Math.tan(halfH));
     this.azT = stageAzimuth ?? this.azimuth;
@@ -375,6 +428,7 @@ export class OrbitCamera {
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
     this.canvas.removeEventListener('pointercancel', this.onPointerUp);
     this.canvas.removeEventListener('wheel', this.onWheel);
+    this.canvas.removeEventListener('keydown', this.onKeyDown);
     this.canvas.removeEventListener('contextmenu', this.onContextMenu);
     this.activePointers.clear();
   }

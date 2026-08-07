@@ -16,6 +16,10 @@
 // Owner decision 2026-07-08: USD default (orgs.currency also defaults to USD).
 export const DEFAULT_CURRENCY = 'USD';
 
+/** Currencies offered in event create/edit selects — shared by the plain and
+ *  express create forms so the two can never offer different lists. */
+export const CURRENCY_CHOICES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'INR', 'AED', 'SGD', 'JPY', 'CHF', 'SEK', 'NZD', 'ZAR', 'MXN', 'BRL'];
+
 /** BCP 47 locale used for number/date rendering; kept in sync by src/i18n. */
 let displayLocale: string | undefined;
 

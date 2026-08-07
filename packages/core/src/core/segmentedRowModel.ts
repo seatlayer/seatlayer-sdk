@@ -103,6 +103,7 @@ export interface SegmentedRowPlacement {
   totalSeats: number;
   canonical: RowObject;
   viewFromSeatUrl?: string;
+  viewFromSeatMeta?: RowObject['viewFromSeatMeta'];
 }
 
 /**
@@ -161,6 +162,7 @@ export function resolveSegmentedRowGroups(
         totalSeats,
         canonical: ordered[0],
         viewFromSeatUrl: first.viewFromSeatUrl,
+        viewFromSeatMeta: first.viewFromSeatMeta,
       });
       adjacencyOffset += row.seatCount;
       displayOffset += row.seatCount;

@@ -86,6 +86,7 @@ in vec2 position;      // quad corner in [-1,1]
 in vec3 iOffset;       // per-instance world position
 in vec3 iColor;        // per-instance state colour (resolved CPU-side)
 in float iMaxRadius;   // per-instance world-radius ceiling (seat pitch derived)
+in float iPhysicalSeat;// 1 = chair; 0 = empty wheelchair bay
 in vec3 iRing;         // accommodation ring colour; (0,0,0) = not accessible
 in float iFloor;       // owning floor index
 uniform mat4 modelViewMatrix;
@@ -103,6 +104,7 @@ out float vBudget;     // 1 = dot holds its minimum pixel size, <1 = it cannot
 out vec3 vRing;
 out float vDim;
 out float vDotWeight;  // 1 = the dot IS this seat, 0 = the chair has taken over
+out float vPhysicalSeat;
 ${CHAIR_WEIGHT_GLSL}
 void main() {
   vec4 mv = modelViewMatrix * vec4(iOffset, 1.0);
@@ -132,6 +134,7 @@ void main() {
   vUv = position;
   vColor = iColor;
   vRing = iRing;
+  vPhysicalSeat = iPhysicalSeat;
   vDim = (uFocusFloor < -0.5 || abs(iFloor - uFocusFloor) < 0.5) ? 0.0 : 1.0;
   gl_Position = projectionMatrix * mv;
 }`;
@@ -144,11 +147,13 @@ in float vBudget;
 in vec3 vRing;
 in float vDim;
 in float vDotWeight;
+in float vPhysicalSeat;
 uniform float uSeatFade;      // fade toward tier colour with distance (LOD)
 uniform vec3 uFadeColor;
 out vec4 fragColor;
 void main() {
-  float d = length(vUv);
+  // Empty wheelchair provision is a square bay, never a round chair marker.
+  float d = mix(max(abs(vUv.x), abs(vUv.y)), length(vUv), vPhysicalSeat);
   if (d > 1.0) discard;
   float alpha = smoothstep(1.0, 0.72, d);
   float shade = 0.80 + 0.28 * (0.5 - vUv.y * 0.5);       // subtle top-lit
@@ -192,6 +197,7 @@ in float iYaw;         // per-instance facing, radians (local +Z -> facing dir)
 in vec3 iRing;         // accommodation ring colour; (0,0,0) = not accessible
 in float iFloor;
 in float iSeed;        // <0 = seat is empty; else per-person hash in [0,1)
+in float iPhysicalSeat;// 1 = chair; 0 = empty wheelchair bay
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
 uniform float uChairFull;
@@ -227,7 +233,9 @@ void main() {
   float occupant = step(2.5, part);
   float taken = step(0.0, iSeed);
   vOccupant = occupant;
-  if (occupant > 0.5) {
+  if (iPhysicalSeat < 0.5) {
+    p = vec3(0.0);            // sellable space, but no physical chair/person
+  } else if (occupant > 0.5) {
     if (taken < 0.5) {
       p = vec3(0.0);          // empty seat: no person
     } else {
@@ -366,6 +374,7 @@ precision highp float;
 in vec2 position;
 in vec3 iOffset;
 in float iMaxRadius;
+in float iPhysicalSeat;
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
 uniform float uSeatRadius;
@@ -373,6 +382,7 @@ uniform float uSeatScale;
 uniform float uMinPixels;
 uniform float uPixelToWorld;
 out vec2 vUv;
+out float vPhysicalSeat;
 flat out vec3 vPick;
 void main() {
   int id = gl_InstanceID + 1;                 // 0 reserved for no-hit
@@ -385,16 +395,19 @@ void main() {
   // Must match SEAT_VERT exactly, or the hit mask drifts off the drawn dot.
   mv.xy += normalize(vec3(modelViewMatrix * vec4(0.0, 1.0, 0.0, 0.0))).xy * r;
   vUv = position;
+  vPhysicalSeat = iPhysicalSeat;
   gl_Position = projectionMatrix * mv;
 }`;
 
 const SEAT_PICK_FRAG = /* glsl */ `#version 300 es
 precision highp float;
 in vec2 vUv;
+in float vPhysicalSeat;
 flat in vec3 vPick;
 out vec4 fragColor;
 void main() {
-  if (length(vUv) > 1.0) discard;             // round hit-mask matches the dot
+  float d = mix(max(abs(vUv.x), abs(vUv.y)), length(vUv), vPhysicalSeat);
+  if (d > 1.0) discard;                        // hit-mask matches chair/bay shape
   fragColor = vec4(vPick, 1.0);
 }`;
 

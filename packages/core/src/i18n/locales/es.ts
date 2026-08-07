@@ -47,7 +47,7 @@ export const es: Dict = {
   'picker.viewFromSeat': 'Vista desde el asiento {label}',
   'picker.real360': 'REAL 360°',
   'picker.preview': 'VISTA PREVIA',
-  'picker.sightline': '≈ {m} m al escenario · visión despejada',
+  'picker.sightline': '≈ {m} m al escenario',
   'picker.panorama360': 'Foto de 360° del lugar',
   'picker.illustrationCaption': 'ilustración · ≈ {m} m del escenario',
   'picker.restrictedView': 'Visibilidad restringida',
@@ -56,4 +56,7 @@ export const es: Dict = {
   'picker.hideLimitedView': 'Ocultar asientos con visibilidad limitada',
   'picker.bestSeatsPremium': 'Mejores asientos',
   'picker.premiumFallbackNote': 'No hay un bloque premium de {count}: mostrando los mejores disponibles',
+  'picker.loading3d': 'Creando el recinto en 3D…',
+  'picker.unavailable3d': 'No se pudo iniciar la vista 3D. El mapa de asientos sigue disponible.',
+  'picker.jumpToSection': 'Ir a una sección',
 };
