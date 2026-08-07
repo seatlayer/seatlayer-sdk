@@ -47,7 +47,7 @@ export const fr: Dict = {
   'picker.viewFromSeat': 'Vue depuis le siège {label}',
   'picker.real360': 'VRAI 360°',
   'picker.preview': 'APERÇU',
-  'picker.sightline': '≈ {m} m de la scène · vue dégagée',
+  'picker.sightline': '≈ {m} m de la scène',
   'picker.panorama360': 'Photo panoramique 360° du lieu',
   'picker.illustrationCaption': 'illustration · ≈ {m} m de la scène',
   'picker.restrictedView': 'Visibilité réduite',
@@ -56,4 +56,7 @@ export const fr: Dict = {
   'picker.hideLimitedView': 'Masquer les places à visibilité réduite',
   'picker.bestSeatsPremium': 'Meilleures places',
   'picker.premiumFallbackNote': 'Aucun bloc premium de {count} — affichage des meilleures places disponibles',
+  'picker.loading3d': 'Création de la salle en 3D…',
+  'picker.unavailable3d': 'La 3D n’a pas pu démarrer. Le plan des sièges reste disponible.',
+  'picker.jumpToSection': 'Accéder à une section',
 };

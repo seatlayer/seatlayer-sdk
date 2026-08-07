@@ -105,12 +105,16 @@ export const CHAIR_REBUILD_M = 4;
  * chart:
  *
  *            21 m    26 m    30 m
- *   megaStadium   4,419   6,073   7,469
+ *   megaStadium   4,278   5,905   7,297
  *   uberArena     2,670   3,690   4,585
  *   amphitheatre  2,326   2,873   3,211
  *
+ * megaStadium's figures fell slightly when its ROW_GAP went 28 → 30 to clear the
+ * corner-row spacing floor (see `src/core/megaStadium.ts`): rows further apart
+ * is strictly less dense, so the headroom below only grew.
+ *
  * The binding requirement is that the kept disc still reach CHAIR_NONE_M +
- * CHAIR_REBUILD_M (26 m), which megaStadium meets at 6,073. An earlier 4,096
+ * CHAIR_REBUILD_M (26 m), which megaStadium meets at 5,905. An earlier 4,096
  * capped megaStadium's disc at roughly 22 m — inside that margin, and the defect
  * would only ever have shown up on the largest chart. 8,192 leaves ~30 % headroom
  * for a denser chart than any shipped today. `chairCapCoversFadeBand()` is the

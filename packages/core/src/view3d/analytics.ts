@@ -30,8 +30,12 @@ export class Analytics3D {
     }
   }
 
-  opened(seats: number, hasHeights: boolean): void {
-    this.emit('3d_opened', { seats, hasHeights });
+  opened(seats: number, hasHeights: boolean, buildMs?: number): void {
+    this.emit('3d_opened', {
+      seats,
+      hasHeights,
+      ...(buildMs === undefined ? {} : { buildMs: Math.round(buildMs) }),
+    });
   }
 
   /** First user-driven orbit/dolly per mount only (the intro ease is not user
@@ -67,5 +71,21 @@ export class Analytics3D {
     const viewMs = this.panoramaOpenedAt ? Math.round(now() - this.panoramaOpenedAt) : 0;
     this.panoramaOpenedAt = 0;
     this.emit('3d_panorama_closed', { viewMs });
+  }
+
+  panoramaFailed(seatId: string, phase: 'source' | 'mount'): void {
+    this.emit('3d_panorama_failed', { seatId, phase });
+  }
+
+  panoramaFallback(seatId: string): void {
+    this.emit('3d_panorama_fallback', { seatId });
+  }
+
+  contextLost(): void {
+    this.emit('3d_context_lost');
+  }
+
+  contextRestored(): void {
+    this.emit('3d_context_restored');
   }
 }

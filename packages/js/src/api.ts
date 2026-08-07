@@ -100,7 +100,18 @@ export interface PubChartResult {
 }
 
 export interface PubObjectsResult {
-  /** Every non-free seat's status, keyed by seat label. */
+  /**
+   * The status every seat NOT named in `seats` holds.
+   *
+   * Present because {@link PubApi.objects} asks for the compact form: the modal
+   * status is stated once and only the exceptions are listed, which on a
+   * mostly-sold event makes `default` `booked` rather than `free`. Readers must
+   * honour it — treating an absent seat as free renders a sold-out venue as
+   * wide open. Absent only from an older server, where every seat is named and
+   * `free` is the correct assumption.
+   */
+  default?: string;
+  /** The seats whose status differs from {@link PubObjectsResult.default}. */
   seats: Record<string, string>;
   /** Section/zone ids hidden from buyers this event (seats stripped from the map). */
   hidden?: string[];
@@ -184,6 +195,21 @@ export interface OrderStatusResult {
   currency: string;
   amountFormatted: string;
   seatCount: number;
+  // Present once the order is settled (confirmed / refund states): the same
+  // capability now also unlocks the ticket view.
+  eventName?: string | null;
+  venue?: string | null;
+  startsAt?: number | null;
+  tickets?: Array<{
+    label: string;
+    token: string;
+    status: 'issued' | 'checked_in' | 'void';
+    checkedInAt: number | null;
+  }>;
+  /** Hosted ticket page — the durable re-entry point after the modal closes. */
+  ticketUrl?: string;
+  /** Printable PDF, one page per ticket. */
+  pdfUrl?: string;
 }
 
 /** Codes a 409 uses to say "the unit you picked is no longer yours to pick". */
@@ -316,7 +342,10 @@ export class PubApi {
   }
 
   objects(key: string): Promise<PubObjectsResult> {
-    return this.request(`/pub/events/${encodeURIComponent(key)}/objects`);
+    // `compact=1` costs nothing to ask for and is ignored by a server that
+    // predates it, which then answers with every seat named and no `default` —
+    // the shape this client already handled.
+    return this.request(`/pub/events/${encodeURIComponent(key)}/objects?compact=1`);
   }
 
   hold(key: string, selections: Array<{ label: string; tierId?: string | null; quantity?: number }>, ttlMs?: number, replaceHoldId?: string): Promise<HoldResult> {

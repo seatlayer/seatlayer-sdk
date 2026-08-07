@@ -64,6 +64,10 @@ const FILES = [
   // structured report. Depends only on chartRenderRules + types (both above).
   // Consumed by the CDN-only headless review entry (cdn/src/ChartDocumentPreview).
   ['src/core/renderedQuality.ts', 'packages/core/src/core/renderedQuality.ts'],
+  // Text-object wrapping/measurement, extracted OUT of layout.ts in the app and
+  // imported straight back by it. Manifest closure, same class as
+  // segmentedRowModel below.
+  ['src/core/textLayout.ts', 'packages/core/src/core/textLayout.ts'],
   ['src/core/layout.ts', 'packages/core/src/core/layout.ts'],
   ['src/core/labeling.ts', 'packages/core/src/core/labeling.ts'],
   // Extracted OUT of layout.ts in the app's designer decomposition and imported
@@ -86,6 +90,12 @@ const FILES = [
   // Per-seat eye-height sightline geometry (3D-foundations Phase B); imported by
   // generatePanorama. Depends only on core/units (mirrored above).
   ['src/view/sightline.ts', 'packages/core/src/view/sightline.ts'],
+  // Panorama texture budgeting + progressive image delivery. Imported by
+  // view3d/crossfade/panorama (mirrored below) AND directly by the buyer
+  // widget's 360° modal, so leaving it out of this manifest left BOTH the
+  // engine mirror and the vendored widget importing a module that does not
+  // exist on this side of the boundary. Pure browser code, zero imports.
+  ['src/view/panoramaDelivery.ts', 'packages/core/src/view/panoramaDelivery.ts'],
   // i18n + money: imported by the engine (`t()`, formatMoney) and surfaced to the
   // SDKs (loadLocale / setStringOverrides for the widget `locale`/`messages` options).
   ['src/i18n/index.ts', 'packages/core/src/i18n/index.ts'],
@@ -102,6 +112,17 @@ const FILES = [
   // byte-identically here. Build config: packages/core/tsup.config.ts adds the
   // `src/view3d/index.ts` entry and marks `ogl` external.
   ['src/view3d/index.ts', 'packages/core/src/view3d/index.ts'],
+  // Imported by view3d/index: the scene-preparation split and the seat-view
+  // camera pose the 360° modal flies to. Missing from this manifest since the
+  // app's "deepen venue navigation and panoramas" batch, which is why a full
+  // sync:core could not build until now.
+  ['src/view3d/prepareScene.ts', 'packages/core/src/view3d/prepareScene.ts'],
+  // prepareScene reaches this one through `new Worker(new URL(…))`, not an
+  // import, so tsup resolves the mirror fine without it and only the CDN's
+  // Vite build fails — with an UNRESOLVED_ENTRY a long way from the cause.
+  ['src/view3d/scene/scene.worker.ts', 'packages/core/src/view3d/scene/scene.worker.ts'],
+  ['src/view3d/positioningContext.ts', 'packages/core/src/view3d/positioningContext.ts'],
+  ['src/view3d/camera/seatViewPose.ts', 'packages/core/src/view3d/camera/seatViewPose.ts'],
   ['src/view3d/analytics.ts', 'packages/core/src/view3d/analytics.ts'],
   ['src/view3d/labelOverlay.ts', 'packages/core/src/view3d/labelOverlay.ts'],
   ['src/view3d/labels.ts', 'packages/core/src/view3d/labels.ts'],

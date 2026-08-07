@@ -57,20 +57,33 @@ const FILES = [
 ];
 
 // Three deterministic import rewrites for the app's vendored copy:
-//   '@seatlayer/core/view3d' → '../../view3d'  (the app owns the view3d source;
-//        matches both the `import type … from` and the lazy `import(...)` forms)
-//   from '@seatlayer/core'    → from './core'   (the hand-written engine barrel)
+//
+//   '@seatlayer/core/<path>'  → '../../<path>'   (any engine SUBPATH)
+//   from '@seatlayer/core'    → from './core'    (the hand-written engine barrel)
 //   import('@seatlayer/core') → import('./core')
-// The view3d rewrite MUST run first — its specifier is a superset of the general
-// one, and its closing quote sits after `/view3d` so the general rule never
-// matches it, but ordering keeps the intent obvious.
+//
+// The subpath rule is one rule, not a list, and that is load-bearing rather than
+// clever. `packages/core/src` mirrors the app's `src/` directory-for-directory
+// (that is sync-core's stated contract), and this file's consumers sit at
+// `packages/js/src/…` here and `src/picker/widget/…` there — both exactly two
+// levels below their tree's root. So `@seatlayer/core/view3d` and
+// `../../view3d` name the same module, and so do `@seatlayer/core/view/x` and
+// `../../view/x`, for every x. It began as one hard-coded view3d line and had
+// to grow when SeatPicker started importing `view/panoramaDelivery` and
+// `view3d/crossfade/panorama` directly; generalising it means the NEXT such
+// import needs a package export here, not a change to this script.
+//
+// It MUST run first: it is a superset of the general `@seatlayer/core` rule.
+// (The general rules only match a closing quote straight after `core`, so they
+// could not steal a subpath either way — the ordering keeps the intent obvious.)
+//
 // The third rule exists because the `from ` rule cannot see a dynamic import:
 // SeatPicker lazy-loads the panorama generator with `import('@seatlayer/core')`
 // — a module it also imports statically, so no bundler actually splits it — and
 // without this rule the vendored copy would ship a bare specifier the app cannot
 // resolve. `./core` re-exports view/generatePanorama, so the name is there.
 const rewrite = (text) => text
-  .replaceAll("'@seatlayer/core/view3d'", "'../../view3d'")
+  .replaceAll("'@seatlayer/core/", "'../../")
   .replaceAll("from '@seatlayer/core'", "from './core'")
   .replaceAll("import('@seatlayer/core')", "import('./core')");
 

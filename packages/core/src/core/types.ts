@@ -153,6 +153,34 @@ export function accessibilityRingColor(types: AccessibilityType[] | undefined): 
   return (primary && ACCESSIBILITY_RING_COLOR[primary]) || '#3b82f6';
 }
 
+export type SeatViewCoverage =
+  | 'exact-seat'
+  | 'row-representative'
+  | 'section-representative'
+  | 'venue-representative';
+
+/** Calibration and truth metadata that travels with an organizer panorama.
+ * The URL remains separate for backward compatibility with existing charts. */
+export interface SeatViewMetadata {
+  projection?: 'equirectangular';
+  coverage?: SeatViewCoverage;
+  /** Optional lightweight first paint. `viewFromSeatUrl` remains the sharp source. */
+  previewUrl?: string;
+  previewWidth?: number;
+  previewHeight?: number;
+  /** Degrees relative to the authored focal/stage direction. */
+  initialBearingDeg?: number;
+  /** Positive looks up. The viewer clamps to its safe pitch range. */
+  initialPitchDeg?: number;
+  capturedAt?: string;
+  /** Buyer-safe provenance, e.g. "Provided by the venue". */
+  sourceLabel?: string;
+  sourceWidth?: number;
+  sourceHeight?: number;
+  captureEyeHeightM?: number;
+  eventConfigurationId?: string;
+}
+
 export interface SeatOverride {
   /** 0-based seat index within the row. */
   index: number;
@@ -182,6 +210,8 @@ export interface SeatOverride {
   commercial?: SeatCommercialAttributes;
   /** Seat-specific view photo; falls back to the row photo. */
   viewFromSeatUrl?: string;
+  /** Calibration/truth for `viewFromSeatUrl`; ignored when the URL is absent. */
+  viewFromSeatMeta?: SeatViewMetadata;
   /** Per-seat label size/color override; falls back to the row/theme default.
    *  Size is clamped to LABEL_STYLE_MIN_SIZE..MAX_SIZE; color is passed through
    *  the shared auto-contrast rule at paint time (see {@link LabelStyle}). */
@@ -272,6 +302,21 @@ export interface LabelPresentation {
   positionPreset?: 'start' | 'end' | 'both' | 'none';
 }
 
+/** Persisted authoring ergonomics that must not change buyer inventory or
+ * rendering. Buyer projections strip this object before a chart is served. */
+export interface ObjectEditorState {
+  /** Objects sharing this id select and transform as one authoring unit. */
+  groupId?: string;
+  /** Protect canvas geometry while keeping ordinary Inspector properties editable. */
+  locked?: boolean;
+  /** Remove the object from the authoring scene until Reveal hidden is used. */
+  hidden?: boolean;
+}
+
+export interface AuthoringObjectState {
+  editor?: ObjectEditorState;
+}
+
 /** Brand/venue theming — applied by the renderer in both designer and picker. */
 export interface ChartTheme {
   /** Canvas background color (default dark: #0e1117-ish radial). */
@@ -303,7 +348,7 @@ export interface ChartTheme {
   hideBadge?: boolean;
 }
 
-export interface RowObject {
+export interface RowObject extends AuthoringObjectState {
   type: 'row';
   id: string;
   /** Present when this row was materialized by the in-canvas reference scan.
@@ -387,6 +432,7 @@ export interface RowObject {
     displayType?: string;
     labelPresentation?: LabelPresentation;
     viewFromSeatUrl?: string;
+    viewFromSeatMeta?: SeatViewMetadata;
     /** Presentation intent for a continuous node-defined centreline. */
     smoothing?: boolean;
   };
@@ -462,11 +508,12 @@ export interface RowObject {
    * generates a synthetic panorama from chart geometry.
    */
   viewFromSeatUrl?: string;
+  viewFromSeatMeta?: SeatViewMetadata;
   /** Default commercial attributes inherited by seats without an override. */
   commercial?: SeatCommercialAttributes;
 }
 
-export interface GAAreaObject {
+export interface GAAreaObject extends AuthoringObjectState {
   type: 'gaArea';
   id: string;
   /** Stable technical/inventory label. */
@@ -570,7 +617,7 @@ export type ShapeLineJoin = 'miter' | 'round' | 'bevel';
 export type ShapeLineEnding = 'none' | 'arrow';
 
 /** Non-bookable décor: stage, walls, exits. */
-export interface ShapeObject {
+export interface ShapeObject extends AuthoringObjectState {
   type: 'shape';
   id: string;
   /**
@@ -601,6 +648,14 @@ export interface ShapeObject {
   cornerRadius?: number;
   /** Whole-shape opacity 0.1–1 (default 1). */
   opacity?: number;
+  /** Optional physical extrusion height used by the 3D venue renderer. */
+  heightM?: number;
+  /**
+   * Event configurations in which this architecture is present. Absent means
+   * the shape belongs to every configuration; a scoped shape is hidden until
+   * one of these ids is active on the chart or 3D scene input.
+   */
+  eventConfigurationIds?: string[];
   /** Degrees clockwise about the shape's center (default 0). Applied at render time. */
   rotation?: number;
   /**
@@ -630,7 +685,7 @@ export interface RectTableSeatCounts {
 /** Seats arranged around a table. Grouped selling is activated only by an
  * event's explicit inventory-model-2 snapshot; model-1 events continue to
  * treat every authored chair as an independent unit. */
-export interface TableObject {
+export interface TableObject extends AuthoringObjectState {
   type: 'table';
   id: string;
   /** e.g. "T1" — seat labels are `${label}-${n}`. */
@@ -680,7 +735,7 @@ export interface TableObject {
 }
 
 /** A booth: one bookable unit rendered as a block (trade shows, VIP boxes). */
-export interface BoothObject {
+export interface BoothObject extends AuthoringObjectState {
   type: 'booth';
   id: string;
   /** Stable technical/inventory label. */
@@ -715,7 +770,7 @@ export interface BoothObject {
  * Renderer: far zoom shows section shapes/labels instead of seats; clicking
  * a section zooms into it.
  */
-export interface SectionObject {
+export interface SectionObject extends AuthoringObjectState {
   type: 'section';
   id: string;
   label: string;
@@ -733,6 +788,7 @@ export interface SectionObject {
    * metadata operation.
    */
   viewFromSeatUrl?: string;
+  viewFromSeatMeta?: SeatViewMetadata;
   labelPresentation?: LabelPresentation;
   /**
    * Stable management/inventory identity shared by disconnected visual
@@ -898,6 +954,9 @@ export const SURROUNDINGS_SHAPE_ROLES = [
   'concession',
   'coat',
   'wall',
+  'rail',
+  'suite',
+  'obstruction',
 ] as const;
 
 const SURROUNDINGS_SHAPE_ROLE_SET: ReadonlySet<string> = new Set(SURROUNDINGS_SHAPE_ROLES);
@@ -931,7 +990,19 @@ export function layerOf(obj: ChartObject): SelectionLayer {
 }
 
 /** Free-standing text on the chart (aisle names, door labels…). */
-export interface TextObject {
+export type TextAlignment = 'left' | 'center' | 'right';
+
+export interface TextBackground {
+  color: string;
+  /** Space inside the background in chart units; default 6. */
+  padding?: number;
+  /** Rounded background corners in chart units; default 4. */
+  cornerRadius?: number;
+  /** Background-only opacity multiplied by the text object's overall opacity. */
+  opacity?: number;
+}
+
+export interface TextObject extends AuthoringObjectState {
   type: 'text';
   id: string;
   /** Persisted provenance for objects created from the venue-icon palette. */
@@ -954,6 +1025,20 @@ export interface TextObject {
   bold?: boolean;
   /** Render slant (default false). Maps to Konva fontStyle italic. */
   italic?: boolean;
+  /** Fixed text-box width in chart units. Absent keeps legacy auto width. */
+  width?: number;
+  /** Horizontal alignment inside a fixed-width text box. */
+  align?: TextAlignment;
+  /** Multiplier over the font's natural line height; default 1.2. */
+  lineHeight?: number;
+  /** Added chart units between glyphs; default 0. */
+  letterSpacing?: number;
+  /** Underline decoration. Absent is off. */
+  underline?: boolean;
+  /** Whole text-object opacity; default 1. */
+  opacity?: number;
+  /** Optional padded background painted behind the exact text box. */
+  background?: TextBackground;
 }
 
 /**
@@ -965,7 +1050,7 @@ export interface TextObject {
  * caches as a single bitmap blit (zero per-frame cost). Placed by top-left
  * (x,y) + size, rotated about its centre — the same handles a shape rect uses.
  */
-export interface DecorImageObject {
+export interface DecorImageObject extends AuthoringObjectState {
   type: 'decorImage';
   id: string;
   /** Image or SVG data URL. */
@@ -1035,6 +1120,7 @@ export interface Floor {
    * panorama) applies.
    */
   viewFromSeatUrl?: string;
+  viewFromSeatMeta?: SeatViewMetadata;
 }
 
 export interface ReferenceCalibration {
@@ -1253,6 +1339,8 @@ export interface ChartDoc {
   /** The stage / point every seat looks at. Anchors seat-view + sightlines.
    *  Multi-floor: mirrors floor 0; each floor also carries its own focalPoint. */
   focalPoint: Point;
+  /** Active event layout used by configuration-scoped 3D architecture. */
+  eventConfigurationId?: string;
   categories: Category[];
   /** Section groupings for far-zoom navigation + pricing (optional; sections reference by id). */
   zones?: ZoneDef[];
@@ -1284,6 +1372,7 @@ export interface ChartDoc {
    * the picker generates a synthetic panorama.
    */
   viewFromSeatUrl?: string;
+  viewFromSeatMeta?: SeatViewMetadata;
 }
 
 // ---------------------------------------------------------------------------
@@ -1324,6 +1413,8 @@ export interface ExpandedSeat {
   commercial?: SeatCommercialAttributes;
   /** Organizer-supplied view-from-seat image (inherited from the row). */
   viewUrl?: string;
+  /** Calibration/truth inherited from the same scope that supplied `viewUrl`. */
+  viewMeta?: SeatViewMetadata;
   /** Per-seat label size/color override; absent = inherit the row/theme default. */
   labelStyle?: LabelStyle;
   /**

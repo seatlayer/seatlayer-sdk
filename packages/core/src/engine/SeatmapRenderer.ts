@@ -842,6 +842,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   private freeTextById = new Map<string, {
     objectId?: string;
     node: Text;
+    backdrop?: Rect;
     background: string;
     kind: RenderedFreeTextEvidence['kind'];
     categoryKey?: string;
@@ -3619,7 +3620,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
   }
 
   private renderText(obj: Extract<ChartDoc['objects'][number], { type: 'text' }>): void {
-    const background = this.canvasBackground;
+    const background = obj.background?.color ?? this.canvasBackground;
     const preferredInk = obj.color ?? this.theme.textColor ?? DEF_TEXT;
     // Modern venue icons draw as a single-color vector Path — pixel-identical to
     // the Designer. Legacy emoji icons (no iconKey) and captions fall through to
@@ -3646,23 +3647,54 @@ export class SeatmapRenderer implements ISeatmapRenderer {
       this.bgLayer.add(iconNode);
       return;
     }
+    const padding = obj.background?.padding ?? 0;
+    const opacity = obj.opacity ?? 1;
     const node = new Text({
       x: obj.position.x,
       y: obj.position.y,
       text: obj.text,
       fontSize: obj.fontSize,
       rotation: obj.rotation,
-      fontStyle: konvaFontStyle(obj.bold, obj.italic, 'normal'),
+      // Keep the buyer glyph metrics identical to Designer: wrapping must not
+      // gain or lose a line when the authored chart is published.
+      fontStyle: konvaFontStyle(obj.bold, obj.italic, '600'),
       // Authored ink remains preferred, but an embed/theme surface can change
       // the actual canvas. Fail over to readable black/white instead of
       // painting an otherwise valid caption invisibly on that active surface.
       fill: stateAwareBookableLabelInk(background, preferredInk),
       fontFamily: obj.fontFamily ?? this.labelFont(),
+      ...(obj.width != null ? { width: obj.width } : {}),
+      align: obj.align ?? 'left',
+      lineHeight: obj.lineHeight ?? 1.2,
+      letterSpacing: obj.letterSpacing ?? 0,
+      textDecoration: obj.underline ? 'underline' : '',
+      padding,
+      opacity,
+      wrap: 'word',
       listening: false,
       perfectDrawEnabled: false,
+      name: 'buyer-free-text',
     });
+    let backdrop: Rect | undefined;
+    if (obj.background) {
+      backdrop = new Rect({
+        x: obj.position.x,
+        y: obj.position.y,
+        width: node.width(),
+        height: node.height(),
+        rotation: obj.rotation,
+        fill: obj.background.color,
+        opacity: opacity * (obj.background.opacity ?? 0.9),
+        cornerRadius: obj.background.cornerRadius ?? 4,
+        listening: false,
+        perfectDrawEnabled: false,
+        name: 'buyer-text-background',
+      });
+      this.bgLayer.add(backdrop);
+    }
     this.freeTextById.set(obj.id, {
       node,
+      backdrop,
       background,
       kind: 'free-text',
     });
@@ -5930,7 +5962,7 @@ export class SeatmapRenderer implements ISeatmapRenderer {
     const effectiveScale = this.exportMode
       ? Math.max(this.effScale(), LABEL_SCALE)
       : this.effScale();
-    for (const { objectId, node, categoryKey, kind } of this.freeTextById.values()) {
+    for (const { objectId, node, backdrop, categoryKey, kind } of this.freeTextById.values()) {
       const gaDimmed = categoryKey != null
         && (kind === 'ga-label' || kind === 'ga-capacity')
         && this.gaCategoryDimmed(categoryKey);
@@ -5938,7 +5970,9 @@ export class SeatmapRenderer implements ISeatmapRenderer {
         && (kind === 'ga-label' || kind === 'ga-capacity')
         && this.gaById.get(objectId)?.sectionId != null
         && effectiveScale < CACHE_THRESHOLD;
-      node.visible(!gaDimmed && !gaOverviewHidden && isBookableLabelLegibleAtScale(node.fontSize(), effectiveScale));
+      const visible = !gaDimmed && !gaOverviewHidden && isBookableLabelLegibleAtScale(node.fontSize(), effectiveScale);
+      node.visible(visible);
+      backdrop?.visible(visible);
     }
     // Vector venue icons share the free-text rendered-size floor.
     for (const { node, fontSize } of this.iconNodeById.values()) {

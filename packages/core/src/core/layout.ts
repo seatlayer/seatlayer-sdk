@@ -16,9 +16,11 @@ import type {
   RectTableSeatCounts,
   RectTableSide,
   SeatOverride,
+  SeatViewMetadata,
   SectionObject,
   TableObject,
 } from './types';
+import { textLayoutMetrics } from './textLayout';
 import { distributeAlongCubic } from './complexGeometry';
 import { polygonInscribedAnchor } from './polygonAnchor';
 import { translateSectionOutlinePath } from './sectionPath';
@@ -131,6 +133,7 @@ export interface RowSeatSlot {
   wheelchairSpaceType?: SeatOverride['wheelchairSpaceType'];
   commercial?: RowObject['commercial'];
   viewUrl?: string;
+  viewMeta?: SeatViewMetadata;
   labelStyle?: LabelStyle;
 }
 
@@ -171,6 +174,7 @@ export function expandRowSlots(row: RowObject, placement?: SegmentedRowPlacement
       wheelchairSpaceType: o?.wheelchairSpaceType,
       commercial: Object.values(commercial).some((value) => value !== undefined && value !== false && value !== '') ? commercial : undefined,
       viewUrl: o?.viewFromSeatUrl ?? row.viewFromSeatUrl,
+      viewMeta: o?.viewFromSeatUrl ? o.viewFromSeatMeta : row.viewFromSeatMeta,
       labelStyle: o?.labelStyle,
     };
   });
@@ -193,6 +197,7 @@ export function expandRow(row: RowObject): ExpandedSeat[] {
       wheelchairSpaceType: slot.wheelchairSpaceType,
       commercial: slot.commercial,
       viewUrl: slot.viewUrl,
+      viewMeta: slot.viewMeta,
       labelStyle: slot.labelStyle,
     });
   }
@@ -245,6 +250,7 @@ export function expandTableSlots(t: TableObject): TableSeatSlot[] {
       wheelchairSpaceType: override?.wheelchairSpaceType,
       commercial: override?.commercial,
       viewUrl: override?.viewFromSeatUrl,
+      viewMeta: override?.viewFromSeatUrl ? override.viewFromSeatMeta : undefined,
       labelStyle: override?.labelStyle,
       ...(side ? { side } : {}),
     };
@@ -322,6 +328,7 @@ export function expandTable(t: TableObject): ExpandedSeat[] {
     ...(slot.wheelchairSpaceType ? { wheelchairSpaceType: slot.wheelchairSpaceType } : {}),
     ...(slot.commercial ? { commercial: slot.commercial } : {}),
     ...(slot.viewUrl ? { viewUrl: slot.viewUrl } : {}),
+    ...(slot.viewUrl && slot.viewMeta ? { viewMeta: slot.viewMeta } : {}),
     ...(slot.labelStyle ? { labelStyle: slot.labelStyle } : {}),
   }));
 }
@@ -564,6 +571,9 @@ export interface ExpandChartOptions {
   /** Physical height for a single-floor projection extracted from a multi-floor
    * document. Full multi-floor documents resolve each floor directly. */
   floorBaseHeightM?: number;
+  /** Resolve per-seat 3D eye heights (default true). Two-dimensional consumers
+   * such as thumbnails can disable this expensive stand-structure pass. */
+  resolveEyeHeights?: boolean;
 }
 
 function expandFloorObjects(
@@ -576,7 +586,7 @@ function expandFloorObjects(
    * final `??=` after seat/row/section, so any closer photo always wins. Absent
    * ⇒ seats with no closer photo keep `viewUrl` undefined (generated panorama).
    */
-  viewFallback?: string,
+  viewFallback?: { url: string; meta?: SeatViewMetadata },
 ): ExpandedSeat[] {
   const out: ExpandedSeat[] = [];
   const segmented = resolveSegmentedRowGroups(objects);
@@ -602,7 +612,10 @@ function expandFloorObjects(
           if (!overrides.get(physicalIndex)?.displayLabel) {
             seat.displayLabel = seatDisplayLabel(obj, physicalIndex, logical);
           }
-          seat.viewUrl ??= logical.viewFromSeatUrl;
+          if (!seat.viewUrl && logical.viewFromSeatUrl) {
+            seat.viewUrl = logical.viewFromSeatUrl;
+            seat.viewMeta = logical.viewFromSeatMeta;
+          }
         }
       }
     }
@@ -611,9 +624,15 @@ function expandFloorObjects(
     const zone = owner?.zone ? zones?.find((candidate) => candidate.id === owner.zone) : undefined;
     const resolvedFocal = zone?.focalPoint ?? fallbackFocal;
     for (const seat of seats) {
-      if (inheritedView) seat.viewUrl ??= inheritedView;
+      if (!seat.viewUrl && inheritedView) {
+        seat.viewUrl = inheritedView;
+        seat.viewMeta = owner?.viewFromSeatMeta;
+      }
       // Floor > venue default: the last authored tier before a generated panorama.
-      if (viewFallback) seat.viewUrl ??= viewFallback;
+      if (!seat.viewUrl && viewFallback) {
+        seat.viewUrl = viewFallback.url;
+        seat.viewMeta = viewFallback.meta;
+      }
       if (owner) seat.sectionId = owner.logicalSectionId ?? owner.id;
       if (owner?.zone) seat.zoneId = owner.zone;
       if (resolvedFocal) seat.focalPoint = { ...resolvedFocal };
@@ -632,15 +651,28 @@ export function expandChart(doc: ChartDoc, options: ExpandChartOptions = {}): Ex
     for (const floor of doc.floors) {
       const floorFocal = floor.focalPoint ?? doc.focalPoint;
       // Per-floor photo overrides the venue default for seats on this floor.
-      const floorView = floor.viewFromSeatUrl ?? doc.viewFromSeatUrl;
+      const floorView = floor.viewFromSeatUrl
+        ? { url: floor.viewFromSeatUrl, meta: floor.viewFromSeatMeta }
+        : doc.viewFromSeatUrl
+          ? { url: doc.viewFromSeatUrl, meta: doc.viewFromSeatMeta }
+          : undefined;
       const seats = expandFloorObjects(floor.objects, doc.zones, floorFocal, floorView);
-      assignEyeHeights(floor.objects, floor.focalPoint ?? doc.focalPoint, floor.baseHeightM ?? 0, seats);
+      if (options.resolveEyeHeights !== false) {
+        assignEyeHeights(floor.objects, floor.focalPoint ?? doc.focalPoint, floor.baseHeightM ?? 0, seats);
+      }
       out.push(...seats);
     }
     return out;
   }
-  const out = expandFloorObjects(doc.objects, doc.zones, doc.focalPoint, doc.viewFromSeatUrl);
-  assignEyeHeights(doc.objects, doc.focalPoint, options.floorBaseHeightM ?? 0, out);
+  const out = expandFloorObjects(
+    doc.objects,
+    doc.zones,
+    doc.focalPoint,
+    doc.viewFromSeatUrl ? { url: doc.viewFromSeatUrl, meta: doc.viewFromSeatMeta } : undefined,
+  );
+  if (options.resolveEyeHeights !== false) {
+    assignEyeHeights(doc.objects, doc.focalPoint, options.floorBaseHeightM ?? 0, out);
+  }
   return out;
 }
 
@@ -734,10 +766,19 @@ export function chartBounds(doc: ChartDoc): { x: number; y: number; width: numbe
     if (y > maxY) maxY = y;
   };
 
-  for (const s of expandChart(doc)) acc(s.x, s.y);
-
   for (const obj of allObjects(doc)) {
-    if (obj.type === 'gaArea') {
+    if (obj.type === 'row') {
+      // Bounds need only authored 2D coordinates. Going through expandChart()
+      // also resolves section ownership, labels, view metadata and (unless
+      // explicitly disabled) 3D rake/elevation for every seat. On Mega Stadium
+      // that unrelated work dominated both fit-to-view and the Designer minimap.
+      const overrides = new Map((obj.overrides ?? []).map((override) => [override.index, override]));
+      rowSeatPositions(obj).forEach((point, index) => {
+        const override = overrides.get(index);
+        if (override?.skip) return;
+        acc(point.x + (override?.dx ?? 0), point.y + (override?.dy ?? 0));
+      });
+    } else if (obj.type === 'gaArea') {
       for (const p of obj.points) acc(p.x, p.y);
     } else if (obj.type === 'section') {
       for (const p of obj.outline) acc(p.x, p.y);
@@ -764,9 +805,9 @@ export function chartBounds(doc: ChartDoc): { x: number; y: number; width: numbe
       acc(obj.center.x - ext, obj.center.y - ext);
       acc(obj.center.x + ext, obj.center.y + ext);
     } else if (obj.type === 'text') {
-      const w = obj.fontSize * obj.text.length * 0.6; // approximate glyph advance
+      const box = textLayoutMetrics(obj);
       acc(obj.position.x, obj.position.y);
-      acc(obj.position.x + w, obj.position.y + obj.fontSize);
+      acc(obj.position.x + box.width, obj.position.y + box.height);
     }
   }
 
