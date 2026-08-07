@@ -8,6 +8,18 @@
 
 export type Analytics3DCallback = (event: string, props?: Record<string, unknown>) => void;
 
+/**
+ * Where the CPU scene was compiled, as a closed enum (never free text).
+ * - `worker` — built off the UI thread by `prepareVenue3D`.
+ * - `main`   — `prepareVenue3D` ran but the worker was unavailable or failed
+ *              (no `Worker`, a host CSP blocking the module worker, a throw, or
+ *              the 15s timeout) and the same pure compiler ran on the UI thread.
+ * - `inline` — the caller never used `prepareVenue3D`; the scene was compiled
+ *              synchronously inside `mountVenue3D`. Kept distinct from `main`
+ *              so worker uptake is not diluted by callers that never asked.
+ */
+export type Scene3DPrepSource = 'worker' | 'main' | 'inline';
+
 const now = (): number =>
   (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
 
@@ -30,11 +42,17 @@ export class Analytics3D {
     }
   }
 
-  opened(seats: number, hasHeights: boolean, buildMs?: number): void {
+  opened(
+    seats: number,
+    hasHeights: boolean,
+    buildMs?: number,
+    prepSource?: Scene3DPrepSource,
+  ): void {
     this.emit('3d_opened', {
       seats,
       hasHeights,
       ...(buildMs === undefined ? {} : { buildMs: Math.round(buildMs) }),
+      ...(prepSource === undefined ? {} : { prepSource }),
     });
   }
 

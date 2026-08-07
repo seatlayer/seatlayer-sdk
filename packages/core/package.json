@@ -1,6 +1,6 @@
 {
   "name": "@seatlayer/core",
-  "version": "0.47.0",
+  "version": "0.47.1",
   "description": "Framework-agnostic seat-rendering engine (Konva) shared by the SeatLayer SDKs.",
   "license": "MIT",
   "homepage": "https://docs.seatlayer.io/buyer-sdk/install/",
@@ -16,7 +16,7 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "//deep-subpaths": "`./view/panoramaDelivery` and `./view3d/crossfade/panorama` are two engine modules the buyer widget imports by their path inside the mirrored src/ tree instead of through a barrel. The app's vendored widget resolves the same two relatively (../../view/panoramaDelivery, ../../view3d/crossfade/panorama), and scripts/sync-widget.mjs rewrites '@seatlayer/core/<path>' into '../../<path>' — which lines up character for character only because dist/ mirrors src/, and src/ mirrors the app's src/. Renaming either subpath silently breaks that rewrite. NOTE: keys inside `exports` must be subpaths or conditions, so this note lives out here; a '//' key in there makes Node and TypeScript reject the whole map, which shows up as 'Cannot find module @seatlayer/core/view3d'.",
+  "//deep-subpaths": "`./view/panoramaDelivery` and `./view3d/crossfade/panorama` are two engine modules the buyer widget imports by their path inside the mirrored src/ tree instead of through a barrel. The app's vendored widget resolves the same two relatively (../../view/panoramaDelivery, ../../view3d/crossfade/panorama), and scripts/sync-widget.mjs rewrites '@seatlayer/core/<path>' into '../../<path>' \u2014 which lines up character for character only because dist/ mirrors src/, and src/ mirrors the app's src/. Renaming either subpath silently breaks that rewrite. NOTE: keys inside `exports` must be subpaths or conditions, so this note lives out here; a '//' key in there makes Node and TypeScript reject the whole map, which shows up as 'Cannot find module @seatlayer/core/view3d'.",
   "typesVersions": {
     "*": {
       "view3d": [

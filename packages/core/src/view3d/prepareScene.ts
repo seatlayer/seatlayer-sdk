@@ -1,10 +1,13 @@
 import type { ChartDoc, ExpandedSeat } from '../core/types';
 import { buildSceneModel, type SceneModel } from './scene/sceneModel';
+import type { Scene3DPrepSource } from './analytics';
 
 export interface PreparedVenue3D {
   model: SceneModel;
   buildMs: number;
-  source: 'worker' | 'main';
+  /** Reported on `3d_opened` as `prepSource`. `inline` is not reachable here —
+   * it is what `mountVenue3D` reports when no prepared scene was handed in. */
+  source: Exclude<Scene3DPrepSource, 'inline'>;
 }
 
 export interface PrepareVenue3DInput {

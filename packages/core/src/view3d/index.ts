@@ -40,7 +40,7 @@ export { prepareVenue3D } from './prepareScene';
 
 export type { SeatState3D } from './palette';
 export type { SeatView } from './crossfade/panorama';
-export type { Analytics3DCallback } from './analytics';
+export type { Analytics3DCallback, Scene3DPrepSource } from './analytics';
 export { buildSceneModel } from './scene/sceneModel';
 
 export interface Venue3DInput {
@@ -463,10 +463,16 @@ export function mountVenue3D(
   // --- arrival chip: the flight HOLDS in the live scene; the painted 360 is
   // an explicit tap away. (Owner call 2026-07-24: the real scene at the seat
   // IS the payoff; the generated panorama undersold it as an auto-landing.)
+  /** One narrow test for all of this module's chrome, measured off the CONTAINER
+   *  rather than the window — the 3D view mounts inside the picker, which itself
+   *  mounts inside a page column, so the window says nothing useful about how
+   *  much room these chips actually have. */
+  const isNarrow = (): boolean => (container.clientWidth || glctx.canvas.clientWidth) <= 520;
+
   let arriveChip: HTMLDivElement | null = null;
   const layoutArriveChip = (): void => {
     if (!arriveChip) return;
-    const narrow = (container.clientWidth || glctx.canvas.clientWidth) <= 520;
+    const narrow = isNarrow();
     Object.assign(arriveChip.style, narrow ? {
       left: '12px', right: '12px', bottom: '70px', transform: 'none', justifyContent: 'center',
     } : {
@@ -607,6 +613,22 @@ export function mountVenue3D(
   zoomInButton.addEventListener('click', () => orbit.zoomBy(0.82));
   setNavigationMode('orbit');
   container.appendChild(navigationModeChip);
+
+  /* THE GESTURE IS THE CONTROL ON TOUCH.
+     These four buttons exist because on a DESKTOP the pan gesture is
+     undiscoverable — it is shift/right/middle-drag, and nothing on screen says
+     so (owner: "we don't have much control in 3D"). None of that is true under a
+     finger: `orbit.ts` already rotates on one pointer, and pans AND dollies on
+     two, independently of `setPrimaryDragMode`. So on a narrow container the
+     chip restates gestures the hand already knows, while covering the top-left
+     of a scene that has barely any room to begin with.
+
+     Hidden, not removed: the mode it last set still stands, the desktop keeps
+     its affordance, and a container that grows back gets the chip back. */
+  const layoutNavigationChip = (): void => {
+    navigationModeChip.style.display = isNarrow() ? 'none' : 'flex';
+  };
+  layoutNavigationChip();
 
   // --- overview chip: always-available "take me home" control. Free orbit can
   // strand you behind the shell staring at walls; one tap glides back to the
@@ -1003,6 +1025,7 @@ export function mountVenue3D(
       const { width, height } = glctx.resize();
       orbit.setAspect(width / Math.max(1, height));
       layoutArriveChip();
+      layoutNavigationChip();
       loop.requestRender();
     },
     stats() {
@@ -1115,6 +1138,14 @@ export function mountVenue3D(
     },
   };
 
-  analytics.opened(model.seatCount, hasHeights, input.prepared?.buildMs ?? performance.now() - buildStartedAt);
+  analytics.opened(
+    model.seatCount,
+    hasHeights,
+    input.prepared?.buildMs ?? performance.now() - buildStartedAt,
+    // Known synchronously at mount: either the caller handed us a scene
+    // prepared by `prepareVenue3D` (which reports worker vs. main-thread
+    // fallback) or we compiled it inline here. Never delays the event.
+    input.prepared?.source ?? 'inline',
+  );
   return handle;
 }
