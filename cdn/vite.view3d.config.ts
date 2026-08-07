@@ -16,7 +16,18 @@ import jsPackage from '../packages/js/package.json';
 const version = jsPackage.version;
 const releaseDir = resolve(__dirname, `dist/seatlayer-js@${version}`);
 
+// The scene worker (packages/core/src/view3d/scene/scene.worker.ts) is reached
+// through `new Worker(new URL('./scene/scene.worker.ts', import.meta.url),
+// { type: 'module' })`, so Vite emits it as a HASHED asset beside the chunk and
+// rewrites that URL. With the default `base: '/'` the rewrite is root-absolute
+// (`/assets/scene.worker-<hash>.js`), which on the CDN resolves to
+// cdn.seatlayer.io/assets/… — outside the pinned version directory, where nothing
+// is ever published, so the worker 404s and prepareVenue3D silently falls back to
+// the main thread. `base: './'` makes it relative to the importing chunk, so it
+// resolves to /seatlayer-js@<x.y.z>/assets/scene.worker-<hash>.js — the key
+// upload-cdn.mjs writes and cdn/src/worker.mjs serves.
 export default defineConfig({
+  base: './',
   build: {
     target: 'es2019',
     outDir: releaseDir,

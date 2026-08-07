@@ -8,7 +8,16 @@ import { pathToFileURL } from 'node:url';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import worker from '../cdn/src/worker.mjs';
-import { engineSource, releasePackages, releaseVersion, repoRoot, sha256 } from './release-metadata.mjs';
+import {
+  engineSource,
+  releaseAssets,
+  releasePackages,
+  releaseVersion,
+  repoRoot,
+  sha256,
+  walkReleaseFiles,
+  RELEASE_ENTRY_FILES,
+} from './release-metadata.mjs';
 
 const version = releaseVersion();
 const releaseDir = resolve(repoRoot, `cdn/dist/seatlayer-js@${version}`);
@@ -37,11 +46,54 @@ const LAZY_CHUNKS = {
 const CHECKOUT_CEILING = 40_000;
 const ARTIFACTS = { 'seatlayer.js': 500_000, 'seatlayer.mjs': 500_000, ...LAZY_CHUNKS };
 
+// --- nothing ships unaccounted -------------------------------------------
+// This used to be a flat deepEqual against six enumerated filenames. It could
+// not survive the scene worker: `new Worker(new URL(…), { type: 'module' })`
+// makes Vite emit assets/scene.worker-<hash>.js, and a hashed name cannot be
+// written down in advance. The RULE is unchanged — every emitted byte must be
+// declared and sha-pinned before it can ship — but a file now qualifies two
+// ways: it is an enumerated entry file, or it is in release.json's `assets`
+// map. Both halves are checked below, in both directions.
+const emitted = walkReleaseFiles(releaseDir);
+const assets = releaseAssets(releaseDir); // throws on anything outside assets/<name>.js
 assert.deepEqual(
-  readdirSync(releaseDir).sort(),
-  // Any OTHER file here means an accidental split leaked out.
+  emitted.filter((file) => !assets.includes(file)).sort(),
   ['release.json', ...Object.keys(ARTIFACTS)].sort(),
-  'CDN releases must be self-contained; unexpected lazy chunks were emitted',
+  'CDN releases must be self-contained; an unexpected top-level file was emitted',
+);
+assert.equal(manifest.schemaVersion, 3, 'release.json schema 3 carries the hashed-asset manifest');
+assert.deepEqual(
+  Object.keys(manifest.assets ?? {}).sort(),
+  assets,
+  'release.json must account for exactly the hashed assets the build emitted',
+);
+for (const path of assets) {
+  const bytes = readFileSync(resolve(releaseDir, path));
+  assert.equal(sha256(bytes), manifest.assets[path].sha256, `${path} sha256 does not match release.json`);
+  assert.equal(bytes.byteLength, manifest.assets[path].bytes, `${path} size does not match release.json`);
+  assert.ok(bytes.byteLength > 0, `${path} is empty`);
+}
+assert.deepEqual(Object.keys(manifest.files).sort(), [...RELEASE_ENTRY_FILES].sort());
+
+// --- the scene worker must be REACHABLE, not merely present ---------------
+// prepareVenue3D falls back to the main thread on any worker failure, silently,
+// so a worker that 404s costs a frame budget and says nothing. Two things have
+// to hold: the asset exists, and the chunk that starts it references it by a
+// RELATIVE URL. With Vite's default `base: '/'` the rewrite is root-absolute
+// (`/assets/…`), which resolves to cdn.seatlayer.io/assets/… — outside the
+// pinned directory, where we publish nothing.
+const view3d = readFileSync(resolve(releaseDir, 'seatlayer-view3d.mjs'), 'utf8');
+const sceneWorker = assets.find((path) => path.includes('scene.worker'));
+assert.ok(sceneWorker, 'the 3D chunk must emit a scene worker asset');
+assert.ok(
+  view3d.includes(`new URL("${sceneWorker}", import.meta.url)`),
+  `seatlayer-view3d.mjs must reach ${sceneWorker} via a URL relative to import.meta.url; `
+  + 'a root-absolute /assets/… rewrite 404s on the CDN and prepareVenue3D silently '
+  + 'falls back to the main thread (check `base` in cdn/vite.view3d.config.ts)',
+);
+assert.ok(
+  !/new URL\("\/assets\//.test(view3d),
+  'seatlayer-view3d.mjs contains a root-absolute /assets/ URL, which the CDN does not serve',
 );
 
 assert.equal(manifest.version, version);
@@ -113,12 +165,14 @@ dom.window.close();
 // --- Worker routing contract --------------------------------------------
 const releaseJson = readFileSync(resolve(releaseDir, 'release.json'));
 const versionsJson = readFileSync(resolve(indexDir, 'versions.json'));
-const fakeObject = (bytes) => ({
+const fakeObject = (bytes, contentType = 'application/json; charset=utf-8') => ({
   body: new Blob([bytes]).stream(),
   size: bytes.byteLength,
   httpEtag: '"release-test"',
-  httpMetadata: { contentType: 'application/json; charset=utf-8' },
-  writeHttpMetadata(headers) { headers.set('Content-Type', this.httpMetadata.contentType); },
+  httpMetadata: contentType ? { contentType } : {},
+  writeHttpMetadata(headers) {
+    if (this.httpMetadata.contentType) headers.set('Content-Type', this.httpMetadata.contentType);
+  },
   async json() { return JSON.parse(bytes.toString('utf8')); },
 });
 const cache = new Map();
@@ -143,11 +197,19 @@ const store = {
   // against what this release actually produces rather than against a list that
   // was true when it was written.
   ...Object.fromEntries(Object.keys(ARTIFACTS).map((name) => [`seatlayer-js@${version}/${name}`, releaseJson])),
+  // Same idea for the hashed assets: keyed off what this build emitted, so a new
+  // asset shape is checked against the Worker rather than assumed to route.
+  ...Object.fromEntries(assets.map((path) => [`seatlayer-js@${version}/${path}`, releaseJson])),
 };
+// Assets are stored WITHOUT an object content type, so the Worker's extension
+// mapping is what has to produce `text/javascript` — a module worker whose script
+// arrives as anything else is refused by the browser before it runs a line.
+const assetKeys = new Set(assets.map((path) => `seatlayer-js@${version}/${path}`));
+const objectFor = (key) => (assetKeys.has(key) ? fakeObject(store[key], null) : fakeObject(store[key]));
 const env = {
   SDK_RELEASES: {
-    async get(key) { return store[key] ? fakeObject(store[key]) : null; },
-    async head(key) { return store[key] ? fakeObject(store[key]) : null; },
+    async get(key) { return store[key] ? objectFor(key) : null; },
+    async head(key) { return store[key] ? objectFor(key) : null; },
   },
 };
 const fetchWorker = (path, init) => worker.fetch(new Request(`https://cdn.seatlayer.io${path}`, init), env, ctx);
@@ -170,6 +232,44 @@ for (const name of Object.keys(ARTIFACTS)) {
     `the CDN Worker will not serve ${name} — add it to FILE_NAMES in cdn/src/worker.mjs`,
   );
 }
+
+// 1c. Hashed assets must route, carry CORS, and arrive as JavaScript. The scene
+// worker is fetched cross-origin by `new Worker(url, { type: 'module' })` from a
+// page on the organizer's domain; a module worker is a CORS request, so a
+// missing Access-Control-Allow-Origin or a non-JS content type kills it — and
+// prepareVenue3D swallows that into a main-thread fallback.
+for (const path of assets) {
+  const served = await fetchWorker(`/seatlayer-js@${version}/${path}`);
+  assert.equal(served.status, 200, `the CDN Worker will not serve ${path}`);
+  assert.equal(served.headers.get('access-control-allow-origin'), '*', `${path} must be CORS-readable`);
+  assert.equal(served.headers.get('cross-origin-resource-policy'), 'cross-origin');
+  assert.equal(
+    served.headers.get('content-type'),
+    'text/javascript; charset=utf-8',
+    `${path} must be served as JavaScript or the module worker is refused before it runs`,
+  );
+  assert.equal(served.headers.get('cache-control'), 'public, s-maxage=31536000, max-age=3600, immutable');
+}
+// The mutable channel must NOT resolve hashed names: a hashed URL is only ever
+// produced by the build that emitted it, so an alias-shaped one is a mistake.
+assert.equal((await fetchWorker(`/seatlayer-js@0/${assets[0]}`)).status, 404);
+// URL parsing already collapses a literal `../`, so the traversal that has to be
+// refused explicitly is the percent-encoded one the Worker decodes itself.
+assert.equal(
+  (await fetchWorker(`/seatlayer-js@${version}/assets/%2e%2e%2fsecret.js`)).status,
+  404,
+  'the asset prefix must not open a traversal',
+);
+assert.equal(
+  (await fetchWorker(`/seatlayer-js@${version}/assets/deep/nested.js`)).status,
+  404,
+  'assets are one flat directory',
+);
+assert.equal(
+  (await fetchWorker(`/seatlayer-js@${version}/assets/secrets.env`)).status,
+  404,
+  'only .js/.mjs asset names resolve',
+);
 
 // 2. Pre-reshape versions resolve at the canonical URL via the legacy fallback.
 const fallback = await fetchWorker(`/seatlayer-js@${legacyOnlyVersion}/release.json`);

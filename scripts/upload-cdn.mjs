@@ -17,7 +17,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { releaseVersion, repoRoot, sha256 } from './release-metadata.mjs';
+import { releaseVersion, repoRoot, sha256, uploadPlan } from './release-metadata.mjs';
 
 const mode = process.argv[2];
 if (mode !== 'immutable' && mode !== 'index') {
@@ -32,9 +32,15 @@ const bucket = process.env.SEATLAYER_CDN_BUCKET || 'seatlayer-sdk-releases';
 const origin = (process.env.CDN_ORIGIN || 'https://cdn.seatlayer.io').replace(/\/+$/, '');
 const root = mode === 'immutable' ? `seatlayer-js@${version}` : '-';
 const localRoot = resolve(repoRoot, 'cdn/dist', root);
-const names = mode === 'immutable'
-  ? ['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs', 'seatlayer-panorama.mjs', 'seatlayer-checkout.mjs', 'release.json']
-  : ['versions.json'];
+// The immutable set is the enumerated entry files PLUS the hashed assets
+// release.json accounts for (today: assets/scene.worker-<hash>.js). Hashed names
+// make collision with an older release impossible in practice, and everything
+// still lands under the version prefix, so an old release's assets are never
+// touched either way.
+const releaseManifest = mode === 'immutable'
+  ? JSON.parse(readFileSync(resolve(localRoot, 'release.json'), 'utf8'))
+  : null;
+const names = uploadPlan(mode, releaseManifest);
 
 // The Worker sets response Cache-Control explicitly; these are the object-level
 // values, kept consistent so a direct-to-R2 read behaves the same way.

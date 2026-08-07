@@ -180,6 +180,71 @@ fourth means editing every one of those five places plus `build:cdn` in
 `package.json`** — and, if the new module is one the main app vendors, its entry
 in `scripts/sync-widget.mjs` too.
 
+### Hashed assets (`assets/<name>-<hash>.js`)
+
+The lazy chunks above are *enumerated*: we choose their names, so they can be
+written down. Some files cannot be. `packages/core/src/view3d/prepareScene.ts`
+starts the scene compiler with
+
+```js
+new Worker(new URL('./scene/scene.worker.ts', import.meta.url), { type: 'module' })
+```
+
+which Vite must emit as its own file — and it names that file with a content
+hash. Inlining it instead would make it a **blob worker**, which a host site's
+CSP `worker-src` can refuse; that was considered and rejected.
+
+So the release artifact set is *the enumerated entry files **plus** a manifest of
+hashed assets*. `release.json` gained an `assets` map (schema version **3**)
+alongside `files`, with the same `{ sha256, bytes }` shape:
+
+```json
+"assets": {
+  "assets/scene.worker-DM50HIYm.js": { "sha256": "02f2…", "bytes": 128685 }
+}
+```
+
+The old contract asserted a flat set of six filenames and that *no other file may
+appear*. The letter of that changed; the spirit did not — **nothing ships
+unaccounted.** `verify-cdn-build.mjs` now walks the whole release directory and
+requires every emitted file to be either an enumerated entry file or a
+sha-matching member of `assets`, and requires `assets` to name nothing the build
+did not emit. Anything outside `assets/<name>.js` — a nested directory, a
+non-JS extension — fails the build.
+
+Four rules make this safe rather than a loophole:
+
+- **Hashed names go under the version prefix anyway.** The key is
+  `seatlayer-js@<x.y.z>/assets/<name>-<hash>.js`. The hash alone would already
+  stop two releases colliding; keeping the version prefix means an old release's
+  assets are untouchable even if a hash ever repeated, and it matches how every
+  other object in this bucket is laid out.
+- **`upload-cdn.mjs` walks the manifest, not the directory.** It can only ship
+  bytes `verify-cdn-build` already pinned. That walk is `uploadPlan()` in
+  `scripts/release-metadata.mjs` — a pure function, unit-tested in
+  `cdn/test/uploadPlan.test.ts`, because a tag is otherwise the first thing that
+  ever exercises it. It writes `release.json` **last**, after the bytes it
+  describes.
+- **The Worker matches assets by pattern, not by allowlist.** It has no manifest
+  on the hot path, so `cdn/src/worker.mjs` serves
+  `seatlayer-js@<x.y.z>/assets/<name>` for a deliberately narrow name pattern
+  (one flat directory, `.js`/`.mjs`, no traversal) and only under a *pinned*
+  version — a hashed URL is never hand-written, so the mutable alias channel does
+  not serve them. A pattern match for a key nobody uploaded is just a 404.
+- **`cdn/vite.view3d.config.ts` sets `base: './'`.** With Vite's default `/`, the
+  rewritten worker URL is root-absolute (`/assets/scene.worker-<hash>.js`), which
+  on the CDN resolves to `cdn.seatlayer.io/assets/…` — outside the pinned
+  directory, where nothing is published.
+
+That last one matters more than it looks, because **the failure is silent**:
+`prepareVenue3D` treats any worker failure as non-fatal and falls back to the
+exact same pure compiler on the main thread. A 404'd worker costs frame budget
+and reports nothing. Three gates therefore check reachability, not just presence
+— `verify-cdn-build.mjs` asserts the 3D chunk references the asset relatively,
+and both it and `verify-cdn-deployment.mjs` assert the asset is served as
+JavaScript with `Access-Control-Allow-Origin` (a `type: 'module'` worker is a
+CORS request; a classic worker could not be cross-origin at all).
+
 ### Release infrastructure prerequisites
 
 - R2 bucket: `seatlayer-sdk-releases`
@@ -203,6 +268,7 @@ pinned prefix — neither `seatlayer-js@X.Y.Z/` nor the legacy `sdk/vX.Y.Z/`.
 ```
 https://cdn.seatlayer.io/seatlayer-js@0.24.0/seatlayer.js    pinned, immutable
 https://cdn.seatlayer.io/seatlayer-js@0.24.0/seatlayer.mjs   pinned, immutable
+https://cdn.seatlayer.io/seatlayer-js@0.24.0/assets/x-<hash>.js  hashed asset, pinned only
 https://cdn.seatlayer.io/seatlayer-js@0/seatlayer.js         mutable major channel (302)
 https://cdn.seatlayer.io/-/versions.json                     version index
 ```

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { releaseVersion, repoRoot, sha256 } from './release-metadata.mjs';
+import { releaseVersion, repoRoot, sha256, RELEASE_ENTRY_FILES } from './release-metadata.mjs';
 
 const mode = process.argv[2] || 'full';
 if (mode !== 'immutable' && mode !== 'full') throw new Error('Mode must be immutable or full');
@@ -45,10 +45,24 @@ async function verifyPinned() {
   if (JSON.stringify(remoteManifest) !== JSON.stringify(localManifest)) {
     throw new Error(`${pinnedRoot}/release.json differs from the local release manifest`);
   }
-  for (const name of ['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs', 'seatlayer-panorama.mjs', 'seatlayer-checkout.mjs']) {
+  for (const name of RELEASE_ENTRY_FILES) {
     const bytes = Buffer.from(await (await get(`${pinnedRoot}/${name}`)).arrayBuffer());
     if (sha256(bytes) !== localManifest.files[name].sha256) {
       throw new Error(`${pinnedRoot}/${name} sha256 mismatch`);
+    }
+  }
+  // The hashed assets too. The scene worker is fetched at runtime by the 3D
+  // chunk, and a 404 there is INVISIBLE — prepareVenue3D falls back to the main
+  // thread without a word — so this gate is the only place it gets caught.
+  for (const [path, meta] of Object.entries(localManifest.assets ?? {})) {
+    const response = await get(`${pinnedRoot}/${path}`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (sha256(bytes) !== meta.sha256) throw new Error(`${pinnedRoot}/${path} sha256 mismatch`);
+    if (!(response.headers.get('content-type') || '').includes('javascript')) {
+      throw new Error(`${pinnedRoot}/${path} is not served as JavaScript; a module worker will refuse it`);
+    }
+    if (response.headers.get('access-control-allow-origin') !== '*') {
+      throw new Error(`${pinnedRoot}/${path} is missing CORS; a cross-origin module worker cannot load it`);
     }
   }
 }
