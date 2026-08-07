@@ -95,6 +95,21 @@ assert.ok(
   !/new URL\("\/assets\//.test(view3d),
   'seatlayer-view3d.mjs contains a root-absolute /assets/ URL, which the CDN does not serve',
 );
+// …and a correct URL is still not enough. The `Worker` constructor refuses a
+// CROSS-ORIGIN script URL outright — CORS does not enter into it — and refuses
+// it by throwing, which rejects prepareVenue3D instead of taking its
+// main-thread fallback. cdn/crossOriginWorker.ts rewrites construction to try
+// the direct worker, then a same-origin blob that imports this asset, then a
+// stub that reports failure the way a worker would. esbuild minifies after that
+// plugin and renames its helper, so the marker has to be machinery that does
+// work rather than a name.
+for (const marker of ['URL.createObjectURL(new Blob(', 'revokeObjectURL', '"import "']) {
+  assert.ok(
+    view3d.includes(marker),
+    `seatlayer-view3d.mjs has lost the cross-origin worker shim (${marker}); the scene `
+    + 'worker cannot start from the CDN without it — see cdn/crossOriginWorker.ts',
+  );
+}
 
 assert.equal(manifest.version, version);
 assert.equal(manifest.tag, `v${version}`);

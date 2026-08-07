@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 import jsPackage from '../packages/js/package.json';
+import { crossOriginWorker } from './crossOriginWorker';
 
 // The lazy 3D venue-view chunk, built as a SELF-CONTAINED ESM asset that lives
 // beside the pinned CDN bundle:
@@ -28,6 +29,11 @@ const releaseDir = resolve(__dirname, `dist/seatlayer-js@${version}`);
 // upload-cdn.mjs writes and cdn/src/worker.mjs serves.
 export default defineConfig({
   base: './',
+  // …and even then the `Worker` constructor refuses a cross-origin script URL
+  // outright, whatever CORS says. cdn/crossOriginWorker.ts routes construction
+  // through a same-origin blob that imports this asset. Both are needed: the
+  // blob's import resolves against the URL `base` produced above.
+  plugins: [crossOriginWorker()],
   build: {
     target: 'es2019',
     outDir: releaseDir,

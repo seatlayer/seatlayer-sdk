@@ -236,7 +236,47 @@ Four rules make this safe rather than a loophole:
   on the CDN resolves to `cdn.seatlayer.io/assets/…` — outside the pinned
   directory, where nothing is published.
 
-That last one matters more than it looks, because **the failure is silent**:
+#### The worker cannot be loaded cross-origin directly
+
+Shipping the asset correctly is necessary but **not sufficient**, and this was
+only found by loading the built bundle in a browser from a second origin. The
+`Worker` constructor refuses a cross-origin script URL outright — CORS headers do
+not enter into it, and `type: 'module'` relaxes the same-origin rule for the
+worker's own *imports*, not for its top-level script:
+
+```
+DOMException: Failed to construct 'Worker': Script at
+'http://cdn…/seatlayer-js@0.46.0/assets/scene.worker-<hash>.js'
+cannot be accessed from origin 'http://host…'.
+```
+
+Worse, it refuses by **throwing**, inside `prepareVenue3D`'s promise executor —
+so the call *rejects* rather than taking its documented main-thread fallback, and
+3D fails to open at all for every CDN integrator.
+
+`cdn/crossOriginWorker.ts` (a build plugin on the 3D config only, since the CDN is
+the only cross-origin case) rewrites worker construction into three tiers:
+
+1. the direct module worker — same-origin consumers are untouched;
+2. a **same-origin blob whose entire body is `import "<the cdn url>";`**. Its
+   script URL is same-origin so the constructor allows it, and its import is a
+   CORS fetch the CDN permits. The 128 KB stays a hashed, sha-pinned, cacheable
+   CDN object — this is a one-line pointer, not the inlining that was rejected;
+3. if the host's CSP `worker-src` refuses blob: as well, a stub that reports
+   failure the way a worker would, so prepareScene's non-fatal fallback runs.
+
+Tier 3 is where every CDN integrator is today, so it is a floor, not a
+regression; tiers 1–2 are the upside. All three are pinned by
+`cdn/test/crossOriginWorker.test.ts`, and `verify-cdn-build.mjs` asserts the
+shim's machinery survives into the shipped chunk (esbuild minifies after the
+plugin and renames its helper, so the marker has to be code that does work
+rather than a name).
+
+The rewrite lives in the CDN build rather than in
+`packages/core/src/view3d/prepareScene.ts` because that file is a generated
+mirror of the app.
+
+That last point matters more than it looks, because **the failure is silent**:
 `prepareVenue3D` treats any worker failure as non-fatal and falls back to the
 exact same pure compiler on the main thread. A 404'd worker costs frame budget
 and reports nothing. Three gates therefore check reachability, not just presence
