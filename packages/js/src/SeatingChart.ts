@@ -189,7 +189,6 @@ export class SeatingChart {
   private mount: HTMLElement | null = null;
   private hostEl: HTMLDivElement | null = null;
   private rendered = false;
-  private retryBtn: HTMLButtonElement | null = null;
   private mode_: 'live' | 'test' | null = null;
   private tipEl: HTMLDivElement | null = null;
   private tipPos = { x: 0, y: 0 };
@@ -677,7 +676,6 @@ export class SeatingChart {
       void this.render().catch((err) => this.opts.onError?.(err));
     });
     box.appendChild(btn);
-    this.retryBtn = btn;
     host.appendChild(box);
   }
 
@@ -685,7 +683,6 @@ export class SeatingChart {
     this.realtime?.stop();
     this.realtime = null;
     this.access?.clear();
-    this.retryBtn = null;
     if (this.hostEl && this.onTipMove) this.hostEl.removeEventListener('mousemove', this.onTipMove);
     this.tipEl = null;
     this.onTipMove = null;
