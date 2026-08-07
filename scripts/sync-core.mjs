@@ -117,6 +117,10 @@ const FILES = [
   // app's "deepen venue navigation and panoramas" batch, which is why a full
   // sync:core could not build until now.
   ['src/view3d/prepareScene.ts', 'packages/core/src/view3d/prepareScene.ts'],
+  // prepareScene reaches this one through `new Worker(new URL(…))`, not an
+  // import, so tsup resolves the mirror fine without it and only the CDN's
+  // Vite build fails — with an UNRESOLVED_ENTRY a long way from the cause.
+  ['src/view3d/scene/scene.worker.ts', 'packages/core/src/view3d/scene/scene.worker.ts'],
   ['src/view3d/positioningContext.ts', 'packages/core/src/view3d/positioningContext.ts'],
   ['src/view3d/camera/seatViewPose.ts', 'packages/core/src/view3d/camera/seatViewPose.ts'],
   ['src/view3d/analytics.ts', 'packages/core/src/view3d/analytics.ts'],

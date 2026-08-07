@@ -26,6 +26,20 @@ export default defineConfig({
     // Bundle the exact core source used by the npm workspace, not a second CDN
     // implementation or a separately versioned copy.
     alias: {
+      // The two DEEP engine subpaths the widget imports (see the note in
+      // packages/core/package.json) must come FIRST: alias keys are matched by
+      // prefix, so the bare `@seatlayer/core` entry below would otherwise turn
+      // `@seatlayer/core/view/panoramaDelivery` into
+      // `packages/core/src/index.ts/view/panoramaDelivery` and fail with a
+      // baffling "Not a directory".
+      '@seatlayer/core/view/panoramaDelivery': resolve(
+        __dirname,
+        '../packages/core/src/view/panoramaDelivery.ts',
+      ),
+      '@seatlayer/core/view3d/crossfade/panorama': resolve(
+        __dirname,
+        '../packages/core/src/view3d/crossfade/panorama.ts',
+      ),
       '@seatlayer/core': resolve(__dirname, '../packages/core/src/index.ts'),
     },
   },
