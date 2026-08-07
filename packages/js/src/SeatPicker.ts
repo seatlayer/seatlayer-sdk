@@ -30,6 +30,7 @@ import {
   tCount,
   type AccessibilityType,
   type ChartTheme,
+  type PickerMapTheme,
   type ExpandedSeat,
   type LodRung,
   type PanoramaResult,
@@ -181,6 +182,24 @@ export interface SeatPickerTheme {
   logoUrl?: string;
   /** Brand/event fallback name for the monogram. */
   brandName?: string;
+  /**
+   * The DRAWN MAP, which the tokens above deliberately do not reach.
+   *
+   * Everything else on this interface is CSS: it re-inks panels, buttons and
+   * the sidebar. The seat map is a canvas, painted from the chart document's
+   * own `ChartTheme`, so a host could re-ink the whole widget and still be
+   * looking at somebody else's dark venue in the middle of it (which is exactly
+   * what SeatLayer's own light event-page palettes did, found 2026-08-07).
+   *
+   * Nested rather than flattened because `background` already means the
+   * WIDGET's background here and the canvas ground is a different surface —
+   * two things one word cannot carry.
+   *
+   * Set it only when you can vouch for the result: these colours are drawn
+   * behind and beside live seat statuses (held, sold, selected), and the map is
+   * the one part of this widget a buyer has to be able to read.
+   */
+  map?: PickerMapTheme;
 }
 
 export interface SeatPickerOptions {
@@ -1924,6 +1943,9 @@ export class SeatPicker {
       currency: options.currency,
       flashOnLiveChange: true,
       colorblindSafe: this.cbSafe,
+      // The drawn map's own overrides, when the host supplied them up front.
+      // Everything else on `theme` is CSS and lands on the root instead.
+      mapTheme: options.theme?.map ?? null,
       onSelectionChange: () => {
         this.syncTray();
         // Seat-picking has begun — collapse the section card out of the way.
@@ -4987,6 +5009,64 @@ export class SeatPicker {
 
   getSelection(): PickerSeat[] {
     return this.committedSelection();
+  }
+
+  /**
+   * Re-ink the DRAWN MAP after mount, so the canvas can follow a page palette
+   * the host did not know at construction time.
+   *
+   * Deliberately narrower than the `theme` option: it takes only the map half.
+   * The chrome half is CSS custom properties, which a host restyles from its
+   * own stylesheet without asking the widget for anything — and a host that
+   * used both mechanisms at once would have two things writing one token. This
+   * method exists for the half CSS genuinely cannot reach: pixels Konva draws.
+   *
+   * The rebuild is the controller's (`setMapTheme`), which repaints statuses
+   * from the map already in memory and restores the selection, so a buyer
+   * mid-pick keeps their seats and no round trip is spent. A no-op when the
+   * colours have not changed; safe to call on every render.
+   */
+  setMapTheme(map: PickerMapTheme | null): void {
+    if (this.destroyed) return;
+    this.opts.theme = { ...(this.opts.theme ?? {}), map: map ?? undefined };
+    this.controller.setMapTheme(map);
+  }
+
+  /**
+   * Replace the host pricing override AFTER mount, and repaint everything that
+   * shows a price.
+   *
+   * WHY IT CANNOT JUST BE A MOUNT OPTION. The prices a host knows are often not
+   * the prices it knows AT MOUNT: SeatLayer's own event page learns them from
+   * `GET /pub/events/:key/availability`, a separate cached read that lands a
+   * round trip after the map does — deliberately, because the map is not
+   * allowed to wait on it. Remounting the widget to hand it new options would
+   * tear down a live hold, so the override is settable in place.
+   *
+   * The prices themselves are still the SERVER'S. This method takes an answer;
+   * it never derives one. Nothing here re-reads a release, a window or a quota
+   * — see `paidPrice`, the one funnel every displayed price flows through, and
+   * note that the checkout handoff's line items do not come from here at all:
+   * they are priced by the worker from its own hold. So the worst a wrong call
+   * to this method can do is misprint a price, never mischarge one.
+   *
+   * A no-op when the map is unchanged, so a host may call it on every poll.
+   */
+  setPricing(pricing: SeatPickerPricing | undefined): void {
+    const before = JSON.stringify(this.opts.pricing ?? null);
+    const after = JSON.stringify(pricing ?? null);
+    if (before === after) return;
+    this.opts.pricing = pricing;
+    if (this.destroyed || !this.els.prices) return;
+    // The band selector is DERIVED from prices, so a repriced chart can have a
+    // different set of bands (or stop having enough distinct prices to warrant
+    // one at all). Rebuild it rather than leaving a stale chip list behind.
+    this.els.pricesSec?.querySelector('.sl-price-select')?.remove();
+    this.buildPriceFilter();
+    this.syncPrices();
+    this.syncTray();
+    // An open section card and an open confirm popover both print a price.
+    if (this.lastSection) this.showSectionCard(this.lastSection);
   }
 
   /** Current colorblind-safe render state, resolved from the stored buyer

@@ -212,6 +212,18 @@ export interface PickerStatusChange {
 export interface PickerRealtimeSink {
   /** Apply a batch of label→status changes as ONE paint pass, not one per label. */
   applyStatuses(changes: PickerStatusChange[]): void;
+  /**
+   * Paint a COMPLETE projection: the default every unnamed unit takes, plus the
+   * units that differ from it.
+   *
+   * Optional so a host implementing an older sink keeps working — a client that
+   * finds it missing falls back to {@link resync}. Where it exists it replaces
+   * that HTTP round trip entirely, because the frame that triggered the resync
+   * already carried the whole authoritative state. On a 52k venue that is the
+   * difference between a ~960 KiB verbose fetch and painting what already
+   * arrived in a ~200 KiB socket frame.
+   */
+  applyProjection?(projection: { default: string; exceptions: Record<string, string> }): void;
   /** Re-pull authoritative state over HTTP (a frame that cannot be diffed). */
   resync(): void | Promise<void>;
   /** Section availability changed (hidden = stripped, closed = greyed). */
@@ -230,9 +242,11 @@ export interface PickerRealtimeConnection {
 export interface PickerTransport {
   chart(key: string): Promise<{
     doc: ChartDoc;
-    event: { key: string; name: string; salesClosed?: boolean; venue?: string | null; startsAt?: number | null; currency?: string; mode?: string; inventoryModelVersion?: 1 | 2 };
+    event: { key: string; name: string; salesClosed?: boolean; venue?: string | null; startsAt?: number | null; timezone?: string | null; currency?: string; mode?: string; inventoryModelVersion?: 1 | 2 };
   }>;
-  objects(key: string): Promise<{ seats: Record<string, string>; hidden?: string[]; closed?: string[] }>;
+  /** `default` is the status of every seat NOT in `seats`; absent means `free`
+   *  (an older server names every seat). Never assume it. */
+  objects(key: string): Promise<{ seats: Record<string, string>; default?: string; hidden?: string[]; closed?: string[] }>;
   hold(key: string, selections: HoldSelectionRequest[], ttlMs?: number, replaceHoldId?: string): Promise<HoldResponse>;
   bestAvailable(key: string, qty: number, categoryKey?: string, zoneId?: string, ttlMs?: number): Promise<BestAvailableResponse>;
   release(key: string, labels: string[], holdId: string): Promise<unknown>;
@@ -324,6 +338,45 @@ export interface PickerOptions extends PickerCallbacks {
    * and the WS protocol are identical either way.
    */
   keepLiveWhileHidden?: boolean;
+  /**
+   * Host overrides for the DRAWN map — see {@link PickerMapTheme}. Absent (the
+   * default, and every embed) leaves the chart document's own theme untouched.
+   */
+  mapTheme?: PickerMapTheme | null;
+}
+
+/**
+ * The subset of `ChartTheme` a HOST may override on the drawn canvas.
+ *
+ * WHY A SUBSET, AND WHY THESE FOUR. Everything here paints directly ON the
+ * ground this same object sets, so a caller supplying it can be held to a
+ * contrast contract over its own values (the event-page palettes are). The
+ * fields deliberately left out — `seatLabelColor`, `decorFill` — paint on top
+ * of CHART-authored colours instead: a category's fill, an authored décor fill.
+ * A page palette knows nothing about those, so an override there would be an
+ * unverifiable guess about legibility, and the chart keeps them.
+ *
+ * `seatScale`, `fontFamily` and the white-label branding fields are not here
+ * either: they are the ORGANIZER's, authored once with the chart, and a page
+ * theme is not the place to resize a venue.
+ */
+export interface PickerMapTheme {
+  /** The canvas ground behind the seats. */
+  background?: string;
+  /** Row identifiers (A, B, C) drawn beside the rows. */
+  rowLabelColor?: string;
+  /** Default ink for free text drawn on the canvas. */
+  textColor?: string;
+  /** Selection / hover ring. */
+  selectionColor?: string;
+}
+
+/** The four keys, as data, so a merge cannot silently miss one. */
+const MAP_THEME_KEYS = ['background', 'rowLabelColor', 'textColor', 'selectionColor'] as const;
+
+function sameMapTheme(a: PickerMapTheme | null, b: PickerMapTheme | null): boolean {
+  if (!a || !b) return !a && !b;
+  return MAP_THEME_KEYS.every((key) => a[key] === b[key]);
 }
 
 /** Read `status`/`conflicts`/`reason` off any thrown error without importing a specific ApiError. */
@@ -349,6 +402,8 @@ export class PickerController {
   private _doc: ChartDoc | null = null;
   /** Section/zone ids hidden from buyers this event (3.3) — seats vanish, not grey. */
   private hidden = new Set<string>();
+  /** Host overrides folded over the chart's own theme in `visibleDoc()`. */
+  private mapTheme: PickerMapTheme | null = null;
   /** Section/zone ids in the `closed` event-state (Phase 2) — seats stay, greyed
    *  + not pickable. Kept separate from `hidden` (which strips them). */
   private closedSections = new Set<string>();
@@ -396,6 +451,16 @@ export class PickerController {
   // hold state
   private hold_: HoldInfo | null = null;
   private liveStatuses = new Map<string, string>();
+  /**
+   * What a label absent from `liveStatuses` is.
+   *
+   * `free` while the verbose HTTP map is the source (it names every unit), but a
+   * compact realtime frame names only its exceptions — so on a mostly-sold event
+   * the seats NOT listed are the booked ones. Read through {@link statusOf};
+   * a bare `liveStatuses.get()` silently answers `undefined` for the majority of
+   * a sold-out venue.
+   */
+  private liveDefault = 'free';
   private currency = 'USD';
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -404,15 +469,72 @@ export class PickerController {
     this.api = options.transport;
     this.key = options.eventKey;
     this.maxSelection = options.maxSelection ?? DEFAULT_MAX_SELECTION;
+    this.mapTheme = options.mapTheme ?? null;
   }
 
   get doc(): ChartDoc | null {
     return this._doc;
   }
 
-  /** The chart with hidden sections' seats removed — what buyers actually see. */
+  /**
+   * The chart with hidden sections' seats removed, and the host's map theme
+   * folded over the chart's own — what buyers actually see.
+   *
+   * THE THEME IS MERGED HERE rather than pushed at the renderer separately
+   * because the renderer reads its theme out of the document it is given. One
+   * merge point means every rebuild — a hidden section arriving mid-sale, a
+   * floor switch, a theme change — repaints from the same resolved theme
+   * instead of from whichever of two sources ran last.
+   *
+   * The chart's theme is the BASE and only named keys are overwritten, so a
+   * host that overrides the ground does not thereby erase the organizer's
+   * `seatScale`, `fontFamily`, logo or badge entitlement.
+   */
   private visibleDoc(): ChartDoc {
-    return this._doc ? applyHidden(this._doc, this.hidden) : ({ objects: [] } as unknown as ChartDoc);
+    if (!this._doc) return { objects: [] } as unknown as ChartDoc;
+    const doc = applyHidden(this._doc, this.hidden);
+    if (!this.mapTheme) return doc;
+    const theme = { ...(doc.theme ?? {}) };
+    for (const key of MAP_THEME_KEYS) {
+      const value = this.mapTheme[key];
+      if (value) theme[key] = value;
+    }
+    return { ...doc, theme };
+  }
+
+  /**
+   * Re-ink the drawn map, in place, without losing the buyer's place in it.
+   *
+   * WHY THIS IS A SETTER AND NOT A MOUNT OPTION. On a templated event page the
+   * palette is not known when the map mounts: the page config is a separate
+   * cached read and the map is explicitly not allowed to wait for it. The
+   * alternative — remounting the widget once the palette lands — would destroy
+   * a hold the buyer may already be holding.
+   *
+   * The rebuild is the SAME recipe `render()` uses (setChart → colorblind →
+   * closed sections → statuses), because setChart resets all four; the one
+   * addition is restoring the selection, which `render()` has no need to do.
+   * Statuses are repainted from the map already in memory rather than re-read,
+   * so this costs no round trip and cannot flash a stale seat.
+   *
+   * Returns whether anything actually changed, so a caller may call it freely.
+   */
+  setMapTheme(theme: PickerMapTheme | null): boolean {
+    if (sameMapTheme(this.mapTheme, theme ?? null)) return false;
+    this.mapTheme = theme ?? null;
+    const r = this.renderer;
+    if (!r) return true; // not mounted yet — the first setChart will carry it
+    const selected = r.getSelection().map((seat) => seat.id);
+    const floorId = this.getActiveFloorId();
+    r.setChart(this.visibleDoc(), floorId ? { floorId } : undefined);
+    if (this.opts.colorblindSafe) r.setColorblindSafe?.(true);
+    if (this.closedSections.size) r.setClosedSections?.([...this.closedSections]);
+    // The authoritative statuses we are already holding — including the
+    // buyer-ownership layer, which `applySeatsMap` restores for exactly this
+    // "setChart just reset everything" case.
+    this.applySeatsMap(Object.fromEntries(this.liveStatuses), this.liveDefault);
+    if (selected.length) r.select?.(selected);
+    return true;
   }
 
   /** Adopt a new hidden set; rebuild the visible chart only if it differs. */
@@ -509,6 +631,9 @@ export class PickerController {
     eventName: string;
     venue?: string | null;
     startsAt?: number | null;
+    /** The EVENT's IANA zone. Every surface that prints `startsAt` must format
+     *  in it — see the note in pub.ts's chart route. */
+    timezone?: string | null;
     currency?: string;
     /** 'test' ⇒ sandbox event (hosts show a TEST MODE ribbon). */
     mode?: string;
@@ -656,12 +781,14 @@ export class PickerController {
     // paint so hidden sections never flash in. Falls back to the raw chart if the
     // snapshot is briefly unavailable — the WS re-snapshot then reconciles.
     let seats: Record<string, string> | null = null;
+    let seatsDefault = 'free';
     let closedIds: string[] = [];
     try {
       const objs = await this.api.objects(this.key);
       this.hidden = new Set(objs.hidden ?? []);
       closedIds = (objs.closed ?? []).filter((x): x is string => typeof x === 'string');
       seats = objs.seats;
+      seatsDefault = objs.default ?? 'free';
     } catch {
       /* transient — connect()'s onopen re-snapshots */
     }
@@ -676,7 +803,7 @@ export class PickerController {
     // grey + non-pickable treatment lands on the first paint, no flash.
     this.closedSections = new Set(closedIds);
     if (closedIds.length) renderer.setClosedSections?.(closedIds);
-    if (seats) this.applySeatsMap(seats);
+    if (seats) this.applySeatsMap(seats, seatsDefault);
     this.attachVisibilityListener();
     this.connect();
     return {
@@ -685,6 +812,7 @@ export class PickerController {
       eventName: res.event.name,
       venue: res.event.venue,
       startsAt: res.event.startsAt,
+      timezone: res.event.timezone ?? null,
       currency,
       // 'test' ⇒ sandbox event: hosts render a TEST MODE ribbon (Phase 11).
       mode: res.event.mode ?? 'live',
@@ -1019,7 +1147,7 @@ export class PickerController {
         ...(area.displayLabel ? { displayLabel: area.displayLabel } : {}),
         ...(area.displayType ? { displayType: area.displayType } : {}),
         capacity: Math.max(0, Math.floor(area.capacity)),
-        available: gaUnitLabels(area).filter((label) => (this.liveStatuses.get(label) ?? 'free') === 'free').length,
+        available: gaUnitLabels(area).filter((label) => this.statusOf(label) === 'free').length,
         categoryKey: area.categoryKey,
         tiers: category?.tiers,
         price: category?.tiers?.[0]?.price ?? category?.price ?? 0,
@@ -1039,7 +1167,7 @@ export class PickerController {
     const area = gaAreasOf(doc).find((candidate) => candidate.id === areaId);
     if (!area) return null;
     const labels = gaUnitLabels(area)
-      .filter((label) => !this.hold_?.labels.includes(label) && (this.liveStatuses.get(label) ?? 'free') === 'free')
+      .filter((label) => !this.hold_?.labels.includes(label) && this.statusOf(label) === 'free')
       .slice(0, Math.floor(qty));
     if (labels.length !== Math.floor(qty)) return null;
     const selections = new Map<string, HoldSelectionRequest>();
@@ -1822,7 +1950,7 @@ export class PickerController {
     try {
       const snap = await this.api.objects(this.key);
       if (this.hold_?.holdId !== hold.holdId) return;
-      this.applySeatsMap(snap.seats);
+      this.applySeatsMap(snap.seats, snap.default ?? 'free');
     } catch {
       // Do not report expiry from a disconnected/stale client. Reconcile once
       // the authoritative snapshot becomes reachable.
@@ -1832,7 +1960,7 @@ export class PickerController {
       return;
     }
     if (this.hold_?.holdId !== hold.holdId) return; // booked snapshot cleared it
-    if (hold.labels.some((label) => this.liveStatuses.get(label) === 'held')) {
+    if (hold.labels.some((label) => this.statusOf(label) === 'held')) {
       this.expiryTimer = setTimeout(() => void this.expireActiveHold(), 1_000);
       return;
     }
@@ -1840,11 +1968,23 @@ export class PickerController {
     this.opts.onHoldExpired?.();
   }
 
-  private applySeatsMap(seats: Record<string, string>): void {
+  /**
+   * Repaint from an authoritative map of unit statuses.
+   *
+   * `defaultStatus` is what every unit NOT named in `seats` is. The verbose HTTP
+   * route names every unit and leaves it at `free`; the compact realtime frame
+   * names only the exceptions and states its own default, which on a mostly-sold
+   * event is `booked` rather than `free`. Applying a compact map while assuming
+   * `free` would paint a sold-out stadium as fully available, so the default is
+   * a parameter rather than a constant.
+   */
+  private applySeatsMap(seats: Record<string, string>, defaultStatus = 'free'): void {
     const r = this.renderer;
     if (!r) return;
     this.liveStatuses = new Map(Object.entries(seats));
-    if (this.allIds.length) r.setStatus(this.allIds, 'free');
+    this.liveDefault = defaultStatus;
+    const defaultSeatStatus = mapStatus(defaultStatus);
+    if (this.allIds.length) r.setStatus(this.allIds, defaultSeatStatus);
     // setChart() rebuilds renderer state (floor/hidden-section changes), so
     // restore the buyer-ownership layer before repainting held statuses.
     r.setOwnedHold?.(
@@ -1854,8 +1994,11 @@ export class PickerController {
     for (const [label, st] of Object.entries(seats)) {
       byStatus[mapStatus(st)].push(...this.idsForLabel(label));
     }
-    (['held', 'booked', 'not_for_sale'] as SeatStatus[]).forEach((st) => {
-      if (byStatus[st].length) r.setStatus(byStatus[st], st);
+    // Every status EXCEPT the one the reset pass just painted. With the verbose
+    // map that skips `free` exactly as before; with a compact `booked` default
+    // it is the free seats that need painting back.
+    (['free', 'held', 'booked', 'not_for_sale'] as SeatStatus[]).forEach((st) => {
+      if (st !== defaultSeatStatus && byStatus[st].length) r.setStatus(byStatus[st], st);
     });
     // Clear a completed checkout hold before notifying the widget. `onStatusChange`
     // is where SeatPicker detects a booking; notifying first left the hosted
@@ -1865,9 +2008,14 @@ export class PickerController {
     this.opts.onStatusChange?.();
   }
 
+  /** The live status of one unit, honouring the projection's default. */
+  private statusOf(label: string): string {
+    return this.liveStatuses.get(label) ?? this.liveDefault;
+  }
+
   private clearBookedHoldIfSettled(): void {
     const hold = this.hold_;
-    if (hold?.labels.every((label) => this.liveStatuses.get(label) === 'booked')) {
+    if (hold?.labels.every((label) => this.statusOf(label) === 'booked')) {
       this.clearHold();
       this.resetTableQuantitiesForLabels(hold.labels);
     }
@@ -1876,7 +2024,7 @@ export class PickerController {
   private async resnapshot(): Promise<void> {
     try {
       const objs = await this.api.objects(this.key);
-      this.applySeatsMap(objs.seats);
+      this.applySeatsMap(objs.seats, objs.default ?? 'free');
     } catch {
       /* transient — the socket delta stream keeps us fresh */
     }
@@ -1941,6 +2089,7 @@ export class PickerController {
   private realtimeSink(): PickerRealtimeSink {
     return {
       applyStatuses: (changes) => this.applyStatusChanges(changes),
+      applyProjection: (projection) => this.applySeatsMap(projection.exceptions, projection.default),
       resync: () => this.resnapshot(),
       onSections: (hidden, closed) => {
         // Hidden sections STRIP seats, so the chart is rebuilt and repainted
