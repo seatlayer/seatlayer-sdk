@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 import jsPackage from '../packages/js/package.json';
+import { crossOriginWorker } from './crossOriginWorker';
 
 // The lazy 3D venue-view chunk, built as a SELF-CONTAINED ESM asset that lives
 // beside the pinned CDN bundle:
@@ -16,7 +17,23 @@ import jsPackage from '../packages/js/package.json';
 const version = jsPackage.version;
 const releaseDir = resolve(__dirname, `dist/seatlayer-js@${version}`);
 
+// The scene worker (packages/core/src/view3d/scene/scene.worker.ts) is reached
+// through `new Worker(new URL('./scene/scene.worker.ts', import.meta.url),
+// { type: 'module' })`, so Vite emits it as a HASHED asset beside the chunk and
+// rewrites that URL. With the default `base: '/'` the rewrite is root-absolute
+// (`/assets/scene.worker-<hash>.js`), which on the CDN resolves to
+// cdn.seatlayer.io/assets/… — outside the pinned version directory, where nothing
+// is ever published, so the worker 404s and prepareVenue3D silently falls back to
+// the main thread. `base: './'` makes it relative to the importing chunk, so it
+// resolves to /seatlayer-js@<x.y.z>/assets/scene.worker-<hash>.js — the key
+// upload-cdn.mjs writes and cdn/src/worker.mjs serves.
 export default defineConfig({
+  base: './',
+  // …and even then the `Worker` constructor refuses a cross-origin script URL
+  // outright, whatever CORS says. cdn/crossOriginWorker.ts routes construction
+  // through a same-origin blob that imports this asset. Both are needed: the
+  // blob's import resolves against the URL `base` produced above.
+  plugins: [crossOriginWorker()],
   build: {
     target: 'es2019',
     outDir: releaseDir,

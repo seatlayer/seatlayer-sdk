@@ -3,6 +3,7 @@
  * Turn the raw vite output into the exact tree we upload to R2.
  *
  *   cdn/dist/seatlayer-js@<x.y.z>/{seatlayer.js,seatlayer.mjs,release.json}
+ *   cdn/dist/seatlayer-js@<x.y.z>/assets/<name>-<hash>.js   bundler-named assets
  *   cdn/dist/-/versions.json
  *
  * There is deliberately NO alias directory. The mutable `seatlayer-js@<major>`
@@ -14,11 +15,13 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   engineSource,
+  releaseAssets,
   releasePackages,
   releaseVersion,
   repoRoot,
   sha256,
   sourceCommit,
+  RELEASE_ENTRY_FILES,
 } from './release-metadata.mjs';
 
 const version = releaseVersion();
@@ -26,19 +29,33 @@ const releaseDir = resolve(repoRoot, `cdn/dist/seatlayer-js@${version}`);
 const indexDir = resolve(repoRoot, 'cdn/dist/-');
 const ledgerPath = resolve(repoRoot, 'cdn/versions.json');
 const files = {};
+const assets = {};
 
 // Three lazy chunks are built alongside the main bundle and ship as pinned
 // immutable objects the widget loads by URL at the gesture that needs them:
 // seatlayer-view3d.mjs, the 3D venue view (cdn/vite.view3d.config.ts);
 // seatlayer-panorama.mjs, the view-from-seat generator (cdn/vite.panorama.config.ts);
 // and seatlayer-checkout.mjs, the hosted-checkout card (cdn/vite.checkout.config.ts).
-for (const name of ['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs', 'seatlayer-panorama.mjs', 'seatlayer-checkout.mjs']) {
+for (const name of RELEASE_ENTRY_FILES) {
   const bytes = readFileSync(resolve(releaseDir, name));
   files[name] = { sha256: sha256(bytes), bytes: bytes.byteLength };
 }
 
+// Hashed assets the BUNDLER named, not us — today only the 3D scene worker,
+// which `new Worker(new URL(…), { type: 'module' })` forces into its own file
+// (inlining it would make it a blob worker, which a host site's CSP `worker-src`
+// can refuse). Nobody ever types these names, so they are ACCOUNTED FOR here —
+// path, sha256, size — instead of enumerated. verify-cdn-build asserts every
+// emitted file is either an entry file or a sha-matching member of this map, so
+// "nothing ships unaccounted" survives; only the flat six-file letter changes.
+for (const path of releaseAssets(releaseDir)) {
+  const bytes = readFileSync(resolve(releaseDir, path));
+  assets[path] = { sha256: sha256(bytes), bytes: bytes.byteLength };
+}
+
 const manifest = {
-  schemaVersion: 2,
+  // 3: `assets` joined `files`.
+  schemaVersion: 3,
   version,
   tag: `v${version}`,
   source: {
@@ -48,6 +65,7 @@ const manifest = {
   },
   packages: Object.fromEntries(releasePackages().map((pkg) => [pkg.name, pkg.version])),
   files,
+  assets,
 };
 
 const json = `${JSON.stringify(manifest, null, 2)}\n`;
@@ -84,5 +102,5 @@ if (!published.includes(version) || ledger.tags?.latest !== version) {
 }
 
 console.log(`✓ finalized CDN seatlayer-js@${version} from ${manifest.source.commit}`);
-for (const [name, meta] of Object.entries(files)) console.log(`  ${name} ${meta.bytes} bytes sha256:${meta.sha256}`);
+for (const [name, meta] of Object.entries({ ...files, ...assets })) console.log(`  ${name} ${meta.bytes} bytes sha256:${meta.sha256}`);
 console.log(`  versions.json → latest=${version}, ${versions.length} versions`);

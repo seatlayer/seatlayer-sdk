@@ -6,6 +6,9 @@
  *   /seatlayer-js@0.25.0/seatlayer.js     immutable, pinned; filename is CONSTANT
  *   /seatlayer-js@0.25.0/seatlayer.mjs    across versions, so upgrading is a
  *   /seatlayer-js@0.25.0/release.json     one-token edit.
+ *   /seatlayer-js@0.25.0/assets/x-<hash>.js  hashed assets the bundler named (e.g.
+ *                                         the 3D scene worker); immutable, pinned
+ *                                         only, and listed in release.json.
  *   /seatlayer-js@0/seatlayer.js          mutable major alias -> 302 to the pinned URL
  *   /-/versions.json                      version index (jsDelivr/cdnjs-shaped)
  *
@@ -24,8 +27,27 @@
 
 const FILE_NAMES = new Set(['seatlayer.js', 'seatlayer.mjs', 'seatlayer-view3d.mjs', 'seatlayer-panorama.mjs', 'seatlayer-checkout.mjs', 'release.json']);
 
+/**
+ * Hashed assets: /seatlayer-js@1.2.3/assets/scene.worker-DM50HIYm.js
+ *
+ * The bundler names these, not us, so they cannot join FILE_NAMES — and the
+ * Worker has no manifest on the hot path (reading release.json per request would
+ * add an R2 round trip to every asset fetch). They are matched by PATTERN
+ * instead, deliberately narrow: one flat directory, no traversal, a conservative
+ * character class, a .js/.mjs suffix, and pinned versions only — nothing should
+ * ever hand-write a hashed URL, so the mutable alias channel does not serve them.
+ *
+ * Exhaustive accounting still happens, just upstream: release.json records every
+ * asset with its sha256, verify-cdn-build asserts the build emitted nothing else,
+ * and upload-cdn writes only what that manifest lists. A pattern match for a key
+ * nobody uploaded is simply a 404 on the R2 read.
+ */
+const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.m?js$/;
+
 /** Canonical pinned artifact: /seatlayer-js@1.2.3/seatlayer.js */
 const PINNED_PATH = /^seatlayer-js@(\d+\.\d+\.\d+)\/([^/]+)$/;
+/** Pinned hashed asset: /seatlayer-js@1.2.3/assets/scene.worker-DM50HIYm.js */
+const PINNED_ASSET_PATH = /^seatlayer-js@(\d+\.\d+\.\d+)\/assets\/([^/]+)$/;
 /** Mutable alias: /seatlayer-js@1/seatlayer.js or /seatlayer-js@latest/seatlayer.js */
 const ALIAS_PATH = /^seatlayer-js@(\d+|latest)\/([^/]+)$/;
 /** Version index: /-/versions.json */
@@ -107,6 +129,15 @@ function route(url) {
       fallbackKey: `sdk/v${version}/${name}`,
       cacheControl: CACHE_PINNED,
     };
+  }
+
+  const asset = PINNED_ASSET_PATH.exec(path);
+  if (asset) {
+    const [, version, name] = asset;
+    if (!ASSET_NAME.test(name)) return null;
+    // No legacy fallback: hashed assets only exist from the release that
+    // introduced them, and /sdk/vX.Y.Z/ never carried any.
+    return { kind: 'object', key: `seatlayer-js@${version}/assets/${name}`, cacheControl: CACHE_PINNED };
   }
 
   const alias = ALIAS_PATH.exec(path);
