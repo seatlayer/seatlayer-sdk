@@ -63,6 +63,18 @@ export interface CheckoutOrderStatus {
   currency: string;
   amountFormatted: string;
   seatCount: number;
+  // Present once the order is settled: the confirmed card names the seats it
+  // just sold and points at the hosted ticket page that outlives this modal.
+  tickets?: Array<{
+    label: string;
+    token: string;
+    status: 'issued' | 'checked_in' | 'void';
+    checkedInAt: number | null;
+  }>;
+  /** Hosted ticket page — the durable re-entry point after the card closes. */
+  ticketUrl?: string;
+  /** Printable PDF, one page per ticket. */
+  pdfUrl?: string;
 }
 
 /** The buyer's held order, flattened out of the widget's CheckoutHandoff. */
@@ -142,12 +154,16 @@ const CSS = /* @sl-css */ `
 .sl-hco-back{width:100%;margin-top:8px;padding:10px;font:inherit;font-size:14px;color:var(--sl-muted);
   background:none;border:0;cursor:pointer;text-decoration:underline}
 .sl-hco-note{margin:12px 0 0;font-size:12px;line-height:1.5;color:var(--sl-muted)}
+.sl-hco-note a{color:inherit;text-decoration:underline;text-underline-offset:2px}
 .sl-hco-status{margin:8px 0 0;font-size:14px;line-height:1.55}
 .sl-hco-error{color:var(--sl-danger, #c0392b)}
 .sl-hco-receipt{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:14px 0 0;font-size:13px}
 .sl-hco-receipt dt{color:var(--sl-muted)}
 .sl-hco-receipt dd{margin:0;text-align:right}
 .sl-hco-ref{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
+.sl-hco-tickets{display:block;width:100%;margin-top:14px;padding:12px;font:inherit;font-size:15px;
+  font-weight:650;text-align:center;text-decoration:none;color:var(--sl-accent-ink);
+  background:var(--sl-accent);border-radius:calc(var(--sl-radius) * .55)}
 `;
 
 function ensureStyle(): void {
@@ -377,9 +393,13 @@ export function mountCheckout(mount: CheckoutMount): CheckoutHandle {
           const status = el(
             'p', 'sl-hco-status',
             `${body.seatCount} ${body.seatCount === 1 ? 'seat' : 'seats'} confirmed. `
-            + 'We have emailed your tickets.',
+            + 'Your tickets — with their door QR codes — are in your email.',
           );
           const receipt = el('dl', 'sl-hco-receipt');
+          const seatLabels = (body.tickets ?? []).map((t) => t.label);
+          if (seatLabels.length) {
+            receipt.append(el('dt', undefined, 'Seats'), el('dd', undefined, seatLabels.join(', ')));
+          }
           receipt.append(
             el('dt', undefined, 'Paid'),
             el('dd', undefined, `${body.amountFormatted} ${body.currency}`),
@@ -389,7 +409,17 @@ export function mountCheckout(mount: CheckoutMount): CheckoutHandle {
           const close = el('button', 'sl-hco-back', 'Close');
           close.type = 'button';
           close.addEventListener('click', cancel);
-          show(status, receipt, close);
+          if (body.ticketUrl) {
+            // The durable exit: a hosted page owning the QRs and the PDF, so
+            // closing this card is no longer the end of the buyer's artifacts.
+            const view = el('a', 'sl-hco-tickets', 'View tickets & QR codes');
+            view.href = body.ticketUrl;
+            view.target = '_blank';
+            view.rel = 'noreferrer';
+            show(status, receipt, view, close);
+          } else {
+            show(status, receipt, close);
+          }
           mount.onConfirmed(body);
           return;
         }
@@ -478,6 +508,13 @@ export function mountCheckout(mount: CheckoutMount): CheckoutHandle {
     `Your seats are held until ${until}. Payment is handled by `
     + `${provider === 'razorpay' ? 'Razorpay' : 'Stripe'} — we never see your card details.`,
   );
+  const privacy = el('p', 'sl-hco-note');
+  privacy.append('The event organizer and SeatLayer use your email to issue and manage your tickets. ');
+  const privacyLink = el('a', undefined, 'Privacy Policy');
+  privacyLink.href = 'https://seatlayer.io/privacy/';
+  privacyLink.target = '_blank';
+  privacyLink.rel = 'noreferrer';
+  privacy.appendChild(privacyLink);
 
   const emailValid = (): boolean => /.+@.+\..+/.test(email.value.trim());
   email.addEventListener('input', () => { pay.disabled = !emailValid(); });
@@ -539,7 +576,7 @@ export function mountCheckout(mount: CheckoutMount): CheckoutHandle {
     event.preventDefault();
     if (emailValid()) void start();
   });
-  form.append(emailLabel, email, nameLabel, name, pay, back, note);
+  form.append(emailLabel, email, nameLabel, name, privacy, pay, back, note);
 
   const details = (): void => {
     title.textContent = 'Checkout';

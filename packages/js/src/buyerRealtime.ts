@@ -47,10 +47,21 @@ export interface RealtimeSink {
   /** Apply a batch of label→status changes. Implementations must paint this as
    *  ONE pass, not one pass per label (motion system §4 rule 2). */
   applyStatuses(changes: StatusChange[]): void;
+  /**
+   * Paint a COMPLETE projection — the default plus the units that differ.
+   *
+   * Every case that cannot be expressed as a bounded diff (the first snapshot,
+   * or a changed default) still arrives as a whole authoritative projection: the
+   * client holds it, it just has no way to hand it over. This is that way, and
+   * where a sink provides it the {@link resync} round trip is skipped entirely.
+   *
+   * Optional, so an older sink keeps working unchanged.
+   */
+  applyProjection?(projection: Projection): void;
   /** Re-pull authoritative state over the scoped HTTP route. Used when a frame
    *  cannot be diffed against what we hold (first snapshot, or the scope's
    *  default itself changed, which redefines every unit we were never told
-   *  about). */
+   *  about), and the sink cannot take a whole projection. */
   resync(): void | Promise<void>;
   /** Section availability changed (channel-agnostic; identical for every scope). */
   onSections?(hidden: string[], closed: string[]): void;
@@ -392,8 +403,15 @@ export class BuyerRealtimeClient {
       const next = projectionFromSnapshot(frame);
       const changes = diffProjections(this.projection, next);
       this.projection = next;
-      if (changes === null) void this.opts.sink.resync();
-      else if (changes.length) this.opts.sink.applyStatuses(changes);
+      if (changes === null) {
+        // Undiffable — the first snapshot, or a default that moved. `next` is
+        // nonetheless the WHOLE authoritative projection, so a sink that can
+        // take one is painted directly and the HTTP round trip never happens.
+        if (this.opts.sink.applyProjection) this.opts.sink.applyProjection(next);
+        else void this.opts.sink.resync();
+      } else if (changes.length) {
+        this.opts.sink.applyStatuses(changes);
+      }
       return;
     }
 

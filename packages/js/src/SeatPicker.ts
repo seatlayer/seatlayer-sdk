@@ -43,6 +43,13 @@ import {
   type TableSelectionDetails,
 } from '@seatlayer/core';
 import type { Venue3DHandle, SeatView as View3DSeatView } from '@seatlayer/core/view3d';
+import { isAuthoredSeatView, seatViewDisclosure } from '@seatlayer/core/view3d/crossfade/panorama';
+import {
+  browserPanoramaConstraints,
+  loadPanoramaImage,
+  planPanoramaDelivery,
+  schedulePanoramaUpgrade,
+} from '@seatlayer/core/view/panoramaDelivery';
 import {
   PubApi,
   type HoldLineItem,
@@ -70,8 +77,28 @@ const DEFAULT_API_BASE = 'https://api.seatlayer.io';
 const DEFAULT_MAX_SELECTION = 10;
 /** Show the "Need more time?" prompt when the hold has this long (ms) left. */
 const EXTEND_PROMPT_MS = 60_000;
-/** Default seat ceiling for offering 3D — see the `max3DSeats` option. */
-const MAX_3D_SEATS_DEFAULT = 15_000;
+/**
+ * Default seat ceiling for offering 3D — see the `max3DSeats` option.
+ *
+ * 15,000 was calibrated when the largest chart we had evidence for was the
+ * 14,142-seat arena, so it read as "a bit above the biggest venue" rather than
+ * as a measured limit. It silently withheld the 3D toggle from Mega Stadium
+ * (53,018) — the chart whose entire purpose is to demonstrate 3D at stadium
+ * scale — and did so invisibly, because the control is simply never built.
+ *
+ * 60,000 is grounded in `docs/phase-b-browser-and-53k-evidence-2026-08-04.md`:
+ * the 53,018-seat bowl sustains 60fps on orbit and on the fly-to-seat descent
+ * at 3 draw calls idle / 4 in flight — the same draw count as the 14k arena,
+ * because the seat cloud is one instanced draw and does not scale with venue
+ * size.
+ *
+ * The halving below is deliberately left to bite. That evidence is a desktop
+ * GPU only; mobile at this scale is UNMEASURED. A small or low-core device
+ * therefore lands at 30,000 and still refuses 3D for a 53k bowl, which is the
+ * conservative side of a gap we have not closed. Raise the half only when a
+ * phone has actually been measured.
+ */
+const MAX_3D_SEATS_DEFAULT = 60_000;
 /** Most section pills the 3D navigation rail will offer before it stays quiet. */
 const MAX_3D_SECTION_PILLS = 12;
 
@@ -280,9 +307,15 @@ export interface SeatPickerOptions {
    * audience can raise this; the ceiling goes away when seat streaming lands. */
   max3DSeats?: number;
   /**
+   * Fires when the buyer enters/leaves 3D or targets a seat there. Hosts can
+   * mirror this small, non-sensitive state into a shareable URL.
+   */
+  onBuyerViewChange?: (state: { view: 'map' | 'venue3d'; seatId?: string }) => void;
+  /**
    * Optional analytics sink for the widget's own journey events. Currently emits
    * the 3D venue-view journey (`3d_opened`, `3d_orbit_engaged`, `3d_seat_picked`,
-   * `3d_cinematic_played`/`_skipped`/`_cancelled`, `3d_panorama_opened`/`_closed`)
+   * `3d_cinematic_played`/`_skipped`/`_cancelled`, panorama outcomes, and WebGL
+   * context loss/recovery)
    * with `{ surface: 'buyer' }` merged into the props. A throwing sink never
    * breaks the widget. Route it to your product analytics (e.g. PostHog). */
   onAnalytics?: (event: string, props: Record<string, unknown>) => void;
@@ -885,7 +918,12 @@ const CSS = /* @sl-css */ `
    INTO one of these positioned flex containers and flows/stacks within it, so no
    two pieces of chrome free-float on top of each other. Regions never overlap:
    the top strip splits into left/center/right; rails + corners own their edge. */
-.sl-anchor{position:absolute;z-index:5;display:flex;gap:8px;pointer-events:none}
+/* align-items:center, not the flex default of stretch. Without it a short pill
+   beside a taller control (TEST MODE next to the Map/3D toggle) is stretched to
+   the row's height, so two pills that should read as a matched pair end up
+   different shapes on different baselines. Column regions set their own
+   cross-axis alignment below and are unaffected. */
+.sl-anchor{position:absolute;z-index:5;display:flex;align-items:center;gap:8px;pointer-events:none}
 .sl-anchor > *{pointer-events:auto}
 .sl-anchor[data-region="top-left"]{top:12px;left:12px;flex-wrap:wrap;max-width:38%}
 .sl-anchor[data-region="top-center"]{top:12px;left:50%;transform:translateX(-50%);flex-direction:column;
@@ -901,10 +939,17 @@ const CSS = /* @sl-css */ `
 .sl-picker[data-layout="narrow"] .sl-anchor[data-region="top-center"]{max-width:44%}
 
 /* TEST MODE badge — a small pill in the top-right region (shrinks on narrow) */
-.sl-testbadge{padding:5px 11px;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.1em;
+/* align-self:stretch, not a hardcoded height: the badge sits beside the Map/3D
+   toggle, whose height comes from its own border + padding + button metrics.
+   Stretching matches that row exactly and keeps matching if the toggle ever
+   changes, while the badge's own inline-flex keeps the label centred inside
+   whatever height it gets. Alone in the region it simply takes its natural
+   size. */
+.sl-testbadge{display:inline-flex;align-items:center;align-self:stretch;padding:0 12px;border-radius:999px;
+  font-size:10px;font-weight:800;letter-spacing:.1em;line-height:1;
   text-transform:uppercase;white-space:nowrap;background:var(--sl-accent);color:var(--sl-accent-ink);
   box-shadow:0 2px 8px rgba(0,0,0,.25)}
-.sl-picker[data-layout="narrow"] .sl-testbadge{padding:3px 8px;font-size:8.5px;letter-spacing:.06em}
+.sl-picker[data-layout="narrow"] .sl-testbadge{padding:0 8px;font-size:8.5px;letter-spacing:.06em}
 
 /* zoom column (flows within the bottom-right region) */
 .sl-zoom{display:flex;flex-direction:column;gap:6px}
@@ -996,7 +1041,11 @@ const CSS = /* @sl-css */ `
    Layered Rows mark + wordmark. Hidden when the host opts out or the org's paid
    theme sets hideBadge. */
 .sl-powered{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:10px;
-  font-size:11px;letter-spacing:.03em;color:var(--sl-muted)}
+  font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--sl-text);opacity:.72;
+  text-decoration:none;padding:6px 10px;border-radius:999px;width:fit-content;margin-inline:auto;
+  transition:opacity .15s ease,background-color .15s ease}
+.sl-powered:hover{opacity:1;background:color-mix(in srgb,var(--sl-text) 8%,transparent)}
+.sl-powered:focus-visible{opacity:1;outline:2px solid var(--sl-accent);outline-offset:2px}
 .sl-powered-mark{width:16px;height:16px;border-radius:4px;flex:none;display:flex;align-items:center;justify-content:center;
   background:#0c1220;color:#fcf7ee}
 .sl-powered-mark svg{width:12px;height:11px}
@@ -1175,18 +1224,27 @@ const CSS = /* @sl-css */ `
 .sl-view3d{position:absolute;inset:0;z-index:4;opacity:0;touch-action:none;
   transition:opacity .3s ease;background:radial-gradient(120% 120% at 50% 0%,#191f28 0%,#0d1014 70%)}
 .sl-view3d canvas{display:block;width:100%;height:100%}
+.sl-view3d canvas:focus-visible{outline:2px solid var(--sl-accent);outline-offset:-3px}
+.sl-view3d-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;
+  z-index:1;color:#d9e2f2;font-size:13px;font-weight:700;letter-spacing:.02em;pointer-events:none}
+.sl-view3d-loading::before{content:"";width:18px;height:18px;border-radius:50%;
+  border:2px solid rgba(217,226,242,.28);border-top-color:#d9e2f2;animation:slSpin .8s linear infinite}
 [data-view3d=on] .sl-chips,[data-view3d=on] .sl-rungs{display:none}
 .sl-view3d-back{position:absolute;top:12px;left:12px;z-index:2;display:inline-flex;align-items:center;gap:6px;
   padding:7px 13px 7px 9px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.03em;
   color:#e6edf3;background:rgba(10,14,20,.62);border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(6px)}
 .sl-view3d-back:hover,.sl-view3d-back:focus-visible{background:rgba(16,22,30,.82);border-color:rgba(255,255,255,.4)}
 .sl-view3d-back svg{width:15px;height:15px;stroke:currentColor;stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.sl-view3d-fs{position:absolute;top:12px;right:12px;z-index:2;min-width:44px;min-height:44px;padding:8px 12px;
+  border-radius:999px;font-size:16px;color:#e6edf3;background:rgba(10,14,20,.62);
+  border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(6px)}
+.sl-view3d-fs:hover,.sl-view3d-fs:focus-visible{background:rgba(16,22,30,.82);border-color:rgba(255,255,255,.4)}
 /* Venue navigation inside 3D: levels (isolate a floor) and areas (fly to a zone).
    Bottom-LEFT, clear of the module's own chips (Overview bottom-right, 360
    bottom-centre) and of the bottom-sheeted confirm card. Horizontally scrollable
    so a venue with many zones never pushes the rail off a phone screen. */
 .sl-view3d-nav{position:absolute;left:12px;bottom:16px;z-index:3;display:flex;flex-direction:column;gap:6px;
-  max-width:calc(100% - 24px);pointer-events:none}
+  max-width:calc(100% - 150px);pointer-events:none}
 .sl-view3d-nav > div{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;pointer-events:auto;
   padding:1px;-webkit-overflow-scrolling:touch}
 .sl-view3d-nav > div::-webkit-scrollbar{display:none}
@@ -1195,6 +1253,21 @@ const CSS = /* @sl-css */ `
   border:1px solid rgba(150,165,205,.35);backdrop-filter:blur(6px);cursor:pointer}
 .sl-view3d-nav button:hover,.sl-view3d-nav button:focus-visible{color:#eef1f8;border-color:rgba(190,205,240,.6)}
 .sl-view3d-nav button[aria-pressed="true"]{background:var(--sl-accent);color:var(--sl-accent-ink);border-color:transparent}
+.sl-view3d-nav button:disabled{opacity:.45;cursor:not-allowed}
+.sl-view3d-nav select{min-height:38px;max-width:min(280px,calc(100vw - 40px));padding:7px 34px 7px 12px;
+  border-radius:999px;font:700 11.5px/1 inherit;color:#eef1f8;background:rgba(12,18,32,.86);
+  border:1px solid rgba(150,165,205,.45);backdrop-filter:blur(6px);cursor:pointer}
+.sl-view3d-nav select:focus-visible{outline:2px solid var(--sl-accent);outline-offset:2px}
+.sl-view3d-nav .sl-view3d-locator{display:grid;grid-template-columns:minmax(150px,1.25fr) minmax(110px,.8fr) minmax(105px,.7fr) auto;
+  width:min(720px,calc(100vw - 180px));overflow:visible}
+.sl-view3d-nav.is-seat-focused .sl-view3d-locator{display:none}
+.sl-view3d-locator select{width:100%;min-width:0}
+.sl-picker[data-layout="narrow"] .sl-view3d-nav .sl-view3d-locator{display:flex;width:calc(100vw - 24px);overflow-x:auto}
+.sl-picker[data-layout="narrow"] .sl-view3d-locator select{flex:0 0 155px}
+/* On phones the library owns the bottom edge for seat/panorama/overview actions.
+   Keep venue navigation in a separate top rail so those control families never
+   stack over one another. */
+.sl-picker[data-layout="narrow"] .sl-view3d-nav{top:68px;bottom:auto;max-width:calc(100% - 24px)}
 /* While immersed, the 2D-only chrome is meaningless — hide it, keep Map|3D. */
 .sl-picker[data-view3d="on"] .sl-rungs,
 .sl-picker[data-view3d="on"] .sl-floors,
@@ -1273,7 +1346,6 @@ const CSS = /* @sl-css */ `
 .sl-confirm-thumb-badge{position:absolute;right:7px;top:7px;display:inline-flex;align-items:center;gap:5px;
   font-size:10px;font-weight:700;color:#fff;background:rgba(10,14,22,0.72);border-radius:12px;padding:4px 9px;backdrop-filter:blur(3px)}
 .sl-confirm-sight{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--sl-muted);margin-bottom:2px}
-.sl-confirm-sight span{color:#22a06b;font-weight:800}
 .sl-confirm-view{width:100%;margin-top:9px;padding:8px;border-radius:8px;border:1px solid var(--sl-line);
   color:var(--sl-text);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;gap:7px}
 .sl-confirm-view:hover{border-color:var(--sl-muted)}
@@ -1368,6 +1440,11 @@ const CSS = /* @sl-css */ `
 /* modal host */
 .sl-modal-scrim{position:fixed;inset:0;z-index:2147483000;background:rgba(5,7,12,.66);display:flex;align-items:center;justify-content:center;padding:18px}
 .sl-modal-frame{width:min(1200px,100%);height:min(820px,100%);border-radius:16px;overflow:hidden;box-shadow:0 40px 120px -30px rgba(0,0,0,.8)}
+/* The frame already clips to 16px. A picker rounding itself to --sl-radius
+   (14px) inside it leaves a sliver of scrim showing at each corner, which
+   reads as a rendering fault rather than as a rounded card. One owner of the
+   corners, and it is the frame. */
+.sl-modal-frame > .sl-picker{border-radius:0}
 @media(max-width:640px){.sl-modal-scrim{padding:0}.sl-modal-frame{width:100%;height:100%;border-radius:0}}
 `;
 
@@ -1377,6 +1454,27 @@ function ensureStyle(): void {
   el.id = STYLE_ID;
   el.textContent = CSS;
   document.head.appendChild(el);
+}
+
+/**
+ * The header's start time, in the EVENT's zone.
+ *
+ * Exported for the test that pins the one rule this exists for: every surface
+ * that prints an event's start time prints the same time. A zone Intl cannot
+ * use throws, and the fallback is the reader's own clock — worse than the
+ * venue's, far better than a header with a hole in it.
+ */
+export function formatWhen(startsAt: number, timezone: string | null, locale?: string): string {
+  const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+  const at = new Date(startsAt);
+  if (timezone) {
+    try {
+      return at.toLocaleString(locale, { ...options, timeZone: timezone });
+    } catch {
+      /* falls through to the reader's own zone */
+    }
+  }
+  return at.toLocaleString(locale, options);
 }
 
 /** Merge order: defaults ← org chart theme ← host overrides. */
@@ -1572,8 +1670,8 @@ export class SeatPicker {
   /**
    * Eager sightline preview for the confirm card: the organizer's real view
    * photo, or — only when the chart has an actual stage to look at — a generated
-   * forward view plus an "≈ Nm to stage · clear sightline" line. On a stageless
-   * chart both the distance/sightline claim and the generic stage silhouette are
+   * forward view plus an approximate distance-to-stage line. On a stageless
+   * chart both the distance claim and the generic stage silhouette are
    * invented promises, so we suppress them; a real attached photo always shows.
    * (OV-52)
    */
@@ -1597,11 +1695,10 @@ export class SeatPicker {
         return '';
       }
     }
-    // The distance/sightline line is only truthful when a stage anchors it.
-    const sightHtml = hasStage
-      ? `<div class="sl-confirm-sight"><span aria-hidden="true">✓</span>${distance != null
-          ? t('picker.sightline', { m: distance })
-          : this.tf('picker.sightlineClear', 'Clear sightline')}</div>`
+    // Distance is geometric and defensible. Visibility is not: the procedural
+    // model has no columns, rails, overhangs or other obstruction geometry.
+    const sightHtml = hasStage && distance != null
+      ? `<div class="sl-confirm-sight">${t('picker.sightline', { m: distance })}</div>`
       : '';
     const viewBtn = realPhoto
       ? `<button type="button" class="sl-confirm-view sl-confirm-thumbwrap" aria-label="${t('picker.viewFromSeat', { label: seat.label })}">` +
@@ -1770,6 +1867,13 @@ export class SeatPicker {
     }
   }
 
+  private syncFullscreenButtons(): void {
+    const active = !!document.fullscreenElement || this.fsFallback || this.framedFs;
+    this.els.zfs?.setAttribute('aria-pressed', String(active));
+    this.view3dEl?.querySelector<HTMLButtonElement>('.sl-view3d-fs')
+      ?.setAttribute('aria-pressed', String(active));
+  }
+
   /**
    * Native element-fullscreen was unavailable or rejected. When framed, a CSS
    * `.sl-fs` overlay can't escape the iframe, so we ask the host page to pin us
@@ -1785,7 +1889,7 @@ export class SeatPicker {
   private setFramedFs(on: boolean): void {
     if (this.framedFs === on) return;
     this.framedFs = on;
-    this.els.zfs?.setAttribute('aria-pressed', String(on || !!document.fullscreenElement));
+    this.syncFullscreenButtons();
     this.postToHost({ type: 'seatlayer:fullscreen', on });
     if (on && !this.fsEscHandler) {
       this.fsEscHandler = (e: KeyboardEvent): void => {
@@ -1803,7 +1907,7 @@ export class SeatPicker {
     if (this.fsFallback === on) return;
     this.fsFallback = on;
     this.root?.classList.toggle('sl-fs', on);
-    this.els.zfs?.setAttribute('aria-pressed', String(on || !!document.fullscreenElement));
+    this.syncFullscreenButtons();
     if (on && !this.fsEscHandler) {
       this.fsEscHandler = (e: KeyboardEvent): void => {
         if (e.key === 'Escape' && !document.fullscreenElement) this.setFsFallback(false);
@@ -2165,7 +2269,7 @@ export class SeatPicker {
     this.els.zfs.addEventListener('click', () => this.toggleFullscreen());
     this.fsChangeHandler = (): void => {
       if (!document.fullscreenElement) this.setFsFallback(false);
-      this.els.zfs?.setAttribute('aria-pressed', String(!!document.fullscreenElement || this.fsFallback || this.framedFs));
+      this.syncFullscreenButtons();
       requestAnimationFrame(() => this.controller.zoomToFit());
     };
     document.addEventListener('fullscreenchange', this.fsChangeHandler);
@@ -2279,9 +2383,14 @@ export class SeatPicker {
     if (logoUrl) this.els.logo.innerHTML = `<img src="${logoUrl}" alt="">`;
     else this.els.logo.textContent = (this.opts.theme?.brandName ?? chartTheme?.brandName ?? info.eventName ?? '?').slice(0, 1).toUpperCase();
     this.els.name.textContent = info.eventName ?? '';
-    const when = info.startsAt
-      ? new Date(info.startsAt).toLocaleString(this.opts.locale, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-      : '';
+    // THE EVENT'S ZONE, NOT THE READER'S. This line used to format in whatever
+    // zone the browser happened to be in, while the hosted landing page around
+    // it formatted the same instant in the venue's — so one page showed a gig
+    // starting at two different times and gave a buyer no way to tell which one
+    // the doors follow. An unusable zone string (a typo, a name this engine has
+    // never heard of) throws inside Intl, and a header that cannot render is a
+    // worse answer than the reader's own clock, so that case falls through.
+    const when = info.startsAt ? formatWhen(info.startsAt, info.timezone ?? null, this.opts.locale) : '';
     this.els.meta.textContent = [info.venue, when].filter(Boolean).join(' · ');
 
     // "Powered by SeatLayer" attribution badge — hidden when the host opts out
@@ -2604,8 +2713,16 @@ export class SeatPicker {
     if (this.badgeHidden(chartTheme)) return;
     const foot = this.els.foot;
     if (!foot) return;
-    const el = document.createElement('div');
+    // An anchor, not a div: this badge is the only route from a buyer's seat
+    // map back to us, and SeatingChart's equivalent badge has always been a
+    // link — the two were inconsistent for no reason. Attribution that cannot
+    // be clicked is decoration.
+    const el = document.createElement('a');
     el.className = 'sl-powered';
+    el.href = 'https://seatlayer.io/?ref=picker';
+    el.target = '_blank';
+    el.rel = 'noopener noreferrer';
+    el.setAttribute('aria-label', this.tf('picker.poweredBy', 'Powered by SeatLayer'));
     el.innerHTML =
       `<span class="sl-powered-mark" aria-hidden="true">` +
       SEATLAYER_ATTRIBUTION_MARK_SVG +
@@ -3679,6 +3796,7 @@ export class SeatPicker {
     el.querySelector('.sl-confirm-3d')?.addEventListener('click', () => {
       if (this.buyerView === 'venue3d') {
         // Already immersed — just fly the cinematic to this seat.
+        this.dismissConfirm();
         void this.view3dHandle?.flyToSeat(seat.id);
       } else {
         // Enter 3D flying straight to the seat; re-show this card on return.
@@ -3773,13 +3891,24 @@ export class SeatPicker {
       ?? doc?.floors?.find((f) => f.id === activeId)?.focalPoint
       ?? doc?.focalPoint
       ?? { x: 0, y: 0 };
-    let panoUrl: string;
+    let panoSource: View3DSeatView;
     let caption: string;
     let real = false;
     if (seat.viewUrl) {
-      panoUrl = seat.viewUrl;
-      caption = t('picker.panorama360');
-      real = true;
+      const view: View3DSeatView = {
+        url: seat.viewUrl,
+        ...(seat.viewMeta?.previewUrl ? { previewUrl: seat.viewMeta.previewUrl } : {}),
+        ...(seat.viewMeta?.sourceWidth !== undefined ? { sourceWidth: seat.viewMeta.sourceWidth } : {}),
+        ...(seat.viewMeta?.sourceHeight !== undefined ? { sourceHeight: seat.viewMeta.sourceHeight } : {}),
+        ...(seat.viewMeta?.previewWidth !== undefined ? { previewWidth: seat.viewMeta.previewWidth } : {}),
+        ...(seat.viewMeta?.previewHeight !== undefined ? { previewHeight: seat.viewMeta.previewHeight } : {}),
+        ...(seat.viewMeta?.coverage ? { coverage: seat.viewMeta.coverage } : {}),
+        ...(seat.viewMeta?.capturedAt ? { capturedAt: seat.viewMeta.capturedAt } : {}),
+        ...(seat.viewMeta?.sourceLabel ? { sourceLabel: seat.viewMeta.sourceLabel } : {}),
+      };
+      panoSource = view;
+      caption = seatViewDisclosure(view);
+      real = isAuthoredSeatView(view);
     } else {
       let pano: PanoramaResult;
       try {
@@ -3793,7 +3922,7 @@ export class SeatPicker {
       }
       // Torn down (or another view opened) while the chunk loaded.
       if (!this.root || !this.seatViewEnabled()) return;
-      panoUrl = pano.url;
+      panoSource = { url: pano.url, generated: true };
       caption = t('picker.illustrationCaption', { m: pano.distanceM });
     }
 
@@ -3820,7 +3949,18 @@ export class SeatPicker {
     this.viewEl = el;
 
     const pano = el.querySelector<HTMLDivElement>('.sl-view-pano')!;
-    pano.style.backgroundImage = `url("${panoUrl}")`;
+    const delivery = planPanoramaDelivery(panoSource, browserPanoramaConstraints());
+    const loadAbort = new AbortController();
+    pano.style.backgroundImage = `url("${delivery.initialUrl}")`;
+    let cancelUpgrade = (): void => {};
+    if (delivery.upgradeUrl) {
+      cancelUpgrade = schedulePanoramaUpgrade(() => {
+        void loadPanoramaImage(delivery.upgradeUrl!, loadAbort.signal).then(() => {
+          if (!el.isConnected || loadAbort.signal.aborted) return;
+          pano.style.backgroundImage = `url("${delivery.upgradeUrl}")`;
+        }).catch(() => { /* retain the preview */ });
+      });
+    }
 
     // Equirectangular pan: repeat-x gives seamless 360° horizontal wrap. The
     // source is a full 180° sphere; showing it raw wastes ~⅔ of the frame on
@@ -3901,6 +4041,8 @@ export class SeatPicker {
     closeBtn.focus();
 
     this.viewCleanup = () => {
+      cancelUpgrade();
+      loadAbort.abort();
       pano.removeEventListener('pointerdown', onDown);
       pano.removeEventListener('pointermove', onMove);
       pano.removeEventListener('pointerup', onUp);
@@ -5133,10 +5275,7 @@ export class SeatPicker {
    *
    * Entering `'venue3d'` with `opts.flyToSeatId` runs the cinematic tour: the
    * camera flies to the seat and holds in the live scene (a chip offers the
-   * 360° view-from-seat) —
-   * the widget enters 3D and auto-flies the camera to that seat, dissolving into
-   * its view-from-seat panorama (the same chain as tapping "See the view from
-   * here" on a seat's confirm card). When the widget is **already** in the 3D
+   * 360° view-from-seat). When the widget is **already** in the 3D
    * view, the camera simply flies to the requested seat — the GL scene is not
    * torn down or rebuilt, so there is no flash or re-entry.
    *
@@ -5145,14 +5284,14 @@ export class SeatPicker {
    *
    * @param view              `'map'` for the flat picker, `'venue3d'` for the 3D venue.
    * @param opts.flyToSeatId  When entering (or already in) `'venue3d'`, the seat
-   *                          id to fly the camera to — cinematic → panorama.
+   *                          id to fly the camera to — cinematic → live seat view.
    *                          Ignored when `view` is `'map'`.
    *
    * @example
    * // Public 3D tour entry — enter 3D and fly straight to the buyer's seat:
    * picker.setBuyerView('venue3d', { flyToSeatId: 'A-12' });
    */
-  setBuyerView(view: 'map' | 'venue3d', opts?: { flyToSeatId?: string }): void {
+  setBuyerView(view: 'map' | 'venue3d', opts?: { flyToSeatId?: string; resetView?: boolean }): void {
     if (view === 'map') {
       this.exit3d();
       return;
@@ -5161,7 +5300,12 @@ export class SeatPicker {
     if (this.buyerView === 'venue3d') {
       // Already immersed — just fly the cinematic to the requested seat (if any),
       // without a jarring teardown/rebuild of the GL scene.
-      if (flyToSeatId) void this.view3dHandle?.flyToSeat(flyToSeatId);
+      if (flyToSeatId) {
+        this.opts.onBuyerViewChange?.({ view: 'venue3d', seatId: flyToSeatId });
+        void this.view3dHandle?.flyToSeat(flyToSeatId);
+      } else if (opts?.resetView) {
+        this.view3dHandle?.focusOverview();
+      }
       return;
     }
     // Enter 3D; when a seat is given, the cinematic flies straight to it.
@@ -5207,7 +5351,19 @@ export class SeatPicker {
   private async seatViewFor3d(seatId: string): Promise<View3DSeatView | null> {
     const seat = this.allSeats().find((s) => s.id === seatId);
     if (!seat) return null;
-    if (seat.viewUrl) return { url: seat.viewUrl };
+    if (seat.viewUrl) return {
+      url: seat.viewUrl,
+      ...(seat.viewMeta?.previewUrl ? { previewUrl: seat.viewMeta.previewUrl } : {}),
+      ...(seat.viewMeta?.sourceWidth !== undefined ? { sourceWidth: seat.viewMeta.sourceWidth } : {}),
+      ...(seat.viewMeta?.sourceHeight !== undefined ? { sourceHeight: seat.viewMeta.sourceHeight } : {}),
+      ...(seat.viewMeta?.previewWidth !== undefined ? { previewWidth: seat.viewMeta.previewWidth } : {}),
+      ...(seat.viewMeta?.previewHeight !== undefined ? { previewHeight: seat.viewMeta.previewHeight } : {}),
+      ...(seat.viewMeta?.initialBearingDeg !== undefined ? { initialBearingDeg: seat.viewMeta.initialBearingDeg } : {}),
+      ...(seat.viewMeta?.initialPitchDeg !== undefined ? { initialPitchDeg: seat.viewMeta.initialPitchDeg } : {}),
+      ...(seat.viewMeta?.coverage ? { coverage: seat.viewMeta.coverage } : {}),
+      ...(seat.viewMeta?.capturedAt ? { capturedAt: seat.viewMeta.capturedAt } : {}),
+      ...(seat.viewMeta?.sourceLabel ? { sourceLabel: seat.viewMeta.sourceLabel } : {}),
+    };
     const doc = this.controller.doc;
     if (!doc) return null;
     const activeId = this.controller.getActiveFloorId();
@@ -5219,7 +5375,7 @@ export class SeatPicker {
       // Async only for the lazy generator chunk; by the time a cinematic asks
       // for a view the buyer has already been in 3D for a second or more.
       const { generateSeatPanorama } = await loadPanorama();
-      return { url: generateSeatPanorama(seat, focal, this.allSeats()).url };
+      return { url: generateSeatPanorama(seat, focal, this.allSeats()).url, generated: true };
     } catch {
       return null;
     }
@@ -5244,15 +5400,29 @@ export class SeatPicker {
     }
     const seat = this.allSeats().find((s) => s.id === seatId);
     if (!seat) return;
+    const table = this.controller.tableSelection(seatId);
     // Tapping an already-committed seat clears it (mirrors the 2D toggle).
-    const already = this.committedSelection().some((s) => s.id === seatId);
+    const already = this.committedSelection().some((s) => table ? s.label === table.label : s.id === seatId);
     if (already) {
       this.controller.deselect([seatId]);
       this.dismissConfirm();
       return;
     }
+    const added = this.controller.select([seatId]); // programmatic select is silent
+    if (!added.length) {
+      // The GL picker optimistically highlighted the instance. Restore the
+      // controller's authoritative state when inventory rejects the tap.
+      this.syncSelectionTo3d();
+      this.dismissConfirm();
+      return;
+    }
+    this.opts.onBuyerViewChange?.({ view: 'venue3d', seatId });
     this.flashPickedSeat(seatId);
-    this.controller.select([seatId]); // programmatic select is silent → confirm ourselves
+    if (table) {
+      this.showTableDialog(table, false);
+      this.syncSelectionTo3d();
+      return;
+    }
     if (this.opts.confirmSelection !== false) this.showConfirm(seat);
     else this.syncTray();
   }
@@ -5275,20 +5445,29 @@ export class SeatPicker {
     const floors = handle.floors();
     // An empty zone has nothing to frame and `focusZone` refuses it — offering
     // a pill that cannot move the camera is worse than offering nothing.
-    const zones = handle.zones().filter((z) => z.seatCount > 0);
+    // Some multi-floor charts also expose each floor as a same-named zone. That
+    // is one venue concept represented twice, not two useful navigation rungs.
+    // Keep the level toggle and suppress its duplicate area action.
+    const floorLabels = new Set(floors.map((floor) => floor.label.trim().toLocaleLowerCase()));
+    const zones = handle.zones().filter((zone) => (
+      zone.seatCount > 0
+      && !floorLabels.has(zone.label.trim().toLocaleLowerCase())
+    ));
     // Zones are optional; sections are not. A chart that authors no zones (or
     // one) still needs a way to move around the venue, so the rail falls back to
-    // the rung below. Capped, because a 51-section arena is a list, not a rail —
-    // past that the buyer is better served by the 2D map's section navigation.
+    // the rung below. A long section list becomes one native jump control rather
+    // than being truncated or rendered as dozens of pills.
+    const allSections = handle.sections().filter((s) => s.seatCount > 0);
     const sections = zones.length > 1
       ? []
-      : handle.sections().filter((s) => s.seatCount > 0).slice(0, MAX_3D_SECTION_PILLS);
+      : allSections;
     // One of anything is not a choice — a single-floor, single-zone venue gets
     // no rail rather than a rail that does nothing.
     const wantFloors = floors.length > 1;
     const wantZones = zones.length > 1;
     const wantSections = sections.length > 1;
-    if (!wantFloors && !wantZones && !wantSections) return;
+    const wantLocator = allSections.length > 0 && handle.rows().length > 0;
+    if (!wantFloors && !wantZones && !wantSections && !wantLocator) return;
 
     const nav = document.createElement('div');
     nav.className = 'sl-view3d-nav';
@@ -5326,14 +5505,123 @@ export class SeatPicker {
       const entries: Array<{ id: string; label: string; go: () => void }> = wantZones
         ? zones.map((z) => ({ id: z.id, label: z.label || z.id, go: () => { handle.focusZone(z.id); } }))
         : sections.map((s) => ({ id: s.id, label: s.label || s.id, go: () => { handle.focusSection(s.id); } }));
-      for (const e of entries) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.textContent = e.label;
-        b.addEventListener('click', e.go);
-        row.appendChild(b);
+      if (!wantZones && entries.length > MAX_3D_SECTION_PILLS) {
+        const select = document.createElement('select');
+        select.setAttribute('aria-label', this.tf('picker.jumpToSection', 'Jump to section'));
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = this.tf('picker.jumpToSection', 'Jump to section');
+        select.appendChild(placeholder);
+        for (const entry of entries) {
+          const option = document.createElement('option');
+          option.value = entry.id;
+          option.textContent = entry.label;
+          select.appendChild(option);
+        }
+        select.addEventListener('change', () => {
+          entries.find((entry) => entry.id === select.value)?.go();
+        });
+        row.appendChild(select);
+      } else {
+        for (const e of entries) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = e.label;
+          b.addEventListener('click', e.go);
+          row.appendChild(b);
+        }
       }
       nav.appendChild(row);
+    }
+
+    if (wantLocator) {
+      const locator = document.createElement('div');
+      locator.className = 'sl-view3d-locator';
+      locator.setAttribute('role', 'group');
+      locator.setAttribute('aria-label', 'Find an exact seat in 3D');
+
+      const sectionSelect = document.createElement('select');
+      sectionSelect.setAttribute('aria-label', 'Choose section in 3D');
+      const rowSelect = document.createElement('select');
+      rowSelect.setAttribute('aria-label', 'Choose row in 3D');
+      const seatSelect = document.createElement('select');
+      seatSelect.setAttribute('aria-label', 'Choose seat in 3D');
+      const view = document.createElement('button');
+      view.type = 'button';
+      view.textContent = 'View seat';
+      view.disabled = true;
+
+      const fill = (
+        select: HTMLSelectElement,
+        placeholder: string,
+        entries: Array<{ id: string; label: string }>,
+      ): void => {
+        select.replaceChildren();
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = placeholder;
+        select.appendChild(first);
+        for (const entry of entries) {
+          const option = document.createElement('option');
+          option.value = entry.id;
+          option.textContent = entry.label;
+          select.appendChild(option);
+        }
+        select.value = '';
+      };
+
+      fill(sectionSelect, '1. Section', allSections.map((section) => ({
+        id: section.id,
+        label: `${section.label} · ${section.seatCount.toLocaleString()} seats`,
+      })));
+      fill(rowSelect, '2. Row', []);
+      fill(seatSelect, '3. Seat', []);
+      rowSelect.disabled = true;
+      seatSelect.disabled = true;
+
+      sectionSelect.addEventListener('change', () => {
+        const sectionId = sectionSelect.value;
+        view.disabled = true;
+        fill(seatSelect, '3. Seat', []);
+        seatSelect.disabled = true;
+        if (!sectionId || !handle.focusSection(sectionId)) {
+          fill(rowSelect, '2. Row', []);
+          rowSelect.disabled = true;
+          return;
+        }
+        const rows = handle.rows(sectionId);
+        fill(rowSelect, '2. Row', rows.map((row) => ({
+          id: row.id,
+          label: `${row.label} · ${row.seatCount} seats`,
+        })));
+        rowSelect.disabled = rows.length === 0;
+      });
+
+      rowSelect.addEventListener('change', () => {
+        const rowId = rowSelect.value;
+        view.disabled = true;
+        if (!rowId || !handle.focusRow(rowId)) {
+          fill(seatSelect, '3. Seat', []);
+          seatSelect.disabled = true;
+          return;
+        }
+        const seats = handle.seatsInRow(rowId);
+        fill(seatSelect, '3. Seat', seats);
+        seatSelect.disabled = seats.length === 0;
+      });
+
+      seatSelect.addEventListener('change', () => {
+        const seatId = seatSelect.value;
+        view.disabled = !seatId;
+        handle.setSelection(seatId ? [seatId] : []);
+      });
+      view.addEventListener('click', () => {
+        const seatId = seatSelect.value;
+        if (seatId) void handle.flyToSeat(seatId);
+      });
+
+      locator.append(sectionSelect, rowSelect, seatSelect, view);
+      nav.appendChild(locator);
     }
 
     overlay.appendChild(nav);
@@ -5344,6 +5632,7 @@ export class SeatPicker {
     const doc = this.controller.doc;
     if (!doc) return;
     this.buyerView = 'venue3d';
+    this.opts.onBuyerViewChange?.({ view: 'venue3d', ...(flySeatId ? { seatId: flySeatId } : {}) });
     this.root?.setAttribute('data-view3d', 'on');
     this.dismissConfirm();
     this.syncProjection();
@@ -5360,6 +5649,20 @@ export class SeatPicker {
       + `<span>${this.tf('picker.backToMap', 'Back to map')}</span>`;
     back.addEventListener('click', () => this.exit3d());
     overlay.appendChild(back);
+    const fullscreen = document.createElement('button');
+    fullscreen.type = 'button';
+    fullscreen.className = 'sl-view3d-fs';
+    fullscreen.textContent = '⛶';
+    fullscreen.setAttribute('aria-label', 'Full screen');
+    fullscreen.setAttribute('aria-pressed', String(!!document.fullscreenElement || this.fsFallback || this.framedFs));
+    fullscreen.addEventListener('click', () => this.toggleFullscreen());
+    overlay.appendChild(fullscreen);
+    const loading = document.createElement('div');
+    loading.className = 'sl-view3d-loading';
+    loading.setAttribute('role', 'status');
+    loading.setAttribute('aria-live', 'polite');
+    loading.textContent = this.tf('picker.loading3d', 'Building the 3D venue…');
+    overlay.appendChild(loading);
     this.els.map.appendChild(overlay);
     this.view3dEl = overlay;
     requestAnimationFrame(() => { overlay.style.opacity = '1'; });
@@ -5370,8 +5673,34 @@ export class SeatPicker {
       const mod = await loadVenue3d();
       // Left 3D (or was torn down) while the OGL chunk loaded → abandon.
       if (gen !== this.view3dGen || this.buyerView !== 'venue3d' || this.view3dEl !== overlay) return;
-      const handle = mod.mountVenue3D(overlay, { doc, seats }, {
+      const prepared = await mod.prepareVenue3D({ doc, seats });
+      if (gen !== this.view3dGen || this.buyerView !== 'venue3d' || this.view3dEl !== overlay) return;
+      const handle = mod.mountVenue3D(overlay, { doc, seats, prepared }, {
+        // A strict contain fit turns a wide bowl into a postage stamp inside a
+        // phone. The bounded portrait fit was validated against every UX-lab
+        // fixture; keep editor previews strict while making buyer seats legible.
+        portraitOverviewCrop: true,
         onSeatPick: (id) => this.onView3dSeatPick(id),
+        onSectionFocusChange: (sectionId) => {
+          // A stand clicked directly in the 3D overview must drive the same
+          // Section → Row → Seat ladder as the exact-seat control. Dispatching
+          // change populates the row list; the equality guard prevents the
+          // callback from looping when that handler re-focuses the camera.
+          const select = overlay.querySelector<HTMLSelectElement>(
+            'select[aria-label="Choose section in 3D"]',
+          );
+          const next = sectionId ?? '';
+          if (!select || select.value === next) return;
+          select.value = next;
+          select.dispatchEvent(new Event('change'));
+        },
+        onViewTargetChange: (seatId) => {
+          overlay.querySelector('.sl-view3d-nav')?.classList.toggle('is-seat-focused', !!seatId);
+          this.opts.onBuyerViewChange?.({
+            view: 'venue3d',
+            ...(seatId ? { seatId } : {}),
+          });
+        },
         // Deferred off the tap gesture: generateSeatPanorama walks every seat
         // (O(n) on a 13k chart), and the module prefetches at pick — by the
         // time the flight lands (~2.5s) the idle render has long finished. A
@@ -5392,12 +5721,15 @@ export class SeatPicker {
         onAnalytics: (event, props) => this.emit3dAnalytics(event, props),
       });
       this.view3dHandle = handle;
+      loading.remove();
       this.pushAvailabilityTo3d();
       this.syncSelectionTo3d();
       this.buildView3dNav(overlay, handle);
       if (flySeatId) void handle.flyToSeat(flySeatId);
     } catch (err) {
+      if (gen !== this.view3dGen || this.buyerView !== 'venue3d' || this.view3dEl !== overlay) return;
       this.opts.onError?.(err);
+      this.toast(this.tf('picker.unavailable3d', '3D could not start. The seat map is still available.'), 'warning');
       this.exit3d();
     }
   }
@@ -5406,6 +5738,7 @@ export class SeatPicker {
     if (this.buyerView !== 'venue3d' && !this.view3dEl) return;
     this.view3dGen++; // supersede any in-flight mount
     this.buyerView = 'map';
+    this.opts.onBuyerViewChange?.({ view: 'map' });
     this.root?.removeAttribute('data-view3d');
     try { this.view3dHandle?.dispose(); } catch { /* GL teardown best-effort */ }
     this.view3dHandle = null;
