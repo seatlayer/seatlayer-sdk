@@ -1242,7 +1242,21 @@ const CSS = /* @sl-css */ `
 /* Venue navigation inside 3D: levels (isolate a floor) and areas (fly to a zone).
    Bottom-LEFT, clear of the module's own chips (Overview bottom-right, 360
    bottom-centre) and of the bottom-sheeted confirm card. Horizontally scrollable
-   so a venue with many zones never pushes the rail off a phone screen. */
+   so a venue with many zones never pushes the rail off a phone screen.
+
+   EVERY WIDTH HERE IS RELATIVE TO THE RAIL, NEVER TO THE WINDOW. These three
+   rules used to size off 100vw, which contradicts the one contract this widget
+   states about itself: it adapts to a full-screen takeover, an inline div in a
+   content page, or a popup, and its breakpoints key off the CONTAINER, never the
+   viewport. A 390 px picker embedded in a 1400 px page asked for
+   calc(100vw - 180px) = 1220 inside a 390 px rail.
+
+   MEASURED, IT DID NOT OVERFLOW: the scroll parent is a flex container, so the
+   over-large declaration was shrunk back to the rail and both the old and new
+   rules resolve to 364 px in situ. So this is a latent correctness fix, not a
+   visible bug -- the numbers were wrong and were being covered for by a
+   flex-shrink one level up. Left as 100% because the next person to change that
+   parent's display should not inherit a rule that only works by accident. */
 .sl-view3d-nav{position:absolute;left:12px;bottom:16px;z-index:3;display:flex;flex-direction:column;gap:6px;
   max-width:calc(100% - 150px);pointer-events:none}
 .sl-view3d-nav > div{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;pointer-events:auto;
@@ -1254,15 +1268,15 @@ const CSS = /* @sl-css */ `
 .sl-view3d-nav button:hover,.sl-view3d-nav button:focus-visible{color:#eef1f8;border-color:rgba(190,205,240,.6)}
 .sl-view3d-nav button[aria-pressed="true"]{background:var(--sl-accent);color:var(--sl-accent-ink);border-color:transparent}
 .sl-view3d-nav button:disabled{opacity:.45;cursor:not-allowed}
-.sl-view3d-nav select{min-height:38px;max-width:min(280px,calc(100vw - 40px));padding:7px 34px 7px 12px;
+.sl-view3d-nav select{min-height:38px;max-width:100%;padding:7px 34px 7px 12px;
   border-radius:999px;font:700 11.5px/1 inherit;color:#eef1f8;background:rgba(12,18,32,.86);
   border:1px solid rgba(150,165,205,.45);backdrop-filter:blur(6px);cursor:pointer}
 .sl-view3d-nav select:focus-visible{outline:2px solid var(--sl-accent);outline-offset:2px}
 .sl-view3d-nav .sl-view3d-locator{display:grid;grid-template-columns:minmax(150px,1.25fr) minmax(110px,.8fr) minmax(105px,.7fr) auto;
-  width:min(720px,calc(100vw - 180px));overflow:visible}
+  width:min(720px,100%);overflow:visible}
 .sl-view3d-nav.is-seat-focused .sl-view3d-locator{display:none}
 .sl-view3d-locator select{width:100%;min-width:0}
-.sl-picker[data-layout="narrow"] .sl-view3d-nav .sl-view3d-locator{display:flex;width:calc(100vw - 24px);overflow-x:auto}
+.sl-picker[data-layout="narrow"] .sl-view3d-nav .sl-view3d-locator{display:flex;width:100%;overflow-x:auto}
 .sl-picker[data-layout="narrow"] .sl-view3d-locator select{flex:0 0 155px}
 /* On phones the library owns the bottom edge for seat/panorama/overview actions.
    Keep venue navigation in a separate top rail so those control families never
@@ -2291,10 +2305,35 @@ export class SeatPicker {
         e.stopPropagation();
         setSheet(root.dataset.sheet !== 'open');
       });
+      /* Delegated, because the pill is re-rendered on every selection change and
+         a listener bound to the node would be lost with it. */
+      this.els.peek?.addEventListener('click', (e) => {
+        const go = (e.target as HTMLElement).closest<HTMLElement>('.sl-sheet-go');
+        if (!go) return;
+        e.stopPropagation();
+        if (go.dataset.act === 'checkout') void this.handleCta();
+        else setSheet(true);
+      });
       let startY = 0;
       let swiped = false;
       let tracking = false;
       head.addEventListener('pointerdown', (e: PointerEvent) => {
+        /* THE CHEVRON DOUBLE-TOGGLED AND SO APPEARED DEAD.
+           This handler captures the pointer, and capture RETARGETS every later
+           event for it to the capturing element. So the pointerup below saw
+           `e.target === head`, its `closest('.sl-sheet-toggle')` guard returned
+           null, and the head toggled the sheet — then the button's own click
+           toggled it back. Two toggles, no net change, and an owner reporting
+           that tapping the arrow does nothing.
+
+           The guard has to run HERE, where the target is still the real hit
+           element: capture is set on this very line, so pointerdown is the last
+           moment the truth is available. A press that starts on the toggle (or
+           on a section card) is left entirely to that control. */
+        if ((e.target as HTMLElement).closest?.('.sl-seccard,.sl-sheet-toggle,.sl-sheet-go')) {
+          tracking = false;
+          return;
+        }
         tracking = true;
         swiped = false;
         startY = e.clientY;
@@ -2312,8 +2351,11 @@ export class SeatPicker {
         }
       });
       head.addEventListener('pointerup', (e: PointerEvent) => {
+        // The guard now lives in pointerdown, where the target has not been
+        // retargeted by capture. Reaching here at all means the press did not
+        // start on a control of its own.
         if (tracking && !swiped && Math.abs(e.clientY - startY) < 6) {
-          if (!(e.target as HTMLElement).closest('.sl-seccard,.sl-sheet-toggle')) setSheet(root.dataset.sheet !== 'open');
+          setSheet(root.dataset.sheet !== 'open');
         }
         tracking = false;
         head.releasePointerCapture?.(e.pointerId);
@@ -2582,13 +2624,23 @@ export class SeatPicker {
     const narrow = this.root?.dataset.layout === 'narrow';
     const filters = this.els.filters;
     if (filters) {
+      /* THE COLOURBLIND TOGGLE IS A MAP CONTROL, NOT A CART ROW.
+         It used to dock into the sheet on narrow, and the result was a FILTERS
+         section heading standing over a single 32 px eye — placed between the
+         buyer's tickets and their checkout. Measured on a 390 px phone: 29 px of
+         heading plus a 44 px row, 73 of a 252 px sheet, to caption one icon. The
+         second ticket of two was pushed out of the tray to pay for it.
+
+         It lives with the zoom cluster in BOTH layouts now. Nothing is lost —
+         the toggle is where the map it recolours is. */
+      if (this.cbEl) this.els.zoom?.appendChild(this.cbEl);
       if (narrow) {
         if (this.a11yChipsEl) filters.appendChild(this.a11yChipsEl);
-        if (this.cbEl) filters.appendChild(this.cbEl);
       } else {
         if (this.a11yChipsEl) this.regions['top-left']?.appendChild(this.a11yChipsEl);
-        if (this.cbEl) this.els.zoom?.appendChild(this.cbEl);
       }
+      /* So FILTERS now appears only when there are real accessibility filters to
+         show, and never as a caption for chrome that had nowhere else to go. */
       const has = narrow && filters.children.length > 0;
       filters.classList.toggle('has', has);
       this.els.filtersSec?.classList.toggle('has', has);
@@ -4611,16 +4663,33 @@ export class SeatPicker {
       if (count) {
         // Sheet state is shown by the persistent chevron in the head; the pill is
         // the action affordance ("Continue"/"Review") — no inline text arrow.
+        /* THE PILL IS A BUTTON, AND IT DOES WHAT IT SAYS.
+           It was a <span class="go"> — role null, tabIndex -1, cursor:pointer.
+           Dressed as a control and reachable by neither keyboard nor assistive
+           tech, its taps fell through to the sheet head, which merely toggled the
+           panel. So "Continue" closed the sheet and "Best seats" did nothing,
+           which is exactly what the owner reported.
+
+           With a hold and nothing pending, "Continue" IS the checkout — the same
+           handleCta the footer button runs. That also answers the second half of
+           the report: the footer lives inside the sheet and is hidden at peek, so
+           a buyer with seats held had no visible way to pay. Now the collapsed
+           bar is the way to pay. */
+        const holding = !!this.hold && !pendingCount;
         this.els.peek.innerHTML =
           `<span>${count} ${count === 1 ? 'ticket' : 'tickets'} · ${this.money(total)}</span>` +
-          `<span class="go">${this.hold ? (pendingCount ? 'Secure more' : 'Continue') : 'Review'}</span>`;
+          `<button type="button" class="go sl-sheet-go" data-act="${holding ? 'checkout' : 'open'}">` +
+          `${this.hold ? (pendingCount ? 'Secure more' : 'Continue') : 'Review'}</button>`;
       } else {
         const prices = (this.controller.doc?.categories ?? [])
           .map((c) => this.catPrice(c))
           .filter((p): p is number => p != null);
+        /* Best-available is a FORM, not a verb — quantity, ticket type and zone
+           are chosen first — so this opens the sheet at those controls rather
+           than guessing a pick on the buyer's behalf. */
         this.els.peek.innerHTML =
           (prices.length ? `<span>From ${this.money(Math.min(...prices))}</span>` : '<span>Pick your seats</span>') +
-          `<span class="go">✦ Best seats</span>`;
+          `<button type="button" class="go sl-sheet-go" data-act="open">✦ Best seats</button>`;
       }
     }
     // Keep the mobile map stable after selection. The persistent Review pill
