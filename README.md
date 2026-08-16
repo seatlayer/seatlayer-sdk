@@ -44,6 +44,9 @@ pnpm verify
 The wrappers resolve the released `@seatlayer/js` runtime from npm. Runtime
 changes are released independently before wrapper dependency versions move.
 
+See [MIGRATION.md](./MIGRATION.md) for repository ownership, release order,
+artifact rules, and the `0.52.x` to `0.53.0` migration boundary.
+
 ## Security
 
 Never expose a SeatLayer secret key in browser or mobile code. See
