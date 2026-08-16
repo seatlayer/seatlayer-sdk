@@ -14,6 +14,7 @@ import {
   type SeatPickerBuyerView,
   type SeatPickerBuyerViewOptions,
   type PickerMapTheme,
+  type PickerSelectionValidity,
   type RendererViewMode,
   type SelectedSeat,
   type HoldResult,
@@ -27,6 +28,7 @@ export type {
   SeatPickerBuyerView,
   SeatPickerBuyerViewOptions,
   PickerMapTheme,
+  PickerSelectionValidity,
   RendererViewMode,
   CheckoutHandoff,
   CheckoutLineItem,
@@ -38,6 +40,22 @@ export interface SeatPickerHandle {
   close(): void;
   /** Current selection with resolved prices. */
   getSelection(): SelectedSeat[];
+  /** Select free objects by engine id or public label. */
+  selectObjects(objects: string[]): SelectedSeat[];
+  /** Deselect objects by engine id or public label. */
+  deselectObjects(objects: string[]): void;
+  /** Clear every unheld selection. */
+  clearSelection(): void;
+  /** Select every selectable object in the named categories. */
+  selectCategories(categoryKeys: string[]): SelectedSeat[];
+  /** Deselect every selected object in the named categories. */
+  deselectCategories(categoryKeys: string[]): void;
+  /** Replace the buyer-selectable object allow-list without remounting. */
+  setSelectableObjects(objects: string[] | null): void;
+  /** Change the active selection cap without remounting. */
+  setMaxSelection(maxSelection: number): void;
+  /** Current exact-count validity, or null when exact selection is disabled. */
+  getSelectionValidity(): PickerSelectionValidity | null;
   /** Server-side best seats + hold, reflected in the widget tray. */
   bestAvailable(
     qty: number,
@@ -91,7 +109,7 @@ export interface SeatPickerProps extends Omit<SeatPickerOptions, 'container'> {
  */
 export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
   function SeatPicker(props, ref) {
-    const { className, style, event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView, checkout } = props;
+    const { className, style, event, apiBase, maxSelection, selectedObjects, selectableObjects, numberOfPlacesToSelect, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView, checkout } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const pickerRef = useRef<CoreSeatPicker | null>(null);
@@ -118,6 +136,10 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         onCheckout: (hold, seats, handoff) => callbacks.current.onCheckout?.(hold, seats, handoff),
         onBooked: (handoff) => callbacks.current.onBooked?.(handoff),
         onSelectionChange: (seats) => callbacks.current.onSelectionChange?.(seats),
+        onSelectionValidityChange: (state) => callbacks.current.onSelectionValidityChange?.(state),
+        onSelectionValid: (seats) => callbacks.current.onSelectionValid?.(seats),
+        onSelectionInvalid: (state) => callbacks.current.onSelectionInvalid?.(state),
+        onSelectionLimit: (max) => callbacks.current.onSelectionLimit?.(max),
         onHoldChange: (hold, seats, handoff) => callbacks.current.onHoldChange?.(hold, seats, handoff),
         onHoldExpired: () => callbacks.current.onHoldExpired?.(),
         onHoldRestored: (hold, seats, handoff) => callbacks.current.onHoldRestored?.(hold, seats, handoff),
@@ -158,13 +180,21 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
       // pass them as inline literals, so a new identity every render would tear
       // the widget down mid-selection. They are read fresh at construction.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [event, apiBase, maxSelection, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView, checkout]);
+    }, [event, apiBase, maxSelection, numberOfPlacesToSelect, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView, checkout]);
 
     useImperativeHandle(
       ref,
       (): SeatPickerHandle => ({
         close: () => closeRef.current?.(),
         getSelection: () => pickerRef.current?.getSelection() ?? [],
+        selectObjects: (objects) => pickerRef.current?.selectObjects(objects) ?? [],
+        deselectObjects: (objects) => pickerRef.current?.deselectObjects(objects),
+        clearSelection: () => pickerRef.current?.clearSelection(),
+        selectCategories: (categoryKeys) => pickerRef.current?.selectCategories(categoryKeys) ?? [],
+        deselectCategories: (categoryKeys) => pickerRef.current?.deselectCategories(categoryKeys),
+        setSelectableObjects: (objects) => pickerRef.current?.setSelectableObjects(objects),
+        setMaxSelection: (max) => pickerRef.current?.setMaxSelection(max),
+        getSelectionValidity: () => pickerRef.current?.getSelectionValidity() ?? null,
         bestAvailable: (qty, categoryKey, options) =>
           pickerRef.current?.bestAvailable(qty, categoryKey, options) ?? Promise.resolve(null),
         getCurrentHold: () => pickerRef.current?.getCurrentHold() ?? null,

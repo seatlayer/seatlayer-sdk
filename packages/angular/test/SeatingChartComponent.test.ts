@@ -54,6 +54,8 @@ const ANGULAR_METHOD_NAMES: Record<string, string> = {
 /** Handle methods declared `: void` — they forward the call and return nothing. */
 const VOID_METHODS = new Set<string>([
   'setSeatTier', 'setFloor', 'setColorblindSafe', 'zoomIn', 'zoomOut', 'zoomToFit',
+  'deselectObjects', 'clearSelection', 'deselectCategories', 'setSelectableObjects',
+  'setMaxSelection',
 ]);
 
 type Component = Record<string, unknown> & {
@@ -78,7 +80,8 @@ async function makeComponent(inputs: Record<string, unknown> = {}): Promise<Comp
   for (const output of [
     'selectionChange', 'hold', 'holdRestored', 'holdExpired', 'gaClick', 'errored',
     'deckTap', 'hint', 'seatHover', 'accessExpired', 'accessUnavailable',
-    'selectedObjectUnavailable',
+    'selectedObjectUnavailable', 'selectionValidityChange', 'selectionValid',
+    'selectionInvalid', 'selectionLimit',
   ]) {
     if (!(output in component)) component[output] = { emit: vi.fn() };
   }

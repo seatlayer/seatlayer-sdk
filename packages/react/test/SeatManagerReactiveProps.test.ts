@@ -17,6 +17,11 @@ class MockManager {
   setTokenRefresh = vi.fn();
   setMode = vi.fn();
   setFollowLive = vi.fn();
+  setSelectableObjects = vi.fn();
+  setUnavailableObjectsSelectable = vi.fn();
+  setMaxSelectedObjects = vi.fn();
+  setNumberOfPlacesToSelect = vi.fn();
+  setObjectSelectable = vi.fn();
 
   constructor(options: Record<string, unknown>) {
     this.options = options;
