@@ -1,0 +1,25 @@
+{
+  "name": "seatlayer-sdk-public",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Public framework wrappers, examples, and documentation for the SeatLayer SDK.",
+  "type": "module",
+  "scripts": {
+    "boundary:check": "node scripts/check-public-boundary.mjs",
+    "check:version": "node scripts/check-release-version.mjs",
+    "build": "pnpm boundary:check && pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "lint:packages": "publint packages/react && publint packages/vue && publint packages/angular && attw --pack packages/react && attw --pack packages/vue && attw --pack packages/angular --ignore-rules cjs-resolves-to-esm false-cjs",
+    "publish:packages": "node scripts/publish-packages.mjs",
+    "verify": "pnpm build && pnpm typecheck && pnpm test && pnpm lint:packages"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "jsdom": "^26.1.0",
+    "publint": "0.3.21",
+    "typescript": "^5.9.0",
+    "vitest": "~4.1.10"
+  },
+  "packageManager": "pnpm@11.10.0"
+}
