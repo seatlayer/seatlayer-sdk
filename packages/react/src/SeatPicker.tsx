@@ -109,7 +109,7 @@ export interface SeatPickerProps extends Omit<SeatPickerOptions, 'container'> {
  */
 export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
   function SeatPicker(props, ref) {
-    const { className, style, event, apiBase, maxSelection, selectedObjects, selectableObjects, numberOfPlacesToSelect, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView, checkout } = props;
+    const { className, style, event, apiBase, maxSelection, selectedObjects, selectableObjects, numberOfPlacesToSelect, selectionValidators, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView, checkout } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const pickerRef = useRef<CoreSeatPicker | null>(null);
@@ -180,7 +180,7 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
       // pass them as inline literals, so a new identity every render would tear
       // the widget down mid-selection. They are read fresh at construction.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [event, apiBase, maxSelection, numberOfPlacesToSelect, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView, checkout]);
+    }, [event, apiBase, maxSelection, numberOfPlacesToSelect, selectionValidators, publicKey, locale, currency, colorblindSafe, hideBadge, holdTtlMs, initialHoldId, restoreHold, confirmSelection, seatView, checkout]);
 
     useImperativeHandle(
       ref,

@@ -65,6 +65,7 @@ async function checkout() {
 | `selectedObjects` | `string[]` | Initial object ids or public labels. |
 | `selectableObjects` | `string[] \| null` | Buyer-selectable allow-list. |
 | `numberOfPlacesToSelect` | `number` | Exact count required for a valid selection. |
+| `selectionValidators` | `PickerSelectionValidator[]` | Minimum, consecutive-seat, and no-orphan guards. |
 | `publicKey` | `string` | Reserved compatibility input; stored by the chart but not transmitted to SeatLayer. |
 | `locale` | `string` | BCP-47 locale for built-in copy. |
 | `currency` | `string` | ISO currency for price formatting. |
@@ -72,7 +73,7 @@ async function checkout() {
 | `seatTooltip` | `boolean` | Set `false` to draw your own popover from `@seat-hover`. |
 | `messages` | `object` | Copy overrides. Read once per rebuild. |
 
-`numberOfPlacesToSelect` and the other primitive identity props rebuild the
+`numberOfPlacesToSelect`, `selectionValidators`, and the other identity props rebuild the
 canvas. `selectedObjects` and `selectableObjects` are initial values; use the
 imperative methods for later changes so a new array identity cannot remount the
 chart mid-selection.
@@ -82,8 +83,8 @@ chart mid-selection.
 | Event | Payload |
 | --- | --- |
 | `@selection-change` | `SelectedSeat[]` |
-| `@selection-validity-change` | Exact-count state |
-| `@selection-valid` / `@selection-invalid` | Exact-count transition |
+| `@selection-validity-change` | Rule state with typed `violations` |
+| `@selection-valid` / `@selection-invalid` | Rule-validity transition |
 | `@selection-limit` | Active numeric cap |
 | `@hold` | `HoldResult` |
 | `@hold-restored` | `HoldResult` |

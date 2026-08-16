@@ -85,8 +85,9 @@ Extends the vanilla SDK options minus `container` (the component owns its own mo
 | `selectedObjects` | `string[]?` | Initial object ids or public labels. |
 | `selectableObjects` | `string[] \| null` | Buyer-selectable allow-list. |
 | `numberOfPlacesToSelect` | `number?` | Exact count required for a valid selection. |
+| `selectionValidators` | `PickerSelectionValidator[]?` | Minimum, consecutive-seat, and no-orphan guards. |
 | `onSelectionChange` | `(seats) => void` | Fires when the selection changes. |
-| `onSelectionValidityChange` | `(state) => void` | Exact-count state after selection changes. |
+| `onSelectionValidityChange` | `(state) => void` | Rule state and typed `violations` after selection changes. |
 | `onHold` | `(result) => void` | Fires when seats are held; hand `holdId` to your server. |
 | `onHoldRestored` | `(result) => void` | Fires after `resumeHold()` verifies an active hold. |
 | `onError` | `(err) => void` | Fires on errors. |
@@ -94,7 +95,7 @@ Extends the vanilla SDK options minus `container` (the component owns its own mo
 
 Changing a callback prop does **not** rebuild the canvas. `selectedObjects` and
 `selectableObjects` are initial values; use the imperative methods for later
-changes. The primitive exact-count prop rebuilds the chart.
+changes. Exact count and validator props rebuild the chart.
 
 ## The model
 

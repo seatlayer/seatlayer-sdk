@@ -186,10 +186,12 @@ describe('@seatlayer/angular SeatingChart — rebuild policy', () => {
   it('forwards initialView and errorDisplay into the core options', async () => {
     const component = await makeComponent({
       event: 'ev_1', initialView: 'flat', errorDisplay: 'none', seatTooltip: false,
+      selectionValidators: [{ type: 'noOrphanSeats' }],
     });
     component.ngOnChanges(changes('event'));
     expect(constructed[0]).toMatchObject({
       event: 'ev_1', initialView: 'flat', errorDisplay: 'none', seatTooltip: false,
+      selectionValidators: [{ type: 'noOrphanSeats' }],
     });
   });
 });
