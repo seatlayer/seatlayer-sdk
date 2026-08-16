@@ -1,6 +1,6 @@
 {
   "name": "@seatlayer/vue",
-  "version": "0.53.0",
+  "version": "0.54.0",
   "description": "Vue 3 SeatLayer SDK \u2014 one native SeatingChart wrapper plus raw JS SeatPickerWidget and iframe helper.",
   "license": "MIT",
   "homepage": "https://docs.seatlayer.io/buyer-sdk/seat-picker/",
@@ -47,8 +47,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@seatlayer/core": "0.53.0",
-    "@seatlayer/js": "0.53.0"
+    "@seatlayer/core": "0.54.0",
+    "@seatlayer/js": "0.54.0"
   },
   "peerDependencies": {
     "vue": ">=3.3.0"
