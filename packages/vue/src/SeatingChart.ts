@@ -22,6 +22,7 @@ import {
   type GAAreaAvailability,
   type SeatHoverDetails,
   type PickerSelectionValidity,
+  type PickerSelectionValidator,
   type BuyerAccessToken,
   type BuyerAccessTokenProvider,
   type BuyerAccessExpiredEvent,
@@ -87,6 +88,8 @@ export const SeatingChart = defineComponent({
     selectableObjects: { type: Array as PropType<string[] | null>, default: undefined },
     /** Exact ticket count required for a valid selection. */
     numberOfPlacesToSelect: { type: Number, default: undefined },
+    /** Local buyer selection guards. Changing them rebuilds the chart. */
+    selectionValidators: { type: Array as PropType<PickerSelectionValidator[]>, default: undefined },
     /** Publishable key, when your integration uses one. */
     publicKey: { type: String, default: undefined },
     /** BCP-47 locale for built-in copy. */
@@ -225,6 +228,7 @@ export const SeatingChart = defineComponent({
           selectedObjects: props.selectedObjects,
           selectableObjects: props.selectableObjects,
           numberOfPlacesToSelect: props.numberOfPlacesToSelect,
+          selectionValidators: props.selectionValidators,
           publicKey: props.publicKey,
           locale: props.locale,
           currency: props.currency,

@@ -36,23 +36,31 @@ afterEach(() => {
 });
 
 describe('SeatingChart prop forwarding', () => {
-  it('forwards initialView and errorDisplay, and remounts when either initial policy changes', async () => {
+  it('forwards selection policy and remounts when an identity policy changes', async () => {
     const { SeatingChart } = await import('../src/SeatingChart');
+    const initialValidators = [{ type: 'minimumSelectedPlaces' as const, minimum: 2 }];
     await act(async () => {
       root.render(createElement(SeatingChart, {
         event: 'ev_1', initialView: 'flat', errorDisplay: 'none',
+        selectionValidators: initialValidators,
       }));
     });
     expect(constructed).toHaveLength(1);
-    expect(constructed[0]).toMatchObject({ initialView: 'flat', errorDisplay: 'none' });
+    expect(constructed[0]).toMatchObject({
+      initialView: 'flat', errorDisplay: 'none', selectionValidators: initialValidators,
+    });
 
+    const nextValidators = [{ type: 'consecutiveSeats' as const }];
     await act(async () => {
       root.render(createElement(SeatingChart, {
         event: 'ev_1', initialView: 'isometric', errorDisplay: 'message',
+        selectionValidators: nextValidators,
       }));
     });
     expect(constructed).toHaveLength(2);
     expect(destroyed).toHaveLength(1);
-    expect(constructed[1]).toMatchObject({ initialView: 'isometric', errorDisplay: 'message' });
+    expect(constructed[1]).toMatchObject({
+      initialView: 'isometric', errorDisplay: 'message', selectionValidators: nextValidators,
+    });
   });
 });

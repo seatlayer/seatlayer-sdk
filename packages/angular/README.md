@@ -67,6 +67,7 @@ export class CheckoutComponent {
 | `selectedObjects` | `string[]` | Initial object ids or public labels. |
 | `selectableObjects` | `string[] \| null` | Buyer-selectable allow-list. |
 | `numberOfPlacesToSelect` | `number` | Exact count required for a valid selection. |
+| `selectionValidators` | `PickerSelectionValidator[]` | Minimum, consecutive-seat, and no-orphan guards. |
 | `publicKey` | `string` | Reserved compatibility input; stored by the chart but not transmitted to SeatLayer. |
 | `locale` | `string` | BCP-47 locale for built-in copy. |
 | `currency` | `string` | ISO currency for price formatting. |
@@ -74,7 +75,7 @@ export class CheckoutComponent {
 | `seatTooltip` | `boolean` | Set `false` to draw your own popover from `(seatHover)`. |
 | `messages` | `object` | Copy overrides. Read once per rebuild. |
 
-`numberOfPlacesToSelect` and the other primitive identity inputs rebuild the
+`numberOfPlacesToSelect`, `selectionValidators`, and the other identity inputs rebuild the
 canvas. `selectedObjects` and `selectableObjects` are initial values; use the
 imperative methods for later changes so change detection never destroys a chart
 mid-selection because an array instance changed.
@@ -84,8 +85,8 @@ mid-selection because an array instance changed.
 | Output | Payload |
 | --- | --- |
 | `(selectionChange)` | `SelectedSeat[]` |
-| `(selectionValidityChange)` | Exact-count state |
-| `(selectionValid)` / `(selectionInvalid)` | Exact-count transition |
+| `(selectionValidityChange)` | Rule state with typed `violations` |
+| `(selectionValid)` / `(selectionInvalid)` | Rule-validity transition |
 | `(selectionLimit)` | Active numeric cap |
 | `(hold)` | `HoldResult` |
 | `(holdRestored)` | `HoldResult` |

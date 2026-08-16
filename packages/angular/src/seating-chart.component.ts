@@ -26,6 +26,7 @@ import {
   type GAAreaAvailability,
   type SeatHoverDetails,
   type PickerSelectionValidity,
+  type PickerSelectionValidator,
   type BuyerAccessToken,
   type BuyerAccessTokenProvider,
   type BuyerAccessExpiredEvent,
@@ -80,6 +81,9 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
 
   /** Exact ticket count required for a valid selection. */
   @Input() numberOfPlacesToSelect?: number;
+
+  /** Local buyer selection guards. Changing them rebuilds the chart. */
+  @Input() selectionValidators?: PickerSelectionValidator[];
 
   /** Publishable key, when your integration uses one. */
   @Input() publicKey?: string;
@@ -359,6 +363,7 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
           selectedObjects: this.selectedObjects,
           selectableObjects: this.selectableObjects,
           numberOfPlacesToSelect: this.numberOfPlacesToSelect,
+          selectionValidators: this.selectionValidators,
           publicKey: this.publicKey,
           locale: this.locale,
           currency: this.currency,

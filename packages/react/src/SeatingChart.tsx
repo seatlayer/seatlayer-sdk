@@ -31,7 +31,7 @@ export interface SeatingChartProps extends Omit<SeatingChartOptions, 'container'
  * The underlying canvas is created once and torn down on unmount. Callback props
  * (`onSelectionChange`, `onHold`, `onError`, `onDeckTap`, `onHint`) may change
  * freely between renders without re-mounting the canvas — only the props in
- * `SEATING_CHART_IDENTITY_PROPS` (`event`, `apiBase`, `maxSelection`, `numberOfPlacesToSelect`,
+ * `SEATING_CHART_IDENTITY_PROPS` (`event`, `apiBase`, `maxSelection`, `numberOfPlacesToSelect`, `selectionValidators`,
  * `publicKey`, `locale`, `currency`, `colorblindSafe`, `initialView`,
  * `errorDisplay`) trigger a rebuild.
  * (`messages`, `selectedObjects`, and `selectableObjects` are read once per
@@ -41,7 +41,7 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
   function SeatingChart(props, ref) {
     const {
       className, style, event, apiBase, maxSelection, selectedObjects, selectableObjects,
-      numberOfPlacesToSelect, publicKey, locale, currency,
+      numberOfPlacesToSelect, selectionValidators, publicKey, locale, currency,
       colorblindSafe, initialView, errorDisplay,
     } = props;
 
@@ -65,6 +65,7 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
           selectedObjects,
           selectableObjects,
           numberOfPlacesToSelect,
+          selectionValidators,
           publicKey,
           locale,
           currency,
@@ -111,7 +112,7 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
       // array is SEATING_CHART_IDENTITY_PROPS, spelled out because React's
       // linter (and its compiler) must see the literal list.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [event, apiBase, maxSelection, numberOfPlacesToSelect, publicKey, locale, currency, colorblindSafe, initialView, errorDisplay]);
+    }, [event, apiBase, maxSelection, numberOfPlacesToSelect, selectionValidators, publicKey, locale, currency, colorblindSafe, initialView, errorDisplay]);
 
     useImperativeHandle(ref, () => bindSeatingChartHandle(() => chartRef.current), []);
 
@@ -130,7 +131,7 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
  */
 type MissingIdentityDeps = Exclude<
   SeatingChartIdentityProp,
-  | 'event' | 'apiBase' | 'maxSelection' | 'numberOfPlacesToSelect'
+  | 'event' | 'apiBase' | 'maxSelection' | 'numberOfPlacesToSelect' | 'selectionValidators'
   | 'publicKey' | 'locale'
   | 'currency' | 'colorblindSafe' | 'initialView' | 'errorDisplay'
 >;

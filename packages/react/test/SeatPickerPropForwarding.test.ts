@@ -115,6 +115,23 @@ describe('SeatPicker prop forwarding', () => {
     expect(options.someFutureOption).toBe('forwarded');
   });
 
+  it('forwards selection validators and rebuilds when their policy identity changes', async () => {
+    const { SeatPicker } = await import('../src/SeatPicker');
+    const initial = [{ type: 'minimumSelectedPlaces' as const, minimum: 2 }];
+    await act(async () => {
+      root.render(createElement(SeatPicker, { event: 'evt_test', selectionValidators: initial }));
+    });
+    expect(constructorCalls[0]).toMatchObject({ selectionValidators: initial });
+
+    const next = [{ type: 'noOrphanSeats' as const }];
+    await act(async () => {
+      root.render(createElement(SeatPicker, { event: 'evt_test', selectionValidators: next }));
+    });
+    expect(constructorCalls).toHaveLength(2);
+    expect(constructorCalls[1]).toMatchObject({ selectionValidators: next });
+    expect(imperativeCalls).toContainEqual({ method: 'destroy', args: [] });
+  });
+
   it('keeps React-only props out of the core options', async () => {
     const options = await mountWith({ className: 'w-full', style: { height: 400 } });
     expect(options).not.toHaveProperty('className');
