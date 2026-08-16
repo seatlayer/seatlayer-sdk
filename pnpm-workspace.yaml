@@ -1,0 +1,10 @@
+packages:
+  - 'packages/*'
+overrides:
+  esbuild: 0.28.1
+allowBuilds:
+  '@parcel/watcher': false
+  esbuild: true
+minimumReleaseAgeExclude:
+  - '@seatlayer/core@0.53.0'
+  - '@seatlayer/js@0.53.0'

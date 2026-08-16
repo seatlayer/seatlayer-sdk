@@ -1,0 +1,81 @@
+{
+  "name": "@seatlayer/react",
+  "version": "0.53.0",
+  "description": "React component for the SeatLayer embed SDK \u2014 render an interactive seat picker and hold seats.",
+  "license": "MIT",
+  "homepage": "https://docs.seatlayer.io/buyer-sdk/seat-picker/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/seatlayer/seatlayer-sdk.git",
+    "directory": "packages/react"
+  },
+  "bugs": {
+    "url": "https://github.com/seatlayer/seatlayer-sdk/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "//typesVersions": "Legacy (pre-`exports`) TypeScript resolution for the ./manager subpath, mirroring @seatlayer/core's ./view3d. `exports` alone leaves node10 consumers unable to see the types, which attw fails the release on.",
+  "typesVersions": {
+    "*": {
+      "manager": [
+        "./dist/manager.d.ts"
+      ]
+    }
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./manager": {
+      "import": {
+        "types": "./dist/manager.d.ts",
+        "default": "./dist/manager.js"
+      },
+      "require": {
+        "types": "./dist/manager.d.cts",
+        "default": "./dist/manager.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "keywords": [
+    "seating",
+    "seat-map",
+    "seating-chart",
+    "seat-picker",
+    "seatlayer",
+    "react",
+    "ticketing"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@seatlayer/core": "0.53.0",
+    "@seatlayer/js": "0.53.0"
+  },
+  "peerDependencies": {
+    "react": ">=17.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.2.7",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.0"
+  }
+}
