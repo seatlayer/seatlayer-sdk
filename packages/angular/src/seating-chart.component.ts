@@ -25,6 +25,7 @@ import {
   type BestAvailableResult,
   type GAAreaAvailability,
   type SeatHoverDetails,
+  type PickerSelectionValidity,
   type BuyerAccessToken,
   type BuyerAccessTokenProvider,
   type BuyerAccessExpiredEvent,
@@ -39,7 +40,7 @@ import {
  *
  * The canvas is created once and torn down on destroy. Only the inputs that
  * change the chart's identity (`SEATING_CHART_IDENTITY_PROPS`: `event`,
- * `apiBase`, `maxSelection`, `publicKey`, `locale`, `currency`,
+ * `apiBase`, `maxSelection`, `numberOfPlacesToSelect`, `publicKey`, `locale`, `currency`,
  * `colorblindSafe`, `initialView`, `errorDisplay`) trigger a rebuild, so an
  * unrelated change-detection pass never destroys the canvas mid-selection.
  *
@@ -70,6 +71,15 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
 
   /** Cap on how many seats a buyer may select. */
   @Input() maxSelection?: number;
+
+  /** Object ids or public labels selected after availability loads. */
+  @Input() selectedObjects?: string[];
+
+  /** Object ids or public labels the buyer may select. */
+  @Input() selectableObjects?: string[] | null;
+
+  /** Exact ticket count required for a valid selection. */
+  @Input() numberOfPlacesToSelect?: number;
 
   /** Publishable key, when your integration uses one. */
   @Input() publicKey?: string;
@@ -116,6 +126,20 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
 
   /** The buyer's selection changed. */
   @Output() readonly selectionChange: EventEmitter<SelectedSeat[]> = new EventEmitter<SelectedSeat[]>();
+
+  /** Exact-count state changed. */
+  @Output() readonly selectionValidityChange: EventEmitter<PickerSelectionValidity> =
+    new EventEmitter<PickerSelectionValidity>();
+
+  /** The exact count was reached. */
+  @Output() readonly selectionValid: EventEmitter<SelectedSeat[]> = new EventEmitter<SelectedSeat[]>();
+
+  /** The selection is not at the exact count. */
+  @Output() readonly selectionInvalid: EventEmitter<PickerSelectionValidity> =
+    new EventEmitter<PickerSelectionValidity>();
+
+  /** The active selection cap was reached. */
+  @Output() readonly selectionLimit: EventEmitter<number> = new EventEmitter<number>();
 
   /** A hold succeeded. */
   @Output() readonly hold: EventEmitter<HoldResult> = new EventEmitter<HoldResult>();
@@ -235,6 +259,38 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
     return this.handle.getSelection();
   }
 
+  selectObjects(objects: string[]): SelectedSeat[] {
+    return this.handle.selectObjects(objects);
+  }
+
+  deselectObjects(objects: string[]): void {
+    this.handle.deselectObjects(objects);
+  }
+
+  clearSelection(): void {
+    this.handle.clearSelection();
+  }
+
+  selectCategories(categoryKeys: string[]): SelectedSeat[] {
+    return this.handle.selectCategories(categoryKeys);
+  }
+
+  deselectCategories(categoryKeys: string[]): void {
+    this.handle.deselectCategories(categoryKeys);
+  }
+
+  setSelectableObjects(objects: string[] | null): void {
+    this.handle.setSelectableObjects(objects);
+  }
+
+  setMaxSelection(maxSelection: number): void {
+    this.handle.setMaxSelection(maxSelection);
+  }
+
+  getSelectionValidity(): PickerSelectionValidity | null {
+    return this.handle.getSelectionValidity();
+  }
+
   /** Choose a ticket tier for a selected seat; `null` reverts to the default. */
   setSeatTier(seatId: string, tierId: string | null): void {
     this.handle.setSeatTier(seatId, tierId);
@@ -300,6 +356,9 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
           event: this.event,
           apiBase: this.apiBase,
           maxSelection: this.maxSelection,
+          selectedObjects: this.selectedObjects,
+          selectableObjects: this.selectableObjects,
+          numberOfPlacesToSelect: this.numberOfPlacesToSelect,
           publicKey: this.publicKey,
           locale: this.locale,
           currency: this.currency,
@@ -313,6 +372,10 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
         },
         {
           onSelectionChange: (seats) => emit(this.selectionChange, seats),
+          onSelectionValidityChange: (state) => emit(this.selectionValidityChange, state),
+          onSelectionValid: (seats) => emit(this.selectionValid, seats),
+          onSelectionInvalid: (state) => emit(this.selectionInvalid, state),
+          onSelectionLimit: (max) => emit(this.selectionLimit, max),
           onHold: (result) => emit(this.hold, result),
           onHoldRestored: (result) => emit(this.holdRestored, result),
           onHoldExpired: () => this.zone.run(() => this.holdExpired.emit()),

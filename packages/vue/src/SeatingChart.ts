@@ -21,6 +21,7 @@ import {
   type BestAvailableResult,
   type GAAreaAvailability,
   type SeatHoverDetails,
+  type PickerSelectionValidity,
   type BuyerAccessToken,
   type BuyerAccessTokenProvider,
   type BuyerAccessExpiredEvent,
@@ -44,7 +45,7 @@ export type SeatingChartExposed = SeatingChartHandle;
  *
  * The canvas is created once and torn down on unmount. Only the props that
  * change the chart's identity (`SEATING_CHART_IDENTITY_PROPS`: `event`,
- * `apiBase`, `maxSelection`, `publicKey`, `locale`, `currency`,
+ * `apiBase`, `maxSelection`, `numberOfPlacesToSelect`, `publicKey`, `locale`, `currency`,
  * `colorblindSafe`, `initialView`, `errorDisplay`) trigger a rebuild;
  * everything else is read live, so a parent re-render never destroys the canvas
  * mid-selection.
@@ -80,6 +81,12 @@ export const SeatingChart = defineComponent({
     apiBase: { type: String, default: undefined },
     /** Cap on how many seats a buyer may select. */
     maxSelection: { type: Number, default: undefined },
+    /** Object ids or public labels selected after availability loads. */
+    selectedObjects: { type: Array as PropType<string[]>, default: undefined },
+    /** Object ids or public labels the buyer may select. */
+    selectableObjects: { type: Array as PropType<string[] | null>, default: undefined },
+    /** Exact ticket count required for a valid selection. */
+    numberOfPlacesToSelect: { type: Number, default: undefined },
     /** Publishable key, when your integration uses one. */
     publicKey: { type: String, default: undefined },
     /** BCP-47 locale for built-in copy. */
@@ -136,6 +143,14 @@ export const SeatingChart = defineComponent({
   emits: {
     /** The buyer's selection changed. */
     'selection-change': (_seats: SelectedSeat[]) => true,
+    /** Exact-count state changed. */
+    'selection-validity-change': (_state: PickerSelectionValidity) => true,
+    /** The exact count was reached. */
+    'selection-valid': (_seats: SelectedSeat[]) => true,
+    /** The selection is not at the exact count. */
+    'selection-invalid': (_state: PickerSelectionValidity) => true,
+    /** The active selection cap was reached. */
+    'selection-limit': (_max: number) => true,
     /** A hold succeeded. */
     hold: (_result: HoldResult) => true,
     /** A previous hold was restored on mount. */
@@ -183,6 +198,10 @@ export const SeatingChart = defineComponent({
       // gives up — collapsing to the last emit signature. Naming them first
       // separates the two inference problems, and reads better besides.
       const onSelectionChange = (seats: SelectedSeat[]) => emit('selection-change', seats);
+      const onSelectionValidityChange = (state: PickerSelectionValidity) => emit('selection-validity-change', state);
+      const onSelectionValid = (seats: SelectedSeat[]) => emit('selection-valid', seats);
+      const onSelectionInvalid = (state: PickerSelectionValidity) => emit('selection-invalid', state);
+      const onSelectionLimit = (max: number) => emit('selection-limit', max);
       const onHold = (result: HoldResult) => emit('hold', result);
       const onHoldRestored = (result: HoldResult) => emit('hold-restored', result);
       const onHoldExpired = () => emit('hold-expired');
@@ -203,6 +222,9 @@ export const SeatingChart = defineComponent({
           event: props.event,
           apiBase: props.apiBase,
           maxSelection: props.maxSelection,
+          selectedObjects: props.selectedObjects,
+          selectableObjects: props.selectableObjects,
+          numberOfPlacesToSelect: props.numberOfPlacesToSelect,
           publicKey: props.publicKey,
           locale: props.locale,
           currency: props.currency,
@@ -219,6 +241,10 @@ export const SeatingChart = defineComponent({
           onAccessUnavailable,
           onSelectedObjectUnavailable,
           onSelectionChange,
+          onSelectionValidityChange,
+          onSelectionValid,
+          onSelectionInvalid,
+          onSelectionLimit,
           onHold,
           onHoldRestored,
           onHoldExpired,

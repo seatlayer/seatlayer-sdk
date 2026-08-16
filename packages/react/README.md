@@ -61,6 +61,9 @@ The full-experience `SeatPicker` exposes the canonical safe widget controls thro
 | --- | --- |
 | `close()` | Logically close the picker. The host should still unmount the React component. |
 | `getSelection()` | Read the current priced selection. |
+| `selectObjects()`, `deselectObjects()`, `clearSelection()` | Control selection by engine id or public label. |
+| `selectCategories()`, `deselectCategories()` | Control every selectable object in named categories. |
+| `setSelectableObjects()`, `setMaxSelection()`, `getSelectionValidity()` | Update selection policy and inspect exact-count validity. |
 | `bestAvailable(qty, categoryKey?, options?)` | Pick and hold server-authoritative seats; options support `preferPremium` and `zoneId`. |
 | `getCurrentHold()`, `resumeHold()`, `removeHeldTicket()`, `release()` | Inspect and manage the active hold. |
 | `setMapTheme()`, `setEventDetailsHidden()`, `setPricing()` | Update host-owned presentation without remounting or losing a hold. |
@@ -79,14 +82,19 @@ Extends the vanilla SDK options minus `container` (the component owns its own mo
 | `event` | `string` | **Required.** The event key, e.g. `ev_9f3a`. |
 | `apiBase` | `string?` | API origin. Defaults to the SeatLayer production API. |
 | `maxSelection` | `number?` | Max seats selectable at once (default 10). |
+| `selectedObjects` | `string[]?` | Initial object ids or public labels. |
+| `selectableObjects` | `string[] \| null` | Buyer-selectable allow-list. |
+| `numberOfPlacesToSelect` | `number?` | Exact count required for a valid selection. |
 | `onSelectionChange` | `(seats) => void` | Fires when the selection changes. |
+| `onSelectionValidityChange` | `(state) => void` | Exact-count state after selection changes. |
 | `onHold` | `(result) => void` | Fires when seats are held; hand `holdId` to your server. |
 | `onHoldRestored` | `(result) => void` | Fires after `resumeHold()` verifies an active hold. |
 | `onError` | `(err) => void` | Fires on errors. |
 | `className` / `style` | — | Applied to the container element. |
 
-Changing a callback prop does **not** rebuild the canvas; only `event`, `apiBase`,
-`maxSelection`, and `publicKey` do.
+Changing a callback prop does **not** rebuild the canvas. `selectedObjects` and
+`selectableObjects` are initial values; use the imperative methods for later
+changes. The primitive exact-count prop rebuilds the chart.
 
 ## The model
 
@@ -107,6 +115,12 @@ booked value, booking velocity, and the **Booking momentum** overlay are one
 shared package surface—not host-owned tabs.
 Block mode includes explicit multi-select category controls plus a searchable,
 section-filtered blocked-inventory list for restoring specific seats to sale.
+Select mode adds host-owned initial/programmatic selection, availability policy,
+maximum and exact-count rules, and validity callbacks. Capability-gated
+Categories and Tables tools change only the event snapshot; table mode changes
+fail safely while affected inventory is held, booked, or blocked.
+Filter Sections groups duplicate public labels, frames their combined inventory,
+and reports the matched sections through the React callback and ref methods.
 
 ```tsx
 <SeatManager

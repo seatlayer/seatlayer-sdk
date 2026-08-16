@@ -14,6 +14,9 @@ import {
   type SeatManagerActivity,
   type SeatManagerActionResult,
   type SeatManagerConnection,
+  type SeatManagerFilteredSection,
+  type SeatManagerSelectionValidity,
+  type EventTableBookingMode,
   type ReportResult,
   type ControlRoomSnapshot,
   type LogEntry,
@@ -33,6 +36,9 @@ export type {
   SeatManagerActivity,
   SeatManagerActionResult,
   SeatManagerConnection,
+  SeatManagerFilteredSection,
+  SeatManagerSelectionValidity,
+  EventTableBookingMode,
 } from '@seatlayer/js/manager';
 
 /** Imperative handle for the organizer manage board. */
@@ -49,9 +55,28 @@ export interface SeatManagerHandle {
   unblock(labels?: string[]): Promise<void>;
   unblockAll(): Promise<void>;
   cancelBooking(labels: string[], bookingRef: string): Promise<void>;
+  setCategory(categoryKey: string, labels?: string[]): Promise<void>;
+  setTableBooking(
+    tableIds: string[],
+    mode: EventTableBookingMode,
+    bounds?: { minOccupancy?: number; maxOccupancy?: number },
+  ): Promise<void>;
   selectAll(): ExpandedSeat[];
   selectSection(sectionId: string): ExpandedSeat[];
   selectByLabels(labels: string[]): ExpandedSeat[];
+  selectObjects(labels: string[]): ExpandedSeat[];
+  deselectObjects(labels: string[]): ExpandedSeat[];
+  selectCategories(keys: string[]): ExpandedSeat[];
+  deselectCategories(keys: string[]): ExpandedSeat[];
+  setSelectableObjects(labels: string[]): void;
+  setUnavailableObjectsSelectable(enabled: boolean): void;
+  setObjectSelectable(predicate: SeatManagerOptions['isObjectSelectable']): void;
+  setMaxSelectedObjects(max: number | undefined): void;
+  setNumberOfPlacesToSelect(required: number | undefined): void;
+  getSelectionValidity(): SeatManagerSelectionValidity | null;
+  setFilteredSection(label: string): SeatManagerFilteredSection[];
+  clearFilteredSection(): void;
+  getFilteredSections(): SeatManagerFilteredSection[];
   clearSelection(): void;
   getSelection(): ExpandedSeat[];
   getReport(): Promise<ReportResult>;
@@ -87,6 +112,8 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
     const {
       className, style, apiBase, eventKey, token, tokenExpiresAt,
       mode, currency, keepLiveWhileHidden, followLive, capabilities,
+      selectedObjects, selectableObjects, unavailableObjectsSelectable,
+      maxSelectedObjects, numberOfPlacesToSelect, isObjectSelectable,
     } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -110,6 +137,12 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         keepLiveWhileHidden,
         followLive,
         capabilities,
+        selectedObjects,
+        selectableObjects,
+        unavailableObjectsSelectable,
+        maxSelectedObjects,
+        numberOfPlacesToSelect,
+        isObjectSelectable,
         theme: callbacks.current.theme,
         onReady: () => callbacks.current.onReady?.(),
         onTallies: (t: SeatManagerTallies) => callbacks.current.onTallies?.(t),
@@ -119,6 +152,13 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         onModeChange: (nextMode) => callbacks.current.onModeChange?.(nextMode),
         onFollowLiveChange: (enabled) => callbacks.current.onFollowLiveChange?.(enabled),
         onSelectionChange: (s: ExpandedSeat[]) => callbacks.current.onSelectionChange?.(s),
+        onObjectSelected: (object) => callbacks.current.onObjectSelected?.(object),
+        onObjectDeselected: (object) => callbacks.current.onObjectDeselected?.(object),
+        onSelectionValidityChange: (state) => callbacks.current.onSelectionValidityChange?.(state),
+        onSelectionValid: (state) => callbacks.current.onSelectionValid?.(state),
+        onSelectionInvalid: (state) => callbacks.current.onSelectionInvalid?.(state),
+        onSelectionLimit: (max) => callbacks.current.onSelectionLimit?.(max),
+        onFilteredSectionChange: (sections) => callbacks.current.onFilteredSectionChange?.(sections),
         onActionComplete: (r: SeatManagerActionResult) => callbacks.current.onActionComplete?.(r),
         onConnectionChange: (s: SeatManagerConnection) => callbacks.current.onConnectionChange?.(s),
         onError: (e: unknown) => callbacks.current.onError?.(e),
@@ -170,6 +210,26 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
       if (followLive != null) managerRef.current?.setFollowLive(followLive);
     }, [followLive]);
 
+    useEffect(() => {
+      managerRef.current?.setSelectableObjects(selectableObjects ?? []);
+    }, [selectableObjects]);
+
+    useEffect(() => {
+      managerRef.current?.setUnavailableObjectsSelectable(unavailableObjectsSelectable ?? true);
+    }, [unavailableObjectsSelectable]);
+
+    useEffect(() => {
+      managerRef.current?.setMaxSelectedObjects(maxSelectedObjects);
+    }, [maxSelectedObjects]);
+
+    useEffect(() => {
+      managerRef.current?.setNumberOfPlacesToSelect(numberOfPlacesToSelect);
+    }, [numberOfPlacesToSelect]);
+
+    useEffect(() => {
+      managerRef.current?.setObjectSelectable(isObjectSelectable);
+    }, [isObjectSelectable]);
+
     useImperativeHandle(
       ref,
       (): SeatManagerHandle => ({
@@ -186,9 +246,25 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         unblock: (labels) => managerRef.current?.unblock(labels) ?? Promise.resolve(),
         unblockAll: () => managerRef.current?.unblockAll() ?? Promise.resolve(),
         cancelBooking: (labels, bookingRef) => managerRef.current?.cancelBooking(labels, bookingRef) ?? Promise.resolve(),
+        setCategory: (categoryKey, labels) => managerRef.current?.setCategory(categoryKey, labels) ?? Promise.resolve(),
+        setTableBooking: (tableIds, nextMode, bounds) => managerRef.current?.setTableBooking(tableIds, nextMode, bounds)
+          ?? Promise.resolve(),
         selectAll: () => managerRef.current?.selectAll() ?? [],
         selectSection: (id) => managerRef.current?.selectSection(id) ?? [],
         selectByLabels: (labels) => managerRef.current?.selectByLabels(labels) ?? [],
+        selectObjects: (labels) => managerRef.current?.selectObjects(labels) ?? [],
+        deselectObjects: (labels) => managerRef.current?.deselectObjects(labels) ?? [],
+        selectCategories: (keys) => managerRef.current?.selectCategories(keys) ?? [],
+        deselectCategories: (keys) => managerRef.current?.deselectCategories(keys) ?? [],
+        setSelectableObjects: (labels) => managerRef.current?.setSelectableObjects(labels),
+        setUnavailableObjectsSelectable: (enabled) => managerRef.current?.setUnavailableObjectsSelectable(enabled),
+        setObjectSelectable: (predicate) => managerRef.current?.setObjectSelectable(predicate),
+        setMaxSelectedObjects: (max) => managerRef.current?.setMaxSelectedObjects(max),
+        setNumberOfPlacesToSelect: (required) => managerRef.current?.setNumberOfPlacesToSelect(required),
+        getSelectionValidity: () => managerRef.current?.getSelectionValidity() ?? null,
+        setFilteredSection: (label) => managerRef.current?.setFilteredSection(label) ?? [],
+        clearFilteredSection: () => managerRef.current?.clearFilteredSection(),
+        getFilteredSections: () => managerRef.current?.getFilteredSections() ?? [],
         clearSelection: () => managerRef.current?.clearSelection(),
         getSelection: () => managerRef.current?.getSelection() ?? [],
         getReport: () => managerRef.current?.getReport() ?? Promise.reject(new Error('not ready')),

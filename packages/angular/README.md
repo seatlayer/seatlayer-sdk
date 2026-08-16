@@ -64,6 +64,9 @@ export class CheckoutComponent {
 | `event` | `string` | **Required.** Changing it rebuilds the chart. |
 | `apiBase` | `string` | Defaults to the public API. |
 | `maxSelection` | `number` | Cap on how many seats a buyer may select. |
+| `selectedObjects` | `string[]` | Initial object ids or public labels. |
+| `selectableObjects` | `string[] \| null` | Buyer-selectable allow-list. |
+| `numberOfPlacesToSelect` | `number` | Exact count required for a valid selection. |
 | `publicKey` | `string` | Reserved compatibility input; stored by the chart but not transmitted to SeatLayer. |
 | `locale` | `string` | BCP-47 locale for built-in copy. |
 | `currency` | `string` | ISO currency for price formatting. |
@@ -71,15 +74,19 @@ export class CheckoutComponent {
 | `seatTooltip` | `boolean` | Set `false` to draw your own popover from `(seatHover)`. |
 | `messages` | `object` | Copy overrides. Read once per rebuild. |
 
-Only `event`, `apiBase`, `maxSelection`, `publicKey`, `locale`, `currency` and
-`colorblindSafe` rebuild the canvas — an unrelated change-detection pass never
-destroys the chart mid-selection.
+`numberOfPlacesToSelect` and the other primitive identity inputs rebuild the
+canvas. `selectedObjects` and `selectableObjects` are initial values; use the
+imperative methods for later changes so change detection never destroys a chart
+mid-selection because an array instance changed.
 
 ## Outputs
 
 | Output | Payload |
 | --- | --- |
 | `(selectionChange)` | `SelectedSeat[]` |
+| `(selectionValidityChange)` | Exact-count state |
+| `(selectionValid)` / `(selectionInvalid)` | Exact-count transition |
+| `(selectionLimit)` | Active numeric cap |
 | `(hold)` | `HoldResult` |
 | `(holdRestored)` | `HoldResult` |
 | `(holdExpired)` | — |
@@ -99,6 +106,9 @@ Via a template ref (`#chart`):
 
 `holdSelection` · `resumeHold` · `getCurrentHold` · `getGAAreas` · `holdGA` ·
 `bestAvailable` · `release` · `releaseLabels` · `getSelection` · `setSeatTier` ·
+`selectObjects` · `deselectObjects` · `clearSelection` · `selectCategories` ·
+`deselectCategories` · `setSelectableObjects` · `setMaxSelection` ·
+`getSelectionValidity` ·
 `getFloors` · `setFloor` · `setColorblindSafe` · `zoomIn` · `zoomOut` ·
 `zoomToFit`
 
