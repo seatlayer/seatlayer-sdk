@@ -6,5 +6,5 @@ allowBuilds:
   '@parcel/watcher': false
   esbuild: true
 minimumReleaseAgeExclude:
-  - '@seatlayer/core@0.53.0'
-  - '@seatlayer/js@0.53.0'
+  - '@seatlayer/core@0.53.0 || 0.54.0'
+  - '@seatlayer/js@0.53.0 || 0.54.0'
