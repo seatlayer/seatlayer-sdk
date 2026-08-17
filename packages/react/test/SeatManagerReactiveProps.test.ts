@@ -105,4 +105,14 @@ describe('SeatManager reactive props', () => {
     });
     expect(instance.setTokenRefresh).toHaveBeenLastCalledWith(undefined);
   });
+
+  it('forwards the `tools` list to the cockpit at mount', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    await act(async () => {
+      root.render(createElement(SeatManager, {
+        eventKey: 'ev_1', token: 'mse_one', tools: ['view', 'block', 'categories'],
+      }));
+    });
+    expect(instances[0]!.options.tools).toEqual(['view', 'block', 'categories']);
+  });
 });
