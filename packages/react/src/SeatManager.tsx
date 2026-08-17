@@ -113,7 +113,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
       className, style, apiBase, eventKey, token, tokenExpiresAt,
       mode, currency, keepLiveWhileHidden, followLive, capabilities,
       selectedObjects, selectableObjects, unavailableObjectsSelectable,
-      maxSelectedObjects, numberOfPlacesToSelect, isObjectSelectable,
+      maxSelectedObjects, numberOfPlacesToSelect, isObjectSelectable, tools,
     } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -143,6 +143,10 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         maxSelectedObjects,
         numberOfPlacesToSelect,
         isObjectSelectable,
+        // Which tools the cockpit offers (Watch / Manage / Host tools). Read
+        // once at mount like `capabilities`: hosts decide this per surface,
+        // not per render.
+        tools,
         theme: callbacks.current.theme,
         onReady: () => callbacks.current.onReady?.(),
         onTallies: (t: SeatManagerTallies) => callbacks.current.onTallies?.(t),
