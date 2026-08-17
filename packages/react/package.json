@@ -1,7 +1,7 @@
 {
   "name": "@seatlayer/react",
-  "version": "0.58.0",
-  "description": "React component for the SeatLayer embed SDK \u2014 render an interactive seat picker and hold seats.",
+  "version": "0.59.0",
+  "description": "React component for the SeatLayer embed SDK — render an interactive seat picker and hold seats.",
   "license": "MIT",
   "homepage": "https://docs.seatlayer.io/buyer-sdk/seat-picker/",
   "repository": {
@@ -64,8 +64,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@seatlayer/core": "0.58.0",
-    "@seatlayer/js": "0.58.0"
+    "@seatlayer/core": "0.59.0",
+    "@seatlayer/js": "0.59.0"
   },
   "peerDependencies": {
     "react": ">=17.0.0"
