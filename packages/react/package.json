@@ -3,7 +3,11 @@
   "version": "0.59.0",
   "description": "React component for the SeatLayer embed SDK — render an interactive seat picker and hold seats.",
   "license": "MIT",
-  "homepage": "https://docs.seatlayer.io/buyer-sdk/seat-picker/",
+  "author": {
+    "name": "SeatLayer",
+    "url": "https://seatlayer.io/"
+  },
+  "homepage": "https://seatlayer.io/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/seatlayer/seatlayer-sdk.git",

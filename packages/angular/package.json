@@ -3,7 +3,11 @@
   "version": "0.59.0",
   "description": "Angular SeatLayer SDK — one native SeatingChart wrapper plus raw JS SeatPickerWidget and iframe helper.",
   "license": "MIT",
-  "homepage": "https://docs.seatlayer.io/buyer-sdk/seat-picker/",
+  "author": {
+    "name": "SeatLayer",
+    "url": "https://seatlayer.io/"
+  },
+  "homepage": "https://seatlayer.io/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/seatlayer/seatlayer-sdk.git",
