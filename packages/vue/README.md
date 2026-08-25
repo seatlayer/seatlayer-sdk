@@ -91,6 +91,10 @@ async function checkout() {
 | `colorblindSafe` | `boolean` | Render colorblind-safe seat glyphs. |
 | `seatTooltip` | `boolean` | Set `false` to draw your own popover from `@seat-hover`. |
 | `messages` | `object` | Copy overrides. Read once per rebuild. |
+| `initialView` | `RendererViewMode` | Initial 2D projection, read once per rebuild. |
+| `errorDisplay` | `'message' \| 'none'` | `'message'` (default) shows a notice with Try again; `'none'` is silent. |
+| `buyerAccessTokenProvider` | `BuyerAccessTokenProvider` | Sales Channels: mint a buyer access session on demand from your backend. |
+| `buyerAccessToken` | `string \| BuyerAccessToken` | One-shot session for hosts that own the lifecycle. Cannot be renewed. |
 
 `numberOfPlacesToSelect`, `selectionValidators`, and the other identity props rebuild the
 canvas. `selectedObjects` and `selectableObjects` are initial values; use the
