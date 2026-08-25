@@ -1,19 +1,49 @@
-# @seatlayer/react
+# SeatLayer React Seat Map SDK for Reserved Seating
 
 [![npm](https://img.shields.io/npm/v/@seatlayer/react)](https://www.npmjs.com/package/@seatlayer/react)
 [![npm downloads](https://img.shields.io/npm/dm/@seatlayer/react)](https://www.npmjs.com/package/@seatlayer/react)
 [![React](https://img.shields.io/badge/React-%E2%89%A517-61DAFB.svg)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-types%20included-3178C6.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](../../LICENSE)
 
-The official React components for SeatLayer reserved seating. Render the
-complete buyer picker or a headless interactive chart, hold inventory in the
-browser, and complete the booking from your trusted server.
+The official React components for SeatLayer reserved seating. Drop an
+interactive seating chart or a complete seat picker into a ticketing app, show
+live seat availability, and let buyers take temporary holds on the inventory
+they choose.
 
-[Package on npm](https://www.npmjs.com/package/@seatlayer/react) ·
-[SeatPicker docs](https://docs.seatlayer.io/buyer-sdk/seat-picker/) ·
-[Live demo](https://app.seatlayer.io/demo/play) ·
-[Website](https://seatlayer.io/developers/) ·
-[AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit)
+Everything is a real React component with a typed imperative handle: the browser
+selects and **holds**, and your trusted server **books** the hold.
+
+[SeatLayer React SDK on npm](https://www.npmjs.com/package/@seatlayer/react) ·
+[React seat-map documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/) ·
+[SeatLayer reserved-seating platform](https://seatlayer.io/) ·
+[Buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) ·
+[SeatLayer JavaScript seat map SDK](https://www.npmjs.com/package/@seatlayer/js) ·
+[SeatLayer Vue seat map SDK](https://www.npmjs.com/package/@seatlayer/vue) ·
+[SeatLayer Angular seat map SDK](https://www.npmjs.com/package/@seatlayer/angular) ·
+[SeatLayer React Native SDK](https://github.com/seatlayer/seatlayer-react-native) ·
+[SeatLayer AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit)
+
+## What is included
+
+- `SeatingChart` — the headless interactive chart, mounted into a plain `<div>`
+  your styles own.
+- `SeatPicker` — the complete buyer experience: map, legend, tray, pricing, and
+  the checkout hand-off.
+- `SeatManager` — the organizer control room, for dashboards that monitor and
+  block live inventory.
+- `EmbeddedDesigner` — a hosted chart Designer inside your own application.
+- `SeatPickerWidget` and `attachPickerFrame` — the framework-agnostic modal and
+  iframe helpers, re-exported so a React host depends on this package alone.
+- TypeScript declarations for ESM (`dist/index.d.ts`) and CommonJS
+  (`dist/index.d.cts`), plus the `@seatlayer/react/manager` subpath.
+
+## Requirements
+
+- React 17 or newer (declared as a peer dependency).
+- A browser DOM. The chart is created inside an effect, and this package ships
+  no `'use client'` banner of its own — in the Next.js App Router, mark the
+  component that imports it.
 
 ## Install
 
@@ -21,7 +51,7 @@ browser, and complete the booking from your trusted server.
 npm install @seatlayer/react
 ```
 
-## Usage
+## Quick start
 
 ```tsx
 import { useRef } from 'react';
@@ -50,6 +80,28 @@ const best = await chart.current?.bestAvailable(4);    // auto-pick 4 seats and 
 const restored = await chart.current?.resumeHold(savedHoldId);
 await chart.current?.releaseLabels(['A-12']);          // keep the remainder held
 await chart.current?.release();                        // release the current hold
+```
+
+For the complete buyer experience — map, legend, priced tray, and the checkout
+hand-off — render `SeatPicker` instead:
+
+```tsx
+import { SeatPicker } from '@seatlayer/react';
+
+export function Tickets() {
+  return (
+    <SeatPicker
+      event="ev_9f3a"
+      style={{ width: '100%', height: 640 }}
+      selectionValidators={[
+        { type: 'minimumSelectedPlaces', minimum: 2 },
+        { type: 'consecutiveSeats' },
+        { type: 'noOrphanSeats' },
+      ]}
+      onCheckout={(hold, seats, handoff) => myServerTakesPayment(handoff)}
+    />
+  );
+}
 ```
 
 ### Full SeatPicker imperative contract
@@ -97,13 +149,34 @@ Changing a callback prop does **not** rebuild the canvas. `selectedObjects` and
 `selectableObjects` are initial values; use the imperative methods for later
 changes. Exact count and validator props rebuild the chart.
 
-## The model
+## Security boundary
 
-The browser **holds**; your **server books** with a secret key — a browser never
-books directly. See
-[how the integration works](https://docs.seatlayer.io/start/how-it-works/).
+The React app **selects and holds** inventory. Your trusted backend **inspects
+and books** the hold after payment or order validation.
 
-Built on [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js).
+- Never ship a SeatLayer secret key in browser code or in a bundled environment
+  variable.
+- Send only the `holdId` and your normal checkout context to your backend.
+- Calculate the charge from server-inspected hold items, not from browser input.
+- Reuse your stable order id as `bookingRef` so a retried booking is idempotent.
+- Organizer surfaces take a short-lived, event-scoped `mse_` browser grant —
+  never a tenant `sk_` secret.
+
+Read [how the integration works](https://docs.seatlayer.io/start/how-it-works/)
+before connecting checkout.
+
+## Architecture
+
+These components are a thin React layer over
+[`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js), the
+framework-agnostic browser runtime. The wrapper mounts a plain `<div>`, builds
+the chart inside an effect, forwards every prop and callback, and exposes the
+runtime's imperative handle through `ref`. Chart geometry, availability, and
+holds all come from the SeatLayer API at runtime, so the same event renders
+identically on web and on the mobile SDKs.
+
+Callback props are read through a ref, so changing one never tears the chart
+down. Only the identity props listed above rebuild it.
 
 ## Embed the live control room
 
@@ -246,17 +319,143 @@ export function VenueEditor({ chartId }: { chartId: string }) {
 }
 ```
 
-## Related resources
+## SeatingChart imperative handle
 
-- [Buyer SDK documentation](https://docs.seatlayer.io/buyer-sdk/install/)
-- [SeatPicker reference](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
-- [Holds and checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
-- [Complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
-- [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js)
-- [React Native SDK](https://github.com/seatlayer/seatlayer-react-native)
-- [iOS SDK](https://github.com/seatlayer/seatlayer-ios)
-- [Flutter package](https://pub.dev/packages/seatlayer)
-- [Agent-readable documentation](https://docs.seatlayer.io/llms.txt)
+Every method the runtime exposes to a wrapper, reachable through the `ref`:
+
+`hold` · `resumeHold` · `getCurrentHold` · `getGAAreas` · `holdGA` ·
+`bestAvailable` · `release` · `releaseLabels` · `getSelection` ·
+`selectObjects` · `deselectObjects` · `clearSelection` · `selectCategories` ·
+`deselectCategories` · `setSelectableObjects` · `setMaxSelection` ·
+`getSelectionValidity` · `setSeatTier` · `getFloors` · `setFloor` ·
+`setColorblindSafe` · `zoomIn` · `zoomOut` · `zoomToFit` · `refreshAccess`
+
+Calling any of them before the chart exists returns an empty answer rather than
+throwing, so a ref used one frame early is safe.
+
+## Callback props
+
+| Prop | Payload |
+| --- | --- |
+| `onSelectionChange` | `SelectedSeat[]` |
+| `onSelectionValidityChange` | Rule state with typed `violations` |
+| `onSelectionValid` / `onSelectionInvalid` | Rule-validity transition |
+| `onSelectionLimit` | Active numeric cap |
+| `onHold` | `HoldResult` |
+| `onHoldRestored` | `HoldResult` |
+| `onHoldExpired` | — |
+| `onGAClick` | `GAAreaAvailability` |
+| `onError` | `unknown` |
+| `onDeckTap` | `string` (floor id) |
+| `onHint` | `string \| null` — `null` clears the hint |
+| `onSeatHover` | `SeatHoverDetails \| null` — `null` when the pointer leaves |
+| `onAccessExpired` | `BuyerAccessExpiredEvent` |
+| `onAccessUnavailable` | `BuyerAccessUnavailableEvent` |
+| `onSelectedObjectUnavailable` | `SelectedObjectUnavailableEvent` |
+
+## Frequently asked questions
+
+### How do I add a seat map to a React app?
+
+Install `@seatlayer/react`, render `<SeatingChart event="ev_…" />` inside a
+container with a definite height, and read the buyer's choice from
+`onSelectionChange`. That is a complete interactive seating chart with live
+availability; the quick start above is the whole integration, and the
+[seat-picker documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
+covers props, events, holds, and checkout in depth.
+
+### Is this a real React component or an iframe?
+
+`SeatingChart`, `SeatPicker`, and `SeatManager` are real React components that
+render a plain `<div>` into your own tree — no iframe, no portal, and no
+stylesheet of their own to fight with. `EmbeddedDesigner` is the one exception:
+the organizer Designer is deliberately hosted in a sandboxed iframe so no
+Designer credential ever reaches your bundle. If you *want* an iframe for the
+buyer picker, `attachPickerFrame` is exported for that.
+
+### What is the difference between `SeatPicker` and `SeatingChart`?
+
+`SeatingChart` is the chart alone: it draws the venue, manages selection, and
+hands you the seats — you build the surrounding UI. `SeatPicker` is the complete
+buyer experience with legend, priced tray, hold timer, and checkout hand-off
+already built. Start with `SeatPicker` if you want a working ticket flow today,
+and drop to `SeatingChart` when your design system owns the chrome.
+
+### How do temporary seat holds work?
+
+When a buyer commits to a selection, `hold()` reserves that inventory against
+concurrent buyers for a limited checkout window and returns an opaque `holdId`.
+The hold lapses on its own if checkout never completes — `onHoldExpired` tells
+the app to return the buyer to the map — and `resumeHold()` restores it after a
+same-tab checkout navigation or a reload. This is what prevents double-selling
+without locking seats forever.
+
+### Can I use my own payment provider?
+
+Yes. Nothing in this package takes a payment. The browser hands you a `holdId`
+and a self-contained `CheckoutHandoff` with the priced line items, your backend
+charges through whatever provider you already use, and it then books the hold
+through the
+[server-side checkout flow](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/).
+The opt-in `checkout: 'hosted'` mode exists for hosts with no backend at all;
+without it, no payment code is downloaded.
+
+### Can I evaluate it without a SeatLayer account?
+
+You can explore a live seating chart in the browser at the
+[buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) with no
+account. Rendering your own venue needs an event key, because the chart and its
+availability are served by the SeatLayer API — create a free test event for
+that, which books no real inventory.
+
+### Does it work with Next.js and other React frameworks?
+
+Yes, on the client. The chart is built inside an effect and touches the DOM only
+there, so a server render emits the empty container. This package ships no
+`'use client'` banner of its own, so in the App Router mark your own component
+that imports it, or load it through `next/dynamic` with `ssr: false`.
+
+## Continue your React integration
+
+- [Follow the buyer SDK installation guide](https://docs.seatlayer.io/buyer-sdk/install/)
+  for the full browser integration, options, and events.
+- [Connect seat holds to secure server-side checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
+  without putting booking credentials in the browser.
+- [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
+  to connect a buyer hold id to payment and idempotent booking.
+- [Compare SeatLayer's mobile seat map SDKs](https://docs.seatlayer.io/buyer-sdk/mobile/)
+  when the same event also has to render in native iOS, Android, Flutter, or
+  React Native apps.
+- [Read the embedded Designer guide](https://docs.seatlayer.io/platform/embedded-designer/)
+  to let organizers draw their own venues inside your product.
+- [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the
+  interactive venue view buyers can switch to from the map.
+- [Point AI coding agents at the SeatLayer docs index](https://docs.seatlayer.io/llms.txt)
+  (`llms.txt`) for an agent-readable map of the documentation.
+
+## SeatLayer SDK ecosystem
+
+| Surface | Package or source |
+| --- | --- |
+| JavaScript | [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js) |
+| React | [`@seatlayer/react`](https://www.npmjs.com/package/@seatlayer/react) (this package) |
+| Vue | [`@seatlayer/vue`](https://www.npmjs.com/package/@seatlayer/vue) |
+| Angular | [`@seatlayer/angular`](https://www.npmjs.com/package/@seatlayer/angular) |
+| React Native | [`@seatlayer/react-native`](https://www.npmjs.com/package/@seatlayer/react-native) |
+| iOS | [`seatlayer-ios`](https://github.com/seatlayer/seatlayer-ios) |
+| Flutter | [`seatlayer`](https://pub.dev/packages/seatlayer) |
+| Android | [`seatlayer-android`](https://github.com/seatlayer/seatlayer-android) |
+| Server SDKs | [Node.js, Python, PHP, Ruby, .NET, Java, and Go](https://docs.seatlayer.io/server-sdk/install/) |
+
+## Development
+
+```bash
+pnpm install
+pnpm verify
+```
+
+Source, issues, and contribution guidance live in
+[seatlayer/seatlayer-sdk](https://github.com/seatlayer/seatlayer-sdk).
 
 ## License
 
