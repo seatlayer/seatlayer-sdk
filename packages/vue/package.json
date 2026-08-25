@@ -1,7 +1,7 @@
 {
   "name": "@seatlayer/vue",
   "version": "0.65.0",
-  "description": "SeatLayer's official Vue 3 seat map SDK — interactive reserved-seating charts with live availability, seat selection, holds, and a typed TypeScript API for Vue ticketing apps.",
+  "description": "SeatLayer's official Vue seating chart and seat map SDK \u2014 live availability, seat selection, temporary holds, and a typed TypeScript API for ticketing apps.",
   "license": "MIT",
   "author": {
     "name": "SeatLayer",
@@ -37,6 +37,8 @@
   ],
   "sideEffects": false,
   "keywords": [
+    "seat map",
+    "seating chart",
     "seat-map",
     "seating-chart",
     "seat-picker",
