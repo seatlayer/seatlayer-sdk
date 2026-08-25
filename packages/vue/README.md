@@ -1,19 +1,41 @@
-# @seatlayer/vue
+# SeatLayer Vue Seat Map SDK for Reserved Seating
 
 [![npm](https://img.shields.io/npm/v/@seatlayer/vue)](https://www.npmjs.com/package/@seatlayer/vue)
 [![npm downloads](https://img.shields.io/npm/dm/@seatlayer/vue)](https://www.npmjs.com/package/@seatlayer/vue)
 [![Vue](https://img.shields.io/badge/Vue-%E2%89%A53.3-42B883.svg)](https://vuejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-types%20included-3178C6.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](../../LICENSE)
 
-The official Vue 3 wrapper for SeatLayer reserved seating provides one native
-Vue component: `SeatingChart`. The buyer modal and iframe integration remain
-the framework-agnostic JavaScript `SeatPickerWidget` and `attachPickerFrame`
-helpers exported by this package; they are not additional Vue components.
+The official Vue 3 wrapper for SeatLayer reserved seating. Render an interactive
+seating chart with live seat availability inside a Vue app, let buyers pick
+seats, and take a temporary hold on the inventory they choose.
 
-[Package on npm](https://www.npmjs.com/package/@seatlayer/vue) ·
-[SeatPicker docs](https://docs.seatlayer.io/buyer-sdk/seat-picker/) ·
-[Live demo](https://app.seatlayer.io/demo/play) ·
-[Website](https://seatlayer.io/developers/)
+The buyer modal and iframe integration stay framework-agnostic: this package
+also re-exports the plain JavaScript `SeatPickerWidget` class and the
+`attachPickerFrame` helper, so a Vue host depends on one package.
+
+[SeatLayer Vue SDK on npm](https://www.npmjs.com/package/@seatlayer/vue) ·
+[Vue seat-map documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/) ·
+[SeatLayer reserved-seating platform](https://seatlayer.io/) ·
+[Buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) ·
+[SeatLayer JavaScript seat map SDK](https://www.npmjs.com/package/@seatlayer/js) ·
+[SeatLayer React seat map SDK](https://www.npmjs.com/package/@seatlayer/react) ·
+[SeatLayer Angular seat map SDK](https://www.npmjs.com/package/@seatlayer/angular) ·
+[SeatLayer AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit)
+
+## What is included
+
+- `SeatingChart` — one native Vue component (`SeatLayerSeatingChart`), written
+  as a render function so no Vue compiler plugin is needed.
+- `SeatPickerWidget` — the framework-agnostic one-call buyer modal.
+- `attachPickerFrame` — the host-side iframe helper for embedded pickers.
+- TypeScript declarations for ESM (`dist/index.d.ts`) and CommonJS
+  (`dist/index.d.cts`), including the `SeatingChartExposed` handle type.
+
+## Requirements
+
+- Vue 3.3 or newer (declared as a peer dependency).
+- A browser DOM: the chart is created when the component mounts.
 
 ## Install
 
@@ -21,10 +43,7 @@ helpers exported by this package; they are not additional Vue components.
 npm install @seatlayer/vue
 ```
 
-Requires Vue 3.3 or newer. Components are shipped as render functions, so you
-need no Vue compiler plugin to consume this package.
-
-## Usage
+## Quick start
 
 ```vue
 <script setup lang="ts">
@@ -94,6 +113,9 @@ chart mid-selection.
 | `@deck-tap` | `string` (floor id) |
 | `@hint` | `string \| null` — `null` clears the hint |
 | `@seat-hover` | `SeatHoverDetails \| null` — `null` when the pointer leaves |
+| `@access-expired` | `BuyerAccessExpiredEvent` |
+| `@access-unavailable` | `BuyerAccessUnavailableEvent` |
+| `@selected-object-unavailable` | `SelectedObjectUnavailableEvent` |
 
 ## Imperative API
 
@@ -105,7 +127,10 @@ Everything on the template ref, typed as `SeatingChartExposed`:
 `deselectCategories` · `setSelectableObjects` · `setMaxSelection` ·
 `getSelectionValidity` ·
 `getFloors` · `setFloor` · `setColorblindSafe` · `zoomIn` · `zoomOut` ·
-`zoomToFit`
+`zoomToFit` · `refreshAccess`
+
+Calling any of them before the chart exists returns an empty answer rather than
+throwing, so a template ref used one frame early is safe.
 
 ## Also exported
 
@@ -113,13 +138,112 @@ Everything on the template ref, typed as `SeatingChartExposed`:
 - `attachPickerFrame` — raw framework-agnostic JavaScript iframe helper; grows on `seatlayer:height` and
   pins on `seatlayer:fullscreen`.
 
-## Related
+## Security boundary
 
-- [`@seatlayer/react`](https://www.npmjs.com/package/@seatlayer/react) — React components
-- [`@seatlayer/angular`](https://www.npmjs.com/package/@seatlayer/angular) — Angular component
-- [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js) — framework-agnostic core
-- [Server SDKs](https://docs.seatlayer.io/server-sdk/install/) — Node.js, Python, PHP, Java, Go, Ruby, .NET
+The Vue app **selects and holds** inventory. Your trusted backend **inspects and
+books** the hold after payment or order validation.
+
+- Never ship a SeatLayer secret key in browser code or a bundled env variable.
+- Send only the `holdId` and your normal checkout context to your backend.
+- Calculate the charge from server-inspected hold items, not from browser input.
+- Reuse your stable order id as `bookingRef` so a retried booking is idempotent.
+
+Read [how the integration works](https://docs.seatlayer.io/start/how-it-works/)
+before connecting checkout.
+
+## Architecture
+
+This package is a thin Vue layer over
+[`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js), the
+framework-agnostic browser runtime. The component renders a single `<div>`,
+builds the chart on mount, forwards every prop and emit, and exposes the
+runtime's imperative handle through `defineExpose`. Chart geometry,
+availability, and holds come from the SeatLayer API at runtime.
+
+## Frequently asked questions
+
+### How do I add a seat map to a Vue app?
+
+Install `@seatlayer/vue`, render `<SeatingChart event="ev_…" />` in a container
+with a definite height, and handle `@selection-change`. That is a complete
+interactive seating chart with live availability; the
+[seat-picker documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
+covers props, events, holds, and checkout in depth.
+
+### Is this a real Vue component or an iframe?
+
+`SeatingChart` is a real Vue 3 component that renders a plain `<div>` into your
+own tree — no iframe and no stylesheet of its own. It is written as a render
+function rather than a single-file component, so it needs no Vue compiler plugin
+and works the same in Vite, Nuxt, and a plain bundler. If you would rather embed
+the buyer picker in an iframe, `attachPickerFrame` is exported for that.
+
+### How do temporary seat holds work?
+
+When a buyer commits to a selection, `hold()` reserves that inventory against
+concurrent buyers for a limited checkout window and returns an opaque `holdId`.
+The hold lapses on its own if checkout never completes — `@hold-expired` tells
+the app to return the buyer to the map — and `resumeHold()` restores it after a
+same-tab checkout navigation or a reload. This is what prevents double-selling
+without locking seats forever.
+
+### Can I use my own payment provider?
+
+Yes. Nothing in this package takes a payment. The browser hands your code a
+`holdId` and priced line items, your backend charges through whatever provider
+you already use, and it then books the hold through the
+[server-side checkout flow](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/).
+
+### Can I evaluate it without a SeatLayer account?
+
+You can explore a live seating chart in the browser at the
+[buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) with no
+account. Rendering your own venue needs an event key, because the chart and its
+availability are served by the SeatLayer API — create a free test event for
+that, which books no real inventory.
+
+## Continue your Vue integration
+
+- [Follow the buyer SDK installation guide](https://docs.seatlayer.io/buyer-sdk/install/)
+  for the full browser integration, options, and events.
+- [Connect seat holds to secure server-side checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
+  without putting booking credentials in the browser.
+- [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
+  to connect a buyer hold id to payment and idempotent booking.
+- [Compare SeatLayer's mobile seat map SDKs](https://docs.seatlayer.io/buyer-sdk/mobile/)
+  when the same event also has to render in native iOS, Android, Flutter, or
+  React Native apps.
+- [Read the embedded Designer guide](https://docs.seatlayer.io/platform/embedded-designer/)
+  to let organizers draw their own venues inside your product.
+- [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the
+  interactive venue view buyers can switch to from the map.
+- [Point AI coding agents at the SeatLayer docs index](https://docs.seatlayer.io/llms.txt)
+  (`llms.txt`) for an agent-readable map of the documentation.
+
+## SeatLayer SDK ecosystem
+
+| Surface | Package or source |
+| --- | --- |
+| JavaScript | [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js) |
+| React | [`@seatlayer/react`](https://www.npmjs.com/package/@seatlayer/react) |
+| Vue | [`@seatlayer/vue`](https://www.npmjs.com/package/@seatlayer/vue) (this package) |
+| Angular | [`@seatlayer/angular`](https://www.npmjs.com/package/@seatlayer/angular) |
+| React Native | [`@seatlayer/react-native`](https://www.npmjs.com/package/@seatlayer/react-native) |
+| iOS | [`seatlayer-ios`](https://github.com/seatlayer/seatlayer-ios) |
+| Flutter | [`seatlayer`](https://pub.dev/packages/seatlayer) |
+| Android | [`seatlayer-android`](https://github.com/seatlayer/seatlayer-android) |
+| Server SDKs | [Node.js, Python, PHP, Ruby, .NET, Java, and Go](https://docs.seatlayer.io/server-sdk/install/) |
+
+## Development
+
+```bash
+pnpm install
+pnpm verify
+```
+
+Source, issues, and contribution guidance live in
+[seatlayer/seatlayer-sdk](https://github.com/seatlayer/seatlayer-sdk).
 
 ## License
 
-MIT
+MIT © SeatLayer
