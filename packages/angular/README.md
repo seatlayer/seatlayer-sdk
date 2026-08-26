@@ -60,6 +60,7 @@ import { SeatLayerSeatingChartComponent, type SelectedSeat } from '@seatlayer/an
     <seatlayer-seating-chart
       #chart
       event="ev_9f3a"
+      publicKey="pk_live_your_publishable_key"
       style="display:block; height:520px"
       (selectionChange)="onSelectionChange($event)"
       (hold)="bookOnYourServer($event.holdId)"
@@ -89,7 +90,7 @@ export class CheckoutComponent {
 | `selectableObjects` | `string[] \| null` | Buyer-selectable allow-list. |
 | `numberOfPlacesToSelect` | `number` | Exact count required for a valid selection. |
 | `selectionValidators` | `PickerSelectionValidator[]` | Minimum, consecutive-seat, and no-orphan guards. |
-| `publicKey` | `string` | Reserved compatibility input; stored by the chart but not transmitted to SeatLayer. |
+| `publicKey` | `string` | Publishable browser key for public Platform events. Configure the browser origin in SeatLayer. |
 | `locale` | `string` | BCP-47 locale for built-in copy. |
 | `currency` | `string` | ISO currency for price formatting. |
 | `colorblindSafe` | `boolean` | Render colorblind-safe seat glyphs. |
@@ -167,6 +168,9 @@ and books** the hold after payment or order validation.
 
 - Never ship a SeatLayer secret key in browser code or a bundled environment
   file.
+- A `pk_` public key is designed for browser code. SeatLayer binds it to the
+  configured origin and event; keep private-channel access behind a server-minted
+  `buyerAccessTokenProvider`.
 - Send only the `holdId` and your normal checkout context to your backend.
 - Calculate the charge from server-inspected hold items, not from browser input.
 - Reuse your stable order id as `bookingRef` so a retried booking is idempotent.

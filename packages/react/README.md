@@ -64,6 +64,7 @@ export function Checkout() {
     <SeatingChart
       ref={chart}
       event="ev_9f3a"
+      publicKey="pk_live_your_publishable_key"
       style={{ width: '100%', height: 520 }}
       onSelectionChange={(seats) => console.log('selected', seats)}
       onHold={({ holdId }) => bookOnYourServer(holdId)}
@@ -92,6 +93,7 @@ export function Tickets() {
   return (
     <SeatPicker
       event="ev_9f3a"
+      publicKey="pk_live_your_publishable_key"
       style={{ width: '100%', height: 640 }}
       selectionValidators={[
         { type: 'minimumSelectedPlaces', minimum: 2 },
@@ -132,6 +134,7 @@ Extends the vanilla SDK options minus `container` (the component owns its own mo
 | Prop | Type | Notes |
 | --- | --- | --- |
 | `event` | `string` | **Required.** The event key, e.g. `ev_9f3a`. |
+| `publicKey` | `string?` | Publishable browser key for public Platform events. Configure the browser origin in SeatLayer. |
 | `apiBase` | `string?` | API origin. Defaults to the SeatLayer production API. |
 | `maxSelection` | `number?` | Max seats selectable at once (default 10). |
 | `selectedObjects` | `string[]?` | Initial object ids or public labels. |
@@ -156,6 +159,9 @@ and books** the hold after payment or order validation.
 
 - Never ship a SeatLayer secret key in browser code or in a bundled environment
   variable.
+- A `pk_` public key is designed for browser code. SeatLayer binds it to the
+  configured origin and event; keep private-channel access behind a server-minted
+  `buyerAccessTokenProvider`.
 - Send only the `holdId` and your normal checkout context to your backend.
 - Calculate the charge from server-inspected hold items, not from browser input.
 - Reuse your stable order id as `bookingRef` so a retried booking is idempotent.
