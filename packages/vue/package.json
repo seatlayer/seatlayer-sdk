@@ -1,6 +1,6 @@
 {
   "name": "@seatlayer/vue",
-  "version": "0.68.0",
+  "version": "0.69.0",
   "description": "SeatLayer's official Vue seating chart and seat map SDK \u2014 live availability, seat selection, temporary holds, and a typed TypeScript API for ticketing apps.",
   "license": "MIT",
   "author": {
@@ -60,8 +60,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@seatlayer/core": "0.68.0",
-    "@seatlayer/js": "0.68.0"
+    "@seatlayer/core": "0.69.0",
+    "@seatlayer/js": "0.69.0"
   },
   "peerDependencies": {
     "vue": ">=3.3.0"
