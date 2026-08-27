@@ -148,6 +148,10 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         // not per render.
         tools,
         theme: callbacks.current.theme,
+        // Light / dark / follow the operator's own preference. Applied before
+        // first paint so a cockpit asked for light never flashes the war-room
+        // dark on the way in.
+        themeMode: callbacks.current.themeMode,
         onReady: () => callbacks.current.onReady?.(),
         onTallies: (t: SeatManagerTallies) => callbacks.current.onTallies?.(t),
         onActivity: (activity: SeatManagerActivity) => callbacks.current.onActivity?.(activity),
@@ -194,6 +198,12 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
     useEffect(() => {
       managerRef.current?.setTheme(props.theme);
     }, [props.theme]);
+
+    // Reflected in place: the cockpit keeps the operator's selection, the
+    // camera and the realtime socket across a mode change.
+    useEffect(() => {
+      managerRef.current?.setThemeMode(props.themeMode);
+    }, [props.themeMode]);
 
     useEffect(() => {
       managerRef.current?.setKeepLiveWhileHidden(keepLiveWhileHidden);
