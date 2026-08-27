@@ -13,6 +13,7 @@ class MockManager {
   setCapabilities = vi.fn();
   setCurrency = vi.fn();
   setTheme = vi.fn();
+  setThemeMode = vi.fn();
   setKeepLiveWhileHidden = vi.fn();
   setTokenRefresh = vi.fn();
   setMode = vi.fn();
@@ -80,6 +81,26 @@ describe('SeatManager reactive props', () => {
     expect(instance.setCurrency).toHaveBeenCalledWith('EUR');
     expect(instance.setTheme).toHaveBeenCalledWith(nextTheme);
     expect(instance.setKeepLiveWhileHidden).toHaveBeenCalledWith(false);
+  });
+
+  it('carries the light/dark/auto mode to the cockpit at mount and on every change', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one', themeMode: 'light' }));
+    });
+    const instance = instances[0]!;
+    // At MOUNT, not by a follow-up call — a cockpit asked for light must not
+    // paint the war-room dark first and correct itself.
+    expect(instance.options.themeMode).toBe('light');
+
+    instance.setThemeMode.mockClear();
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one', themeMode: 'auto' }));
+    });
+    expect(instance.setThemeMode).toHaveBeenCalledWith('auto');
+    // In place: switching sides must never tear down a live board.
+    expect(instances).toHaveLength(1);
+    expect(instance.destroy).not.toHaveBeenCalled();
   });
 
   it('reactively installs and removes token refresh while retaining the latest callback', async () => {
