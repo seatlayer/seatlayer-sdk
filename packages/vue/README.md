@@ -27,7 +27,7 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 
 - `SeatingChart` — one native Vue component (`SeatLayerSeatingChart`), written
   as a render function so no Vue compiler plugin is needed.
-- `SeasonPicker` — an unpublished fixed-inclusion Season source candidate.
+- `SeasonPicker` — fixed-inclusion Season selection and returning-holder intent.
 - `SeatPickerWidget` — the framework-agnostic one-call buyer modal.
 - `attachPickerFrame` — the host-side iframe helper for embedded pickers.
 - TypeScript declarations for ESM (`dist/index.d.ts`) and CommonJS
@@ -76,7 +76,7 @@ async function checkout() {
 </template>
 ```
 
-### Fixed renewable Season source candidate
+### Fixed renewable Season
 
 ```vue
 <SeasonPicker
@@ -90,8 +90,8 @@ async function checkout() {
 The Season handoff is opaque and price-free. Its `pricingAuthority: "host"`
 and `authoritativeAmountIncluded: false` flags mean trusted server code must
 apply the package price, tax, and payment decision before booking the
-identity-only allocation. This source is not a published framework support
-claim.
+identity-only allocation. `SeasonPicker` is supported in `@seatlayer/vue`
+`0.72.0` and newer.
 
 ## Props
 
