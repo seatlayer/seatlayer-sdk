@@ -1,6 +1,6 @@
 {
   "name": "@seatlayer/angular",
-  "version": "0.71.5",
+  "version": "0.72.0",
   "description": "SeatLayer's official Angular seating chart and seat map SDK \u2014 live availability, seat selection, temporary holds, and a typed TypeScript API for ticketing apps.",
   "license": "MIT",
   "author": {
@@ -40,8 +40,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.lib.json"
   },
   "dependencies": {
-    "@seatlayer/core": "0.71.5",
-    "@seatlayer/js": "0.71.5",
+    "@seatlayer/core": "0.72.0",
+    "@seatlayer/js": "0.72.0",
     "tslib": "^2.8.1"
   },
   "peerDependencies": {
