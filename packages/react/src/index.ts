@@ -29,6 +29,20 @@ export type {
   CheckoutHandoff,
   CheckoutLineItem,
 } from './SeatPicker';
+export { SeasonPicker } from './SeasonPicker';
+export type {
+  SeasonPickerHandle,
+  SeasonPickerProps,
+  SeasonPickerOptions,
+  SeasonAvailability,
+  SeasonCheckoutHandoff,
+  SeasonDescriptor,
+  SeasonOperation,
+  SeasonOperationState,
+  SeasonOfferPresentation,
+  SeasonRenewalIntent,
+  SeasonStatusEvent,
+} from './SeasonPicker';
 // The framework-agnostic widget class — for the one-call modal (SeatPickerWidget.open()).
 export { SeatPicker as SeatPickerWidget } from '@seatlayer/js';
 // Host-side embed helper: grows the iframe on `seatlayer:height` and pins it on
