@@ -15,8 +15,8 @@ Everything is a real React component with a typed imperative handle: the browser
 selects and **holds**, and your trusted server **books** the hold.
 
 [SeatLayer React SDK on npm](https://www.npmjs.com/package/@seatlayer/react) ·
-[React seat-map documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/) ·
-[SeatLayer reserved-seating platform](https://seatlayer.io/) ·
+[React seat-map documentation](https://docs.seatlayer.io/buyer-sdk/react/) ·
+[SeatLayer SDK and API overview](https://seatlayer.io/developers/) ·
 [Buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) ·
 [SeatLayer JavaScript seat map SDK](https://www.npmjs.com/package/@seatlayer/js) ·
 [SeatLayer Vue seat map SDK](https://www.npmjs.com/package/@seatlayer/vue) ·
@@ -30,6 +30,8 @@ selects and **holds**, and your trusted server **books** the hold.
   your styles own.
 - `SeatPicker` — the complete buyer experience: map, legend, tray, pricing, and
   the checkout hand-off.
+- `SeasonPicker` — an unpublished source candidate for fixed-inclusion Season
+  selection and returning-holder intent; it is not a stable support claim.
 - `SeatManager` — the organizer control room, for dashboards that monitor and
   block live inventory.
 - `EmbeddedDesigner` — a hosted chart Designer inside your own application.
@@ -82,6 +84,26 @@ const restored = await chart.current?.resumeHold(savedHoldId);
 await chart.current?.releaseLabels(['A-12']);          // keep the remainder held
 await chart.current?.release();                        // release the current hold
 ```
+
+### Fixed renewable Season source candidate
+
+```tsx
+const season = useRef<SeasonPickerHandle>(null);
+
+<SeasonPicker
+  ref={season}
+  season="sea_2027"
+  buyerAccessToken={session.token}
+  onContinue={(handoff) => continueOnYourServer(handoff.operationId)}
+/>
+
+await season.current?.holdSameSeat(['A-1'], 'sop_checkout_1183');
+```
+
+The browser handoff is opaque and price-free. Inspect, charge, book, cancel, and
+commit renewals only from trusted server code. This wrapper is source-only until
+an immutable framework candidate passes its release gate; the npm badge above
+does not make it supported Season evidence.
 
 For the complete buyer experience — map, legend, priced tray, and the checkout
 hand-off — render `SeatPicker` instead:
