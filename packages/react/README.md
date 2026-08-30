@@ -100,10 +100,12 @@ const season = useRef<SeasonPickerHandle>(null);
 await season.current?.holdSameSeat(['A-1'], 'sop_checkout_1183');
 ```
 
-The browser handoff is opaque and price-free. Inspect, charge, book, cancel, and
-commit renewals only from trusted server code. This wrapper is source-only until
-an immutable framework candidate passes its release gate; the npm badge above
-does not make it supported Season evidence.
+The browser handoff is opaque and price-free. Its `pricingAuthority: "host"`
+and `authoritativeAmountIncluded: false` flags mean trusted server code must
+apply the package price, tax, and payment decision before booking the
+identity-only allocation. This wrapper is source-only until an immutable
+framework candidate passes its release gate; the npm badge above does not make
+it supported Season evidence.
 
 For the complete buyer experience — map, legend, priced tray, and the checkout
 hand-off — render `SeatPicker` instead:
