@@ -27,8 +27,8 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 
 - `SeatLayerSeatingChartComponent` — one standalone Angular component with the
   `seatlayer-seating-chart` selector.
-- `SeatLayerSeasonPickerComponent` — an unpublished fixed-inclusion Season
-  source candidate with the `seatlayer-season-picker` selector.
+- `SeatLayerSeasonPickerComponent` — fixed-inclusion Season selection and
+  returning-holder intent with the `seatlayer-season-picker` selector.
 - `SeatPickerWidget` — the framework-agnostic one-call buyer modal.
 - `attachPickerFrame` — the host-side iframe helper for embedded pickers.
 - An Angular Package Format build (`fesm2022`) with TypeScript declarations at
@@ -81,7 +81,7 @@ export class CheckoutComponent {
 }
 ```
 
-### Fixed renewable Season source candidate
+### Fixed renewable Season
 
 ```html
 <seatlayer-season-picker
@@ -95,8 +95,8 @@ export class CheckoutComponent {
 The Season handoff is opaque and price-free. Its `pricingAuthority: "host"`
 and `authoritativeAmountIncluded: false` flags mean trusted server code must
 apply the package price, tax, and payment decision before booking the
-identity-only allocation. This source is not a published framework support
-claim.
+identity-only allocation. `SeatLayerSeasonPickerComponent` is supported in
+`@seatlayer/angular` `0.72.0` and newer.
 
 ## Inputs
 

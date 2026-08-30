@@ -30,8 +30,8 @@ selects and **holds**, and your trusted server **books** the hold.
   your styles own.
 - `SeatPicker` — the complete buyer experience: map, legend, tray, pricing, and
   the checkout hand-off.
-- `SeasonPicker` — an unpublished source candidate for fixed-inclusion Season
-  selection and returning-holder intent; it is not a stable support claim.
+- `SeasonPicker` — fixed-inclusion Season selection and returning-holder intent
+  with the same typed lifecycle and imperative-handle conventions.
 - `SeatManager` — the organizer control room, for dashboards that monitor and
   block live inventory.
 - `EmbeddedDesigner` — a hosted chart Designer inside your own application.
@@ -85,7 +85,7 @@ await chart.current?.releaseLabels(['A-12']);          // keep the remainder hel
 await chart.current?.release();                        // release the current hold
 ```
 
-### Fixed renewable Season source candidate
+### Fixed renewable Season
 
 ```tsx
 const season = useRef<SeasonPickerHandle>(null);
@@ -103,9 +103,8 @@ await season.current?.holdSameSeat(['A-1'], 'sop_checkout_1183');
 The browser handoff is opaque and price-free. Its `pricingAuthority: "host"`
 and `authoritativeAmountIncluded: false` flags mean trusted server code must
 apply the package price, tax, and payment decision before booking the
-identity-only allocation. This wrapper is source-only until an immutable
-framework candidate passes its release gate; the npm badge above does not make
-it supported Season evidence.
+identity-only allocation. `SeasonPicker` is supported in `@seatlayer/react`
+`0.72.0` and newer.
 
 For the complete buyer experience — map, legend, priced tray, and the checkout
 hand-off — render `SeatPicker` instead:
