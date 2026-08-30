@@ -5,6 +5,7 @@
  * NgModule.
  */
 export { SeatLayerSeatingChartComponent } from './seating-chart.component';
+export { SeatLayerSeasonPickerComponent } from './season-picker.component';
 
 export type {
   SelectedSeat,
@@ -13,6 +14,14 @@ export type {
   GAAreaAvailability,
   HoldLineItem,
   SeatHoverDetails,
+  SeasonAvailability,
+  SeasonCheckoutHandoff,
+  SeasonDescriptor,
+  SeasonOperation,
+  SeasonOperationState,
+  SeasonPickerOptions,
+  SeasonRenewalIntent,
+  SeasonStatusEvent,
 } from '@seatlayer/js';
 
 // Sales Channels — buyer access sessions for private channel inventory.

@@ -15,8 +15,8 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 `attachPickerFrame` helper, so an Angular host depends on one package.
 
 [SeatLayer Angular SDK on npm](https://www.npmjs.com/package/@seatlayer/angular) ·
-[Angular seat-map documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/) ·
-[SeatLayer reserved-seating platform](https://seatlayer.io/) ·
+[Angular seat-map documentation](https://docs.seatlayer.io/buyer-sdk/angular/) ·
+[SeatLayer SDK and API overview](https://seatlayer.io/developers/) ·
 [Buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) ·
 [SeatLayer JavaScript seat map SDK](https://www.npmjs.com/package/@seatlayer/js) ·
 [SeatLayer React seat map SDK](https://www.npmjs.com/package/@seatlayer/react) ·
@@ -27,6 +27,8 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 
 - `SeatLayerSeatingChartComponent` — one standalone Angular component with the
   `seatlayer-seating-chart` selector.
+- `SeatLayerSeasonPickerComponent` — an unpublished fixed-inclusion Season
+  source candidate with the `seatlayer-season-picker` selector.
 - `SeatPickerWidget` — the framework-agnostic one-call buyer modal.
 - `attachPickerFrame` — the host-side iframe helper for embedded pickers.
 - An Angular Package Format build (`fesm2022`) with TypeScript declarations at
@@ -78,6 +80,23 @@ export class CheckoutComponent {
   bookOnYourServer(holdId: string) { /* … */ }
 }
 ```
+
+### Fixed renewable Season source candidate
+
+```html
+<seatlayer-season-picker
+  #seasonPicker
+  season="sea_2027"
+  [buyerAccessToken]="session.token"
+  (continued)="continueOnYourServer($event.operationId)"
+/>
+```
+
+The Season handoff is opaque and price-free. Its `pricingAuthority: "host"`
+and `authoritativeAmountIncluded: false` flags mean trusted server code must
+apply the package price, tax, and payment decision before booking the
+identity-only allocation. This source is not a published framework support
+claim.
 
 ## Inputs
 

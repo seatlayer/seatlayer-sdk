@@ -6,6 +6,8 @@
  */
 export { SeatingChart } from './SeatingChart';
 export type { SeatingChartExposed } from './SeatingChart';
+export { SeasonPicker } from './SeasonPicker';
+export type { SeasonPickerExposed } from './SeasonPicker';
 
 export type {
   SelectedSeat,
@@ -14,6 +16,14 @@ export type {
   GAAreaAvailability,
   HoldLineItem,
   SeatHoverDetails,
+  SeasonAvailability,
+  SeasonCheckoutHandoff,
+  SeasonDescriptor,
+  SeasonOperation,
+  SeasonOperationState,
+  SeasonPickerOptions,
+  SeasonRenewalIntent,
+  SeasonStatusEvent,
 } from '@seatlayer/js';
 
 // Sales Channels — buyer access sessions for private channel inventory.

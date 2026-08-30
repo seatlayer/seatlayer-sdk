@@ -15,8 +15,8 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 `attachPickerFrame` helper, so a Vue host depends on one package.
 
 [SeatLayer Vue SDK on npm](https://www.npmjs.com/package/@seatlayer/vue) ·
-[Vue seat-map documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/) ·
-[SeatLayer reserved-seating platform](https://seatlayer.io/) ·
+[Vue seat-map documentation](https://docs.seatlayer.io/buyer-sdk/vue/) ·
+[SeatLayer SDK and API overview](https://seatlayer.io/developers/) ·
 [Buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) ·
 [SeatLayer JavaScript seat map SDK](https://www.npmjs.com/package/@seatlayer/js) ·
 [SeatLayer React seat map SDK](https://www.npmjs.com/package/@seatlayer/react) ·
@@ -27,6 +27,7 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 
 - `SeatingChart` — one native Vue component (`SeatLayerSeatingChart`), written
   as a render function so no Vue compiler plugin is needed.
+- `SeasonPicker` — an unpublished fixed-inclusion Season source candidate.
 - `SeatPickerWidget` — the framework-agnostic one-call buyer modal.
 - `attachPickerFrame` — the host-side iframe helper for embedded pickers.
 - TypeScript declarations for ESM (`dist/index.d.ts`) and CommonJS
@@ -74,6 +75,23 @@ async function checkout() {
   <button @click="checkout">Continue</button>
 </template>
 ```
+
+### Fixed renewable Season source candidate
+
+```vue
+<SeasonPicker
+  ref="season"
+  season="sea_2027"
+  :buyer-access-token="session.token"
+  @continue="handoff => continueOnYourServer(handoff.operationId)"
+/>
+```
+
+The Season handoff is opaque and price-free. Its `pricingAuthority: "host"`
+and `authoritativeAmountIncluded: false` flags mean trusted server code must
+apply the package price, tax, and payment decision before booking the
+identity-only allocation. This source is not a published framework support
+claim.
 
 ## Props
 
