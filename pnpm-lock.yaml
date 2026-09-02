@@ -30,11 +30,11 @@ importers:
   packages/angular:
     dependencies:
       '@seatlayer/core':
-        specifier: 0.75.2
-        version: 0.75.2
+        specifier: 0.76.0
+        version: 0.76.0
       '@seatlayer/js':
-        specifier: 0.75.2
-        version: 0.75.2
+        specifier: 0.76.0
+        version: 0.76.0
       tslib:
         specifier: ^2.8.1
         version: 2.8.1
@@ -67,11 +67,11 @@ importers:
   packages/react:
     dependencies:
       '@seatlayer/core':
-        specifier: 0.75.2
-        version: 0.75.2
+        specifier: 0.76.0
+        version: 0.76.0
       '@seatlayer/js':
-        specifier: 0.75.2
-        version: 0.75.2
+        specifier: 0.76.0
+        version: 0.76.0
     devDependencies:
       '@types/react':
         specifier: ^19.0.0
@@ -95,11 +95,11 @@ importers:
   packages/vue:
     dependencies:
       '@seatlayer/core':
-        specifier: 0.75.2
-        version: 0.75.2
+        specifier: 0.76.0
+        version: 0.76.0
       '@seatlayer/js':
-        specifier: 0.75.2
-        version: 0.75.2
+        specifier: 0.76.0
+        version: 0.76.0
     devDependencies:
       tsup:
         specifier: ^8.5.1
@@ -915,11 +915,11 @@ packages:
     engines: {node: '>=18.0.0', npm: '>=8.0.0'}
     hasBin: true
 
-  '@seatlayer/core@0.75.2':
-    resolution: {integrity: sha512-XtWFUUBO9YhRmHUDsTO9rOZzm0z88WiQhIOXtGp2ngdM+pvwqtTFeFOE1F6rzJgKPezGDjNVxByv2MELky8Pow==}
+  '@seatlayer/core@0.76.0':
+    resolution: {integrity: sha512-Y9Aog1x+X6O5Px0HJmEdEZX08T2S2LBAmuXanoJEQZKPQLWsCYPspCaN7edPHnv1I4NWUEvSXdcZi49u6YkZUg==}
 
-  '@seatlayer/js@0.75.2':
-    resolution: {integrity: sha512-LFGz6QjC/PqW7YDN/Cf1B9NagKgBd2Ryc6N4xpvf0ClK4lu3jCiWmP7l7T9vMYgtomEPsZwFB97s2fzjzq6FQA==}
+  '@seatlayer/js@0.76.0':
+    resolution: {integrity: sha512-AF4ESSgilsqec1rvraXkvWBzN5cHdBQC8hkecDwXcKU57TCA5jXMEUJTw0gbuGmNJTgRox94TsO+BWi5+MrO1g==}
 
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
@@ -2737,7 +2737,7 @@ snapshots:
       '@napi-rs/lzma-linux-x64-gnu': 1.5.1
       fsevents: 2.3.3
 
-  '@seatlayer/core@0.75.2':
+  '@seatlayer/core@0.76.0':
     dependencies:
       earcut: 3.2.3
       konva: 10.3.1
@@ -2747,9 +2747,9 @@ snapshots:
       - canvas
       - skia-canvas
 
-  '@seatlayer/js@0.75.2':
+  '@seatlayer/js@0.76.0':
     dependencies:
-      '@seatlayer/core': 0.75.2
+      '@seatlayer/core': 0.76.0
     transitivePeerDependencies:
       - canvas
       - skia-canvas
