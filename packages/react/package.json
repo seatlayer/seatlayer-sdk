@@ -1,6 +1,6 @@
 {
   "name": "@seatlayer/react",
-  "version": "0.77.1",
+  "version": "0.77.2",
   "description": "SeatLayer's official React seating chart and seat map SDK \u2014 live availability, seat selection, temporary holds, and a typed TypeScript API for ticketing apps.",
   "license": "MIT",
   "author": {
@@ -77,8 +77,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@seatlayer/core": "0.77.1",
-    "@seatlayer/js": "0.77.1"
+    "@seatlayer/core": "0.77.2",
+    "@seatlayer/js": "0.77.2"
   },
   "peerDependencies": {
     "react": ">=17.0.0"
