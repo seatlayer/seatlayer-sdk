@@ -60,7 +60,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@seatlayer/core": "0.79.0",
+    "@seatlayer/core": "0.80.0",
     "@seatlayer/js": "0.80.0"
   },
   "peerDependencies": {

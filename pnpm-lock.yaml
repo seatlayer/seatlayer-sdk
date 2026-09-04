@@ -30,8 +30,8 @@ importers:
   packages/angular:
     dependencies:
       '@seatlayer/core':
-        specifier: 0.79.0
-        version: 0.79.0
+        specifier: 0.80.0
+        version: 0.80.0
       '@seatlayer/js':
         specifier: 0.80.0
         version: 0.80.0
@@ -67,8 +67,8 @@ importers:
   packages/react:
     dependencies:
       '@seatlayer/core':
-        specifier: 0.79.0
-        version: 0.79.0
+        specifier: 0.80.0
+        version: 0.80.0
       '@seatlayer/js':
         specifier: 0.80.0
         version: 0.80.0
@@ -95,8 +95,8 @@ importers:
   packages/vue:
     dependencies:
       '@seatlayer/core':
-        specifier: 0.79.0
-        version: 0.79.0
+        specifier: 0.80.0
+        version: 0.80.0
       '@seatlayer/js':
         specifier: 0.80.0
         version: 0.80.0
@@ -914,9 +914,6 @@ packages:
     resolution: {integrity: sha512-GJFM5d4k5dSoY/oyILsKArplGvkss1DOURyXsl6IEM/X9RV3bQwqu9GY6tYfA97ZwIejfAguHa9fo1pGOQcyDg==}
     engines: {node: '>=18.0.0', npm: '>=8.0.0'}
     hasBin: true
-
-  '@seatlayer/core@0.79.0':
-    resolution: {integrity: sha512-VdclGEw/azIspi978WMmVcLX/bnMjzSiSWn/CamA1zGEeYWDv8EhoaZgqTZgGqw0PV/XCLPdldxrlacaC3uIPg==}
 
   '@seatlayer/core@0.80.0':
     resolution: {integrity: sha512-Y9H0dMa5TA1oRpr6vY7lVQ9SLOkDJA+sNBbiZ6WdGVKUyto85fiA0Tnwns8c5WCeZhJtIelaj4vYkj2hugJihw==}
@@ -2739,16 +2736,6 @@ snapshots:
     optionalDependencies:
       '@napi-rs/lzma-linux-x64-gnu': 1.5.1
       fsevents: 2.3.3
-
-  '@seatlayer/core@0.79.0':
-    dependencies:
-      earcut: 3.2.3
-      konva: 10.3.1
-      ogl: 1.0.11
-      polygon-clipping: 0.15.7
-    transitivePeerDependencies:
-      - canvas
-      - skia-canvas
 
   '@seatlayer/core@0.80.0':
     dependencies:
