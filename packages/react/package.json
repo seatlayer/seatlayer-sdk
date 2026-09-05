@@ -7,7 +7,7 @@
     "name": "SeatLayer",
     "url": "https://seatlayer.io/"
   },
-  "homepage": "https://seatlayer.io/",
+  "homepage": "https://docs.seatlayer.io/buyer-sdk/react/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/seatlayer/seatlayer-sdk.git",
