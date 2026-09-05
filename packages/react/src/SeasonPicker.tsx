@@ -10,10 +10,8 @@ import {
   type SeasonAvailability,
   type SeasonCheckoutHandoff,
   type SeasonDescriptor,
-  type SeasonPickerOptions as CoreSeasonPickerOptions,
+  type SeasonPickerOptions,
   type SeasonRenewalIntent,
-  type RendererViewMode,
-  type SeatPickerTheme,
 } from '@seatlayer/js';
 
 export type {
@@ -22,31 +20,11 @@ export type {
   SeasonDescriptor,
   SeasonOperation,
   SeasonOperationState,
+  SeasonOfferPresentation,
+  SeasonPickerOptions,
   SeasonRenewalIntent,
   SeasonStatusEvent,
 } from '@seatlayer/js';
-
-/** Display-only commercial context; the host must re-price on its server. */
-export interface SeasonOfferPresentation {
-  eyebrow?: string;
-  priceLabel?: string;
-  compareAtPriceLabel?: string;
-  savingsLabel?: string;
-  priceNote?: string;
-  benefits?: readonly string[];
-  renewalLabel?: string;
-}
-
-/** Forward-compatible wrapper options for the interactive Season buyer flow. */
-export interface SeasonPickerOptions extends CoreSeasonPickerOptions {
-  offer?: SeasonOfferPresentation;
-  maxSelection?: number;
-  numberOfPlacesToSelect?: number;
-  locale?: string;
-  initialView?: RendererViewMode;
-  enable3D?: boolean;
-  theme?: SeatPickerTheme;
-}
 
 /** Imperative controls for the fixed-inclusion Season buyer flow. */
 export interface SeasonPickerHandle {
@@ -75,6 +53,9 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
     const {
       season,
       apiBase,
+      publicKey,
+      checkout,
+      returnUrl,
       buyerAccessToken,
       initialOperationId,
       recoveryTimeoutMs,
@@ -124,19 +105,9 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
         if (pickerRef.current === picker) pickerRef.current = null;
       };
     }, [
-      season,
-      apiBase,
-      buyerAccessToken,
-      initialOperationId,
-      recoveryTimeoutMs,
-      fetch,
-      offerKey,
-      maxSelection,
-      numberOfPlacesToSelect,
-      locale,
-      initialView,
-      enable3D,
-      themeKey,
+      season, apiBase, publicKey, checkout, returnUrl,
+      buyerAccessToken, initialOperationId, recoveryTimeoutMs, fetch,
+      offerKey, maxSelection, numberOfPlacesToSelect, locale, initialView, enable3D, themeKey,
     ]);
 
     useImperativeHandle(ref, (): SeasonPickerHandle => ({

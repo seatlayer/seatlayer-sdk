@@ -35,6 +35,12 @@ export const SeasonPicker = defineComponent({
   props: {
     season: { type: String, required: true },
     apiBase: { type: String, default: undefined },
+    publicKey: { type: String, default: undefined },
+    checkout: {
+      type: String as PropType<SeasonPickerOptions['checkout']>,
+      default: undefined,
+    },
+    returnUrl: { type: String, default: undefined },
     buyerAccessTokenProvider: {
       type: Function as PropType<SeasonPickerOptions['buyerAccessTokenProvider']>,
       default: undefined,
@@ -54,6 +60,7 @@ export const SeasonPicker = defineComponent({
     'renewal-intent': (_intent: SeasonRenewalIntent) => true,
     'access-expired': (_event: unknown) => true,
     'access-unavailable': (_event: unknown) => true,
+    'order-confirmed': (_order: unknown) => true,
     'status-change': (_event: SeasonStatusEvent) => true,
     error: (_error: unknown) => true,
   },
@@ -73,6 +80,9 @@ export const SeasonPicker = defineComponent({
         container: element,
         season: props.season,
         apiBase: props.apiBase,
+        publicKey: props.publicKey,
+        checkout: props.checkout,
+        returnUrl: props.returnUrl,
         buyerAccessTokenProvider: props.buyerAccessTokenProvider,
         buyerAccessToken: props.buyerAccessToken,
         initialOperationId: props.initialOperationId,
@@ -84,6 +94,7 @@ export const SeasonPicker = defineComponent({
         onRenewalIntent: (intent) => emit('renewal-intent', intent),
         onAccessExpired: (event) => emit('access-expired', event),
         onAccessUnavailable: (event) => emit('access-unavailable', event),
+        onOrderConfirmed: (order) => emit('order-confirmed', order),
         onStatusChange: (event) => emit('status-change', event),
         onError: (error) => emit('error', error),
       });
@@ -96,6 +107,9 @@ export const SeasonPicker = defineComponent({
         container.value,
         props.season,
         props.apiBase,
+        props.publicKey,
+        props.checkout,
+        props.returnUrl,
         props.buyerAccessTokenProvider,
         props.buyerAccessToken,
         props.initialOperationId,
