@@ -37,6 +37,15 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   /** Public API base override. */
   @Input() apiBase?: string;
 
+  /** Publishable account key, accepted for snippet parity. Never sent. */
+  @Input() publicKey?: string;
+
+  /** Who takes the money once the package is held. Default `'handoff'`. */
+  @Input() checkout?: SeasonPickerOptions['checkout'];
+
+  /** Where a redirecting gateway returns the buyer, for hosted checkout. */
+  @Input() returnUrl?: string;
+
   /** Refreshable one-time browser bearer provider. */
   @Input() buyerAccessTokenProvider?: SeasonPickerOptions['buyerAccessTokenProvider'];
 
@@ -70,6 +79,9 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   /** Buyer access cannot be recovered. */
   @Output() readonly accessUnavailable = new EventEmitter<unknown>();
 
+  /** Hosted checkout only: the gateway webhook landed and the order is paid. */
+  @Output() readonly orderConfirmed = new EventEmitter<unknown>();
+
   /** Buyer-visible operation status changed. */
   @Output() readonly statusChange = new EventEmitter<SeasonStatusEvent>();
 
@@ -80,7 +92,8 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   private readonly container!: ElementRef<HTMLDivElement>;
 
   private static readonly REBUILD_INPUTS = new Set([
-    'season', 'apiBase', 'buyerAccessTokenProvider', 'buyerAccessToken',
+    'season', 'apiBase', 'publicKey', 'checkout', 'returnUrl',
+    'buyerAccessTokenProvider', 'buyerAccessToken',
     'initialOperationId', 'recoveryTimeoutMs', 'fetch',
   ]);
   private readonly zone = inject(NgZone);
@@ -138,6 +151,9 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
         container: this.container.nativeElement,
         season: this.season,
         apiBase: this.apiBase,
+        publicKey: this.publicKey,
+        checkout: this.checkout,
+        returnUrl: this.returnUrl,
         buyerAccessTokenProvider: this.buyerAccessTokenProvider,
         buyerAccessToken: this.buyerAccessToken,
         initialOperationId: this.initialOperationId,
@@ -149,6 +165,7 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
         onRenewalIntent: (value) => this.zone.run(() => this.renewalIntent.emit(value)),
         onAccessExpired: (value) => this.zone.run(() => this.accessExpired.emit(value)),
         onAccessUnavailable: (value) => this.zone.run(() => this.accessUnavailable.emit(value)),
+        onOrderConfirmed: (value) => this.zone.run(() => this.orderConfirmed.emit(value)),
         onStatusChange: (value) => this.zone.run(() => this.statusChange.emit(value)),
         onError: (value) => this.zone.run(() => this.errored.emit(value)),
       });
