@@ -1,4 +1,4 @@
-# SeatLayer Angular Seat Map SDK for Reserved Seating
+# SeatLayer Angular Seating Chart and Seat Map SDK
 
 [![npm](https://img.shields.io/npm/v/@seatlayer/angular)](https://www.npmjs.com/package/@seatlayer/angular)
 [![npm downloads](https://img.shields.io/npm/dm/@seatlayer/angular)](https://www.npmjs.com/package/@seatlayer/angular)
@@ -6,9 +6,9 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-types%20included-3178C6.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](../../LICENSE)
 
-The official Angular wrapper for SeatLayer reserved seating. Render an
-interactive seating chart with live seat availability inside an Angular app, let
-buyers pick seats, and take a temporary hold on the inventory they choose.
+The official Angular seating chart component for SeatLayer reserved seating.
+Render live seat availability and selection inside an Angular app, then take a
+temporary hold on the inventory the buyer chooses.
 
 The buyer modal and iframe integration stay framework-agnostic: this package
 also re-exports the plain JavaScript `SeatPickerWidget` class and the
@@ -80,6 +80,46 @@ export class CheckoutComponent {
   bookOnYourServer(holdId: string) { /* … */ }
 }
 ```
+
+### Complete buyer picker
+
+Use the re-exported `SeatPickerWidget` when you want the ready modal with its
+map, legend, priced tray, hold timer, and checkout hand-off:
+
+```ts
+import { Component } from '@angular/core';
+import { SeatPickerWidget } from '@seatlayer/angular';
+
+@Component({
+  selector: 'app-seat-picker-button',
+  standalone: true,
+  template: `<button (click)="openSeatPicker()">Choose seats</button>`,
+})
+export class SeatPickerButtonComponent {
+  async openSeatPicker() {
+    await SeatPickerWidget.open({
+      event: 'ev_9f3a',
+      publicKey: 'pk_live_your_publishable_key',
+      webMcp: true,
+      onCheckout: (hold) => {
+        void continueCheckoutOnYourServer(hold.holdId).catch(showCheckoutError);
+      },
+    });
+  }
+}
+```
+
+`continueCheckoutOnYourServer` and `showCheckoutError` are supplied by your
+application. The first owns the async server request; `.catch(...)` surfaces a
+rejected checkout.
+
+On supported browsers, the complete picker includes the Map | 3D buyer view.
+Its opt-in `webMcp: true` setting lets a compatible in-browser assistant
+describe the event, find seats, select them, and read the selection. Use
+`webMcp: { holds: true }` only when the assistant should also place a temporary
+hold. These tools do not take payment or book seats. See the
+[buyer WebMCP seat-selection guide](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)
+for the full contract and iframe origin controls.
 
 ### Fixed renewable Season
 
@@ -261,10 +301,10 @@ that, which books no real inventory.
 - [Compare SeatLayer's mobile seat map SDKs](https://docs.seatlayer.io/buyer-sdk/mobile/)
   when the same event also has to render in native iOS, Android, Flutter, or
   React Native apps.
-- [Read the embedded Designer guide](https://docs.seatlayer.io/platform/embedded-designer/)
-  to let organizers draw their own venues inside your product.
+- [Use the separate `@seatlayer/js` EmbeddedDesigner API](https://docs.seatlayer.io/platform/embedded-designer/)
+  when organizers need hosted chart editing inside an Angular product.
 - [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the
-  interactive venue view buyers can switch to from the map.
+  interactive venue view available through `SeatPickerWidget` in supported browsers.
 - [Point AI coding agents at the SeatLayer docs index](https://docs.seatlayer.io/llms.txt)
   (`llms.txt`) for an agent-readable map of the documentation.
 
@@ -294,4 +334,5 @@ Source, issues, and contribution guidance live in
 
 ## License
 
-MIT © SeatLayer
+The Angular wrapper source in this package is MIT licensed. The separately
+distributed SeatLayer runtime is not covered by this package's MIT license.

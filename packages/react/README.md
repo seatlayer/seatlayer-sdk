@@ -26,7 +26,7 @@ selects and **holds**, and your trusted server **books** the hold.
 
 ## What is included
 
-- `SeatingChart` — the headless interactive chart, mounted into a plain `<div>`
+- `SeatingChart` — the lower-level interactive chart, mounted into a plain `<div>`
   your styles own.
 - `SeatPicker` — the complete buyer experience: map, legend, tray, pricing, and
   the checkout hand-off.
@@ -146,9 +146,38 @@ The full-experience `SeatPicker` exposes the canonical safe widget controls thro
 | `setMapTheme()`, `setEventDetailsHidden()`, `setPricing()` | Update host-owned presentation without remounting or losing a hold. |
 | `isColorblindSafe()`, `setColorblindSafe()` | Read and update the shared buyer accessibility preference. |
 | `getViewMode()`, `setViewMode()` | Read and update the 2D map projection. |
-| `getBuyerView()`, `setBuyerView()` | Switch between the map and interactive 3D venue, including optional camera intent. |
+| `getBuyerView()`, `setBuyerView()` | Switch between the map and [interactive 3D seat views](https://seatlayer.io/3d-seat-map/), including optional camera intent. |
 | `refreshAccess()` | Re-acquire a private buyer-access session. |
 | `destroy()` | Intentionally omitted: React owns teardown through component unmount. |
+
+### Buyer WebMCP tools
+
+Set `webMcp` on `SeatPicker` to let a compatible in-browser assistant describe
+the event, find seats, select them on the map, and read the current selection:
+
+```tsx
+import { SeatPicker } from '@seatlayer/react';
+
+<SeatPicker
+  event="ev_9f3a"
+  publicKey="pk_live_your_publishable_key"
+  webMcp
+  style={{ width: '100%', height: 640 }}
+  onCheckout={(hold) => {
+    void continueCheckoutOnYourServer(hold.holdId).catch(showCheckoutError);
+  }}
+/>
+```
+
+`continueCheckoutOnYourServer` and `showCheckoutError` are supplied by your
+application. The first owns the async server request; `.catch(...)` surfaces a
+rejected checkout.
+
+WebMCP is off by default and inert in browsers without the API. Use
+`webMcp={{ holds: true }}` only when the assistant should also be able to place
+a temporary hold. The tools do not take payment or book seats; see the
+[buyer WebMCP seat-selection guide](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)
+for iframe origin controls and the complete tool contract.
 
 ## Props
 
@@ -201,8 +230,8 @@ These components are a thin React layer over
 framework-agnostic browser runtime. The wrapper mounts a plain `<div>`, builds
 the chart inside an effect, forwards every prop and callback, and exposes the
 runtime's imperative handle through `ref`. Chart geometry, availability, and
-holds all come from the SeatLayer API at runtime, so the same event renders
-identically on web and on the mobile SDKs.
+holds all come from the SeatLayer API at runtime, so the same chart and event
+inventory can be reused across supported web and mobile SDKs.
 
 Callback props are read through a ref, so changing one never tears the chart
 down. Only the identity props listed above rebuild it.
@@ -243,7 +272,7 @@ compact embeds, and the buyer SDK remains unchanged when manager options are off
 
 ## Embed the chart Designer
 
-`EmbeddedDesigner` gives an organizer a native-feeling Designer inside your React
+`EmbeddedDesigner` gives an organizer the hosted Designer inside your React
 application. Mint `designerUrl` from your backend — never from a browser using an
 account secret key. The component verifies messages by iframe source, Designer origin,
 and the chart/workspace ids you provide.
@@ -448,6 +477,8 @@ that imports it, or load it through `next/dynamic` with `ssr: false`.
 
 - [Follow the buyer SDK installation guide](https://docs.seatlayer.io/buyer-sdk/install/)
   for the full browser integration, options, and events.
+- [Build a React or Next.js seating chart](https://docs.seatlayer.io/buyer-sdk/react-seating-chart/)
+  with the framework-specific tutorial and client-mounting guidance.
 - [Connect seat holds to secure server-side checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
   without putting booking credentials in the browser.
 - [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
@@ -488,4 +519,5 @@ Source, issues, and contribution guidance live in
 
 ## License
 
-MIT © SeatLayer
+The React wrapper source in this package is MIT licensed. The separately
+distributed SeatLayer runtime is not covered by this package's MIT license.
