@@ -13,6 +13,13 @@ availability, and let buyers take temporary holds on the inventory they choose.
 Each wrapper is a real component for its framework with a typed imperative
 handle: the browser selects and **holds**, and your trusted server **books**.
 
+Start with the package-specific guide after installation: [React](https://docs.seatlayer.io/buyer-sdk/react/),
+[Vue](https://docs.seatlayer.io/buyer-sdk/vue/), or
+[Angular](https://docs.seatlayer.io/buyer-sdk/angular/). Choose the complete
+picker when you want SeatLayer's ready buyer flow; choose the seating chart
+when your application owns the surrounding controls and sends the opaque hold
+to its trusted checkout server.
+
 [SeatLayer reserved-seating platform](https://seatlayer.io/) ·
 [Buyer SDK documentation](https://docs.seatlayer.io/buyer-sdk/install/) ·
 [Buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) ·
