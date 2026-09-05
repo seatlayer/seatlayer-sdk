@@ -48,7 +48,7 @@ wrapper here depends on.
 npm install @seatlayer/react   # or @seatlayer/vue, @seatlayer/angular
 ```
 
-## Quick start
+## React quick start
 
 ```tsx
 import { SeatPicker } from '@seatlayer/react';
@@ -60,6 +60,21 @@ export function Tickets() {
 
 Each package README carries the framework's own quick start, props, events, and
 imperative handle.
+
+## Choose the buyer surface
+
+| Surface | Use it for | Framework support |
+| --- | --- | --- |
+| `SeatPicker` | Complete buyer flow with map, legend, priced tray, holds, and checkout hand-off | React component; `SeatPickerWidget` modal re-exported by all three packages |
+| `SeatingChart` | Lower-level chart inside controls and checkout UI owned by your application | React, Vue, and Angular components |
+| `SeasonPicker` | Fixed-inclusion Season selection and returning-holder intent | React, Vue, and Angular components |
+| `SeatManager` / `EmbeddedDesigner` | Event-scoped organizer operations and hosted chart editing | React components |
+
+The complete picker can opt into
+[buyer WebMCP seat-selection tools](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)
+with `webMcp: true`. This registers describe, find, select, and read-selection
+tools in compatible browsers. `webMcp: { holds: true }` separately enables the
+hold tool; payment and booking remain on the trusted checkout path.
 
 ## Security boundary
 
@@ -91,18 +106,19 @@ designer, 3D source, or public source maps fails `pnpm boundary:check`.
 
 That depends on what you need to own. SeatLayer ships a browser runtime plus
 first-party React, Vue, and Angular components, a matching set of native mobile
-SDKs, and server SDKs for the booking half — so one event renders the same
-everywhere and the booking stays on your server. If you only need a drawing
-surface, a generic canvas library is lighter; if you need live availability,
-temporary holds, and inventory that cannot be double-sold, that is the part
-SeatLayer provides.
+SDKs, and server SDKs for the booking half — so the same event and inventory can
+be reused across supported clients while booking stays on your server. If you
+only need a drawing surface, a generic canvas library is lighter; if you need
+live availability, temporary holds, and inventory that cannot be double-sold,
+that is the part SeatLayer provides.
 
 ### Which package should I install?
 
 Install the wrapper for your framework — `@seatlayer/react`, `@seatlayer/vue`,
 or `@seatlayer/angular`. Use [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js)
-directly for plain JavaScript, Svelte, or any framework without a first-party
-wrapper; it is the same runtime the wrappers are built on, so nothing is lost.
+directly for plain JavaScript or a framework without a first-party wrapper. It
+provides the shared browser runtime; your application owns the framework
+lifecycle around it.
 
 ### Are TypeScript types included?
 
@@ -140,7 +156,9 @@ books the hold through the
 - [Compare SeatLayer's mobile seat map SDKs](https://docs.seatlayer.io/buyer-sdk/mobile/)
   when the same event also has to render in native apps.
 - [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the
-  interactive venue view buyers can switch to from the map.
+  interactive venue view available in the complete picker on supported browsers.
+- [Try the 53,018-seat stadium demo](https://app.seatlayer.io/demo/play/large-stadium)
+  and read the [renderer performance and measurement guide](https://docs.seatlayer.io/platform/renderer-performance/).
 - [Point AI coding agents at the SeatLayer docs index](https://docs.seatlayer.io/llms.txt)
   (`llms.txt`) for an agent-readable map of the documentation.
 
