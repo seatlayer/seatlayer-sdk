@@ -26,16 +26,16 @@ selects and **holds**, and your trusted server **books** the hold.
 
 ## What is included
 
-- `SeatingChart` — the lower-level interactive chart, mounted into a plain `<div>`
+- `SeatingChart`: the lower-level interactive chart, mounted into a plain `<div>`
   your styles own.
-- `SeatPicker` — the complete buyer experience: map, legend, tray, pricing, and
+- `SeatPicker`: the complete buyer experience: map, legend, tray, pricing, and
   the checkout hand-off.
-- `SeasonPicker` — fixed-inclusion Season selection and returning-holder intent
+- `SeasonPicker`: fixed-inclusion Season selection and returning-holder intent
   with the same typed lifecycle and imperative-handle conventions.
-- `SeatManager` — the organizer control room, for dashboards that monitor and
+- `SeatManager`: the organizer control room, for dashboards that monitor and
   block live inventory.
-- `EmbeddedDesigner` — a hosted chart Designer inside your own application.
-- `SeatPickerWidget` and `attachPickerFrame` — the framework-agnostic modal and
+- `EmbeddedDesigner`: a hosted chart Designer inside your own application.
+- `SeatPickerWidget` and `attachPickerFrame`: the framework-agnostic modal and
   iframe helpers, re-exported so a React host depends on this package alone.
 - TypeScript declarations for ESM (`dist/index.d.ts`) and CommonJS
   (`dist/index.d.cts`), plus the `@seatlayer/react/manager` subpath.
@@ -44,7 +44,7 @@ selects and **holds**, and your trusted server **books** the hold.
 
 - React 17 or newer (declared as a peer dependency).
 - A browser DOM. The chart is created inside an effect, and this package ships
-  no `'use client'` banner of its own — in the Next.js App Router, mark the
+  no `'use client'` banner of its own. In the Next.js App Router, mark the
   component that imports it.
 
 ## Install
@@ -106,8 +106,8 @@ apply the package price, tax, and payment decision before booking the
 identity-only allocation. `SeasonPicker` is supported in `@seatlayer/react`
 `0.72.0` and newer.
 
-For the complete buyer experience — map, legend, priced tray, and the checkout
-hand-off — render `SeatPicker` instead:
+For the complete buyer experience (map, legend, priced tray, and the checkout
+hand-off), render `SeatPicker` instead:
 
 ```tsx
 import { SeatPicker } from '@seatlayer/react';
@@ -198,7 +198,7 @@ Extends the vanilla SDK options minus `container` (the component owns its own mo
 | `onHold` | `(result) => void` | Fires when seats are held; hand `holdId` to your server. |
 | `onHoldRestored` | `(result) => void` | Fires after `resumeHold()` verifies an active hold. |
 | `onError` | `(err) => void` | Fires on errors. |
-| `className` / `style` | — | Applied to the container element. |
+| `className` / `style` | not applicable | Applied to the container element. |
 
 Changing a callback prop does **not** rebuild the canvas. `selectedObjects` and
 `selectableObjects` are initial values; use the imperative methods for later
@@ -217,7 +217,7 @@ and books** the hold after payment or order validation.
 - Send only the `holdId` and your normal checkout context to your backend.
 - Calculate the charge from server-inspected hold items, not from browser input.
 - Reuse your stable order id as `bookingRef` so a retried booking is idempotent.
-- Organizer surfaces take a short-lived, event-scoped `mse_` browser grant —
+- Organizer surfaces take a short-lived, event-scoped `mse_` browser grant,
   never a tenant `sk_` secret.
 
 Read [how the integration works](https://docs.seatlayer.io/start/how-it-works/)
@@ -244,7 +244,7 @@ are unsupported in React/browser code and must stay on your server. Keep the
 grant in memory, never in a URL, browser storage, or logs. Monitor, Inspect,
 Block/unblock, fullscreen, presence, exact configured
 booked value, booking velocity, and the **Booking momentum** overlay are one
-shared package surface—not host-owned tabs.
+shared package surface, not host-owned tabs.
 Block mode includes explicit multi-select category controls plus a searchable,
 section-filtered blocked-inventory list for restoring specific seats to sale.
 Select mode adds host-owned initial/programmatic selection, availability policy,
@@ -273,7 +273,7 @@ compact embeds, and the buyer SDK remains unchanged when manager options are off
 ## Embed the chart Designer
 
 `EmbeddedDesigner` gives an organizer the hosted Designer inside your React
-application. Mint `designerUrl` from your backend — never from a browser using an
+application. Mint `designerUrl` from your backend, never from a browser using an
 account secret key. The component verifies messages by iframe source, Designer origin,
 and the chart/workspace ids you provide.
 
@@ -325,31 +325,31 @@ with cause-specific copy. The skeleton honors `prefers-reduced-motion`.
 | --- | --- | --- | --- |
 | `showLoadingState` | `boolean?` | `true` | Render the built-in skeleton and error card. Set `false` to supply your own chrome. |
 | `loadingTimeoutMs` | `number?` | `20000` | Show the error card if `ready` never arrives within this window. |
-| `onRequestRelaunch` | `() => void` | — | Called by **"Try again"** _and_ by automatic renewal (below). Mint a fresh session and set a new `designerUrl` (which recreates the iframe and returns to loading). When omitted, "Try again" reloads the current URL. |
+| `onRequestRelaunch` | `() => void` | none | Called by **"Try again"** _and_ by automatic renewal (below). Mint a fresh session and set a new `designerUrl` (which recreates the iframe and returns to loading). When omitted, "Try again" reloads the current URL. |
 | `autoRenewSession` | `boolean?` | `true`¹ | Silently renew the session before it expires and auto-recover once if an expiry error slips through. ¹Defaults `true` only when `onRequestRelaunch` is provided; a no-op without it. Set `false` for fully manual "Try again". |
 
-All props are optional and additive — existing integrations keep working
+All props are optional and additive: existing integrations keep working
 unchanged.
 
 ### Session lifecycle
 
 Designer sessions are **short-lived by design**: your backend mints a `dse_`
 token (default 1 hour, up to 4 hours via `expiresInSeconds`) baked into
-`designerUrl`. Choose a TTL that matches how long organizers actually edit — the
+`designerUrl`. Choose a TTL that matches how long organizers actually edit: the
 renewal below keeps even a multi-hour session alive, so you needn't over-provision.
 
 Pass `onRequestRelaunch` that mints (and awaits) a fresh session and updates the
 `designerUrl` state, and the component makes expiry a non-event:
 
-- **Silent proactive renewal** — from each `ready`'s `expiresAt` it schedules an
+- **Silent proactive renewal**: from each `ready`'s `expiresAt` it schedules an
   automatic relaunch shortly before the session lapses (~3 min ahead, or after 80%
   of the remaining life for a sub-15-minute TTL, never sooner than 30s after
   `ready`), re-armed on every `ready`.
-- **Automatic expiry recovery** — if an expiry error slips through anyway, it makes
+- **Automatic expiry recovery**: if an expiry error slips through anyway, it makes
   **one** automatic relaunch attempt before showing the "Try again" card.
 
 The wrapper **recreates the iframe whenever `designerUrl` changes**, and
-**in-progress work is autosaved server-side**, so relaunching is safe — the
+**in-progress work is autosaved server-side**, so relaunching is safe: the
 organizer's chart is restored right where they left off.
 
 ```tsx
@@ -401,12 +401,12 @@ throwing, so a ref used one frame early is safe.
 | `onSelectionLimit` | Active numeric cap |
 | `onHold` | `HoldResult` |
 | `onHoldRestored` | `HoldResult` |
-| `onHoldExpired` | — |
+| `onHoldExpired` | no payload |
 | `onGAClick` | `GAAreaAvailability` |
 | `onError` | `unknown` |
 | `onDeckTap` | `string` (floor id) |
-| `onHint` | `string \| null` — `null` clears the hint |
-| `onSeatHover` | `SeatHoverDetails \| null` — `null` when the pointer leaves |
+| `onHint` | `string \| null`: `null` clears the hint |
+| `onSeatHover` | `SeatHoverDetails \| null`: `null` when the pointer leaves |
 | `onAccessExpired` | `BuyerAccessExpiredEvent` |
 | `onAccessUnavailable` | `BuyerAccessUnavailableEvent` |
 | `onSelectedObjectUnavailable` | `SelectedObjectUnavailableEvent` |
@@ -425,7 +425,7 @@ covers props, events, holds, and checkout in depth.
 ### Is this a real React component or an iframe?
 
 `SeatingChart`, `SeatPicker`, and `SeatManager` are real React components that
-render a plain `<div>` into your own tree — no iframe, no portal, and no
+render a plain `<div>` into your own tree, with no iframe, no portal, and no
 stylesheet of their own to fight with. `EmbeddedDesigner` is the one exception:
 the organizer Designer is deliberately hosted in a sandboxed iframe so no
 Designer credential ever reaches your bundle. If you *want* an iframe for the
@@ -434,7 +434,7 @@ buyer picker, `attachPickerFrame` is exported for that.
 ### What is the difference between `SeatPicker` and `SeatingChart`?
 
 `SeatingChart` is the chart alone: it draws the venue, manages selection, and
-hands you the seats — you build the surrounding UI. `SeatPicker` is the complete
+hands you the seats, and you build the surrounding UI. `SeatPicker` is the complete
 buyer experience with legend, priced tray, hold timer, and checkout hand-off
 already built. Start with `SeatPicker` if you want a working ticket flow today,
 and drop to `SeatingChart` when your design system owns the chrome.
@@ -443,8 +443,8 @@ and drop to `SeatingChart` when your design system owns the chrome.
 
 When a buyer commits to a selection, `hold()` reserves that inventory against
 concurrent buyers for a limited checkout window and returns an opaque `holdId`.
-The hold lapses on its own if checkout never completes — `onHoldExpired` tells
-the app to return the buyer to the map — and `resumeHold()` restores it after a
+The hold lapses on its own if checkout never completes. `onHoldExpired` tells
+the app to return the buyer to the map, and `resumeHold()` restores it after a
 same-tab checkout navigation or a reload. This is what prevents double-selling
 without locking seats forever.
 
@@ -463,7 +463,7 @@ without it, no payment code is downloaded.
 You can explore a live seating chart in the browser at the
 [buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) with no
 account. Rendering your own venue needs an event key, because the chart and its
-availability are served by the SeatLayer API — create a free test event for
+availability are served by the SeatLayer API: create a free test event for
 that, which books no real inventory.
 
 ### Does it work with Next.js and other React frameworks?

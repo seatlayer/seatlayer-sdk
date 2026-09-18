@@ -127,7 +127,7 @@ designer, 3D source, or public source maps fails `pnpm boundary:check`.
 
 That depends on what you need to own. SeatLayer ships a browser runtime plus
 first-party React, Vue, and Angular components, a matching set of native mobile
-SDKs, and server SDKs for the booking half — so the same event and inventory can
+SDKs, and server SDKs for the booking half, so the same event and inventory can
 be reused across supported clients while booking stays on your server. If you
 only need a drawing surface, a generic canvas library is lighter; if you need
 live availability, temporary holds, and inventory that cannot be double-sold,
@@ -135,7 +135,7 @@ that is the part SeatLayer provides.
 
 ### Which package should I install?
 
-Install the wrapper for your framework — `@seatlayer/react`, `@seatlayer/vue`,
+Install the wrapper for your framework: `@seatlayer/react`, `@seatlayer/vue`,
 or `@seatlayer/angular`. Use [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js)
 directly for plain JavaScript or a framework without a first-party wrapper. It
 provides the shared browser runtime; your application owns the framework
@@ -143,7 +143,7 @@ lifecycle around it.
 
 ### Are TypeScript types included?
 
-Yes. Every package ships its own declarations — no `@types/*` package to add.
+Yes. Every package ships its own declarations, with no `@types/*` package to add.
 React and Vue publish both ESM (`dist/index.d.ts`) and CommonJS
 (`dist/index.d.cts`) declarations; Angular ships an Angular Package Format build
 with `dist/index.d.ts`. Types are checked at release by `publint` and

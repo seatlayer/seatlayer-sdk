@@ -25,12 +25,12 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 
 ## What is included
 
-- `SeatLayerSeatingChartComponent` — one standalone Angular component with the
+- `SeatLayerSeatingChartComponent`: one standalone Angular component with the
   `seatlayer-seating-chart` selector.
-- `SeatLayerSeasonPickerComponent` — fixed-inclusion Season selection and
+- `SeatLayerSeasonPickerComponent`: fixed-inclusion Season selection and
   returning-holder intent with the `seatlayer-season-picker` selector.
-- `SeatPickerWidget` — the framework-agnostic one-call buyer modal.
-- `attachPickerFrame` — the host-side iframe helper for embedded pickers.
+- `SeatPickerWidget`: the framework-agnostic one-call buyer modal.
+- `attachPickerFrame`: the host-side iframe helper for embedded pickers.
 - An Angular Package Format build (`fesm2022`) with TypeScript declarations at
   `dist/index.d.ts`.
 
@@ -46,7 +46,7 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/angular
 ```
 
-The component is **standalone** — import it directly, no NgModule needed.
+The component is **standalone**: import it directly, no NgModule needed.
 
 ## Quick start
 
@@ -175,12 +175,12 @@ mid-selection because an array instance changed.
 | `(selectionLimit)` | Active numeric cap |
 | `(hold)` | `HoldResult` |
 | `(holdRestored)` | `HoldResult` |
-| `(holdExpired)` | — |
+| `(holdExpired)` | no payload |
 | `(gaClick)` | `GAAreaAvailability` |
 | `(errored)` | `unknown` |
 | `(deckTap)` | `string` (floor id) |
-| `(hint)` | `string \| null` — `null` clears the hint |
-| `(seatHover)` | `SeatHoverDetails \| null` — `null` when the pointer leaves |
+| `(hint)` | `string \| null`: `null` clears the hint |
+| `(seatHover)` | `SeatHoverDetails \| null`: `null` when the pointer leaves |
 | `(accessExpired)` | `BuyerAccessExpiredEvent` |
 | `(accessUnavailable)` | `BuyerAccessUnavailableEvent` |
 | `(selectedObjectUnavailable)` | `SelectedObjectUnavailableEvent` |
@@ -210,14 +210,14 @@ throwing, so a template ref used one frame early is safe.
 ## Zone behaviour
 
 The chart runs a `requestAnimationFrame` render loop and its own pointer
-handlers. Those are created **outside** the Angular zone — left inside it, every
+handlers. Those are created **outside** the Angular zone: left inside it, every
 frame would schedule change detection for your whole application. Each callback
 re-enters the zone only to emit, which is the only part Angular needs to see.
 
 ## Also exported
 
-- `SeatPickerWidget` — raw framework-agnostic JavaScript one-call modal (`SeatPickerWidget.open()`).
-- `attachPickerFrame` — raw framework-agnostic JavaScript iframe helper; grows on `seatlayer:height` and
+- `SeatPickerWidget`: raw framework-agnostic JavaScript one-call modal (`SeatPickerWidget.open()`).
+- `attachPickerFrame`: raw framework-agnostic JavaScript iframe helper; grows on `seatlayer:height` and
   pins on `seatlayer:fullscreen`.
 
 ## Security boundary
@@ -260,7 +260,7 @@ covers inputs, outputs, holds, and checkout in depth.
 ### Is this a real Angular component or an iframe?
 
 `SeatLayerSeatingChartComponent` is a real standalone Angular component whose
-template is a plain `<div>` in your own tree — no iframe and no stylesheet of
+template is a plain `<div>` in your own tree, with no iframe and no stylesheet of
 its own. Its render loop and pointer handlers are created outside the Angular
 zone and re-enter it only to emit, so a running chart does not schedule change
 detection on every frame. If you would rather embed the buyer picker in an iframe,
@@ -270,8 +270,8 @@ detection on every frame. If you would rather embed the buyer picker in an ifram
 
 When a buyer commits to a selection, `holdSelection()` reserves that inventory
 against concurrent buyers for a limited checkout window and returns an opaque
-`holdId`. The hold lapses on its own if checkout never completes —
-`(holdExpired)` tells the app to return the buyer to the map — and
+`holdId`. The hold lapses on its own if checkout never completes.
+`(holdExpired)` tells the app to return the buyer to the map, and
 `resumeHold()` restores it after a same-tab checkout navigation or a reload.
 This is what prevents double-selling without locking seats forever.
 
@@ -287,7 +287,7 @@ you already use, and it then books the hold through the
 You can explore a live seating chart in the browser at the
 [buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) with no
 account. Rendering your own venue needs an event key, because the chart and its
-availability are served by the SeatLayer API — create a free test event for
+availability are served by the SeatLayer API: create a free test event for
 that, which books no real inventory.
 
 ## Continue your Angular integration
