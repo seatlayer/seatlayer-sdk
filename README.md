@@ -1,10 +1,12 @@
-# SeatLayer Seat Map SDK for Reserved Seating — React, Vue, and Angular
+# SeatLayer Seat Map SDK for Reserved Seating: React, Vue and Angular
 
 [![CI](https://github.com/seatlayer/seatlayer-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/seatlayer/seatlayer-sdk/actions/workflows/ci.yml)
 [![npm @seatlayer/react](https://img.shields.io/npm/v/@seatlayer/react?label=%40seatlayer%2Freact)](https://www.npmjs.com/package/@seatlayer/react)
 [![npm @seatlayer/vue](https://img.shields.io/npm/v/@seatlayer/vue?label=%40seatlayer%2Fvue)](https://www.npmjs.com/package/@seatlayer/vue)
 [![npm @seatlayer/angular](https://img.shields.io/npm/v/@seatlayer/angular?label=%40seatlayer%2Fangular)](https://www.npmjs.com/package/@seatlayer/angular)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](LICENSE)
+
+SeatLayer is interactive seating chart software built for stadium scale. Platforms embed the white-label seat picker with their own checkout; organizers sell seated events on their own website with their own payment gateway.
 
 The official framework wrappers for SeatLayer reserved seating. Add an
 interactive seating chart and seat picker to a ticketing app, show live seat
@@ -30,9 +32,13 @@ to its trusted checkout server.
 [SeatLayer Flutter seat map SDK](https://github.com/seatlayer/seatlayer-flutter) ·
 [SeatLayer AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit)
 
+Two-step shape: the buyer picks and holds seats in the client with your public key, then your server confirms the booking with your secret key while your platform keeps checkout and its own payment provider.
+
+**Start here:** [Quickstart](https://docs.seatlayer.io/start/quickstart/) · [Holds and checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/) · [React, Vue and Angular guides](https://docs.seatlayer.io/buyer-sdk/install/) · [SDK catalog](https://docs.seatlayer.io/sdk-catalog.json) · [Pricing](https://seatlayer.io/pricing/): $0 entry, 100 free confirmed-sold-seat credits per organization each month, then $0.10 down to $0.05 a credit, and credits never expire.
+
 ## Scale evidence
 
-SeatLayer is benchmarked on public 100,000-, 150,000- and 200,000-seat venue fixtures: 200,000 seats chart-ready in 1.95 s with 58 FPS zoom and 60 FPS pan in a desktop benchmark (15 September 2026). Fixtures, method, all runs and SHA-256 manifests: https://github.com/seatlayer/seatlayer-performance · Try the 53,018-seat live demo: https://app.seatlayer.io/demo/play/large-stadium
+Benchmarked on public 100,000-, 150,000- and 200,000-seat venue fixtures on 15 September 2026: 200,000 seats chart-ready in 1.95 s, desktop, local production build. Fixtures, method and run logs: https://github.com/seatlayer/seatlayer-performance. Live 200,000-seat stadium demo: https://app.seatlayer.io/demo/play/century-stadium-200k. This is renderer evidence, not a concurrent-buyer claim.
 
 ## Packages in this repository
 
@@ -161,7 +167,7 @@ books the hold through the
   when the same event also has to render in native apps.
 - [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the
   interactive venue view available in the complete picker on supported browsers.
-- [Try the 53,018-seat stadium demo](https://app.seatlayer.io/demo/play/large-stadium)
+- [Try the 200,000-seat stadium demo](https://app.seatlayer.io/demo/play/century-stadium-200k)
   and read the [renderer performance and measurement guide](https://docs.seatlayer.io/platform/renderer-performance/).
 - [Point AI coding agents at the SeatLayer docs index](https://docs.seatlayer.io/llms.txt)
   (`llms.txt`) for an agent-readable map of the documentation.
