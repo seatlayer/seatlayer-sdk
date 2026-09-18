@@ -25,11 +25,11 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 
 ## What is included
 
-- `SeatingChart` — one Vue 3 component wrapper (`SeatLayerSeatingChart`), written
+- `SeatingChart`: one Vue 3 component wrapper (`SeatLayerSeatingChart`), written
   as a render function so no Vue compiler plugin is needed.
-- `SeasonPicker` — fixed-inclusion Season selection and returning-holder intent.
-- `SeatPickerWidget` — the framework-agnostic one-call buyer modal.
-- `attachPickerFrame` — the host-side iframe helper for embedded pickers.
+- `SeasonPicker`: fixed-inclusion Season selection and returning-holder intent.
+- `SeatPickerWidget`: the framework-agnostic one-call buyer modal.
+- `attachPickerFrame`: the host-side iframe helper for embedded pickers.
 - TypeScript declarations for ESM (`dist/index.d.ts`) and CommonJS
   (`dist/index.d.cts`), including the `SeatingChartExposed` handle type.
 
@@ -168,12 +168,12 @@ chart mid-selection.
 | `@selection-limit` | Active numeric cap |
 | `@hold` | `HoldResult` |
 | `@hold-restored` | `HoldResult` |
-| `@hold-expired` | — |
+| `@hold-expired` | no payload |
 | `@ga-click` | `GAAreaAvailability` |
 | `@error` | `unknown` |
 | `@deck-tap` | `string` (floor id) |
-| `@hint` | `string \| null` — `null` clears the hint |
-| `@seat-hover` | `SeatHoverDetails \| null` — `null` when the pointer leaves |
+| `@hint` | `string \| null`: `null` clears the hint |
+| `@seat-hover` | `SeatHoverDetails \| null`: `null` when the pointer leaves |
 | `@access-expired` | `BuyerAccessExpiredEvent` |
 | `@access-unavailable` | `BuyerAccessUnavailableEvent` |
 | `@selected-object-unavailable` | `SelectedObjectUnavailableEvent` |
@@ -195,8 +195,8 @@ throwing, so a template ref used one frame early is safe.
 
 ## Also exported
 
-- `SeatPickerWidget` — raw framework-agnostic JavaScript one-call modal (`SeatPickerWidget.open()`).
-- `attachPickerFrame` — raw framework-agnostic JavaScript iframe helper; grows on `seatlayer:height` and
+- `SeatPickerWidget`: raw framework-agnostic JavaScript one-call modal (`SeatPickerWidget.open()`).
+- `attachPickerFrame`: raw framework-agnostic JavaScript iframe helper; grows on `seatlayer:height` and
   pins on `seatlayer:fullscreen`.
 
 ## Security boundary
@@ -237,7 +237,7 @@ covers props, events, holds, and checkout in depth.
 ### Is this a real Vue component or an iframe?
 
 `SeatingChart` is a Vue 3 component that renders a plain `<div>` into your own
-tree — no iframe and no stylesheet of its own. It is written as a render
+tree, with no iframe and no stylesheet of its own. It is written as a render
 function rather than a single-file component, so it needs no Vue compiler
 plugin. Use it on the client in Vite, Nuxt, or another Vue 3 bundler. If you
 would rather embed the buyer picker in an iframe, `attachPickerFrame` is
@@ -247,8 +247,8 @@ exported for that.
 
 When a buyer commits to a selection, `hold()` reserves that inventory against
 concurrent buyers for a limited checkout window and returns an opaque `holdId`.
-The hold lapses on its own if checkout never completes — `@hold-expired` tells
-the app to return the buyer to the map — and `resumeHold()` restores it after a
+The hold lapses on its own if checkout never completes. `@hold-expired` tells
+the app to return the buyer to the map, and `resumeHold()` restores it after a
 same-tab checkout navigation or a reload. This is what prevents double-selling
 without locking seats forever.
 
@@ -264,7 +264,7 @@ you already use, and it then books the hold through the
 You can explore a live seating chart in the browser at the
 [buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) with no
 account. Rendering your own venue needs an event key, because the chart and its
-availability are served by the SeatLayer API — create a free test event for
+availability are served by the SeatLayer API: create a free test event for
 that, which books no real inventory.
 
 ## Continue your Vue integration
