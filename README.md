@@ -71,6 +71,17 @@ export function Tickets() {
 Each package README carries the framework's own quick start, props, events, and
 imperative handle.
 
+## Examples
+
+Two complete applications you can clone and run:
+
+- [seatlayer-react-example](https://github.com/seatlayer/seatlayer-react-example): a Vite and React app that renders the headless `SeatingChart`, picks best available seats, takes a hold, and hands the hold id to checkout.
+- [seatlayer-nextjs-example](https://github.com/seatlayer/seatlayer-nextjs-example): the same flow on Next.js 15 App Router, with an `/api/hold` server route that shows where the trusted half of the integration belongs.
+
+Each one reads an `.env.local` with your event key and public key, copied from the
+`.env.example` in its repository. Deploy buttons are in both READMEs: Vercel and
+Netlify for the React example, Vercel for the Next.js example.
+
 ## Choose the buyer surface
 
 | Surface | Use it for | Framework support |
