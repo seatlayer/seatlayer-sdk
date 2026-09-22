@@ -76,6 +76,8 @@ export interface SeatManagerHandle {
   getSelectionValidity(): SeatManagerSelectionValidity | null;
   setFilteredSection(label: string): SeatManagerFilteredSection[];
   clearFilteredSection(): void;
+  /** Frame matching sections in any mode, without filtering or touching the selection. */
+  focusSection(label: string): SeatManagerFilteredSection[];
   getFilteredSections(): SeatManagerFilteredSection[];
   clearSelection(): void;
   getSelection(): ExpandedSeat[];
@@ -113,7 +115,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
       className, style, apiBase, eventKey, token, tokenExpiresAt,
       mode, currency, keepLiveWhileHidden, followLive, capabilities,
       selectedObjects, selectableObjects, unavailableObjectsSelectable,
-      maxSelectedObjects, numberOfPlacesToSelect, isObjectSelectable, tools,
+      maxSelectedObjects, numberOfPlacesToSelect, isObjectSelectable, tools, chrome,
     } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -147,6 +149,9 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         // once at mount like `capabilities`: hosts decide this per surface,
         // not per render.
         tools,
+        // `minimal` = just the map (a host with its own search, totals and
+        // actions). Read once at mount, like `tools`.
+        chrome,
         theme: callbacks.current.theme,
         // Light / dark / follow the operator's own preference. Applied before
         // first paint so a cockpit asked for light never flashes the war-room
@@ -167,6 +172,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         onSelectionInvalid: (state) => callbacks.current.onSelectionInvalid?.(state),
         onSelectionLimit: (max) => callbacks.current.onSelectionLimit?.(max),
         onFilteredSectionChange: (sections) => callbacks.current.onFilteredSectionChange?.(sections),
+        onAreaClick: (area) => callbacks.current.onAreaClick?.(area),
         onActionComplete: (r: SeatManagerActionResult) => callbacks.current.onActionComplete?.(r),
         onConnectionChange: (s: SeatManagerConnection) => callbacks.current.onConnectionChange?.(s),
         onError: (e: unknown) => callbacks.current.onError?.(e),
@@ -278,6 +284,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         getSelectionValidity: () => managerRef.current?.getSelectionValidity() ?? null,
         setFilteredSection: (label) => managerRef.current?.setFilteredSection(label) ?? [],
         clearFilteredSection: () => managerRef.current?.clearFilteredSection(),
+        focusSection: (label) => managerRef.current?.focusSection(label) ?? [],
         getFilteredSections: () => managerRef.current?.getFilteredSections() ?? [],
         clearSelection: () => managerRef.current?.clearSelection(),
         getSelection: () => managerRef.current?.getSelection() ?? [],
