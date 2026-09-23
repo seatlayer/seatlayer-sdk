@@ -70,6 +70,8 @@ export interface SeatManagerHandle {
   deselectCategories(keys: string[]): ExpandedSeat[];
   setSelectableObjects(labels: string[]): void;
   setUnavailableObjectsSelectable(enabled: boolean): void;
+  /** Replace the labels shown as unavailable (and their hover word) without remounting. */
+  setUnavailableObjects(labels: readonly string[], reason?: string): void;
   setObjectSelectable(predicate: SeatManagerOptions['isObjectSelectable']): void;
   setMaxSelectedObjects(max: number | undefined): void;
   setNumberOfPlacesToSelect(required: number | undefined): void;
@@ -115,6 +117,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
       className, style, apiBase, eventKey, token, tokenExpiresAt,
       mode, currency, keepLiveWhileHidden, followLive, capabilities,
       selectedObjects, selectableObjects, unavailableObjectsSelectable,
+      unavailableObjects, unavailableObjectsReason,
       maxSelectedObjects, numberOfPlacesToSelect, isObjectSelectable, tools, chrome,
     } = props;
 
@@ -142,6 +145,8 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         selectedObjects,
         selectableObjects,
         unavailableObjectsSelectable,
+        unavailableObjects,
+        unavailableObjectsReason,
         maxSelectedObjects,
         numberOfPlacesToSelect,
         isObjectSelectable,
@@ -238,6 +243,13 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
       managerRef.current?.setUnavailableObjectsSelectable(unavailableObjectsSelectable ?? true);
     }, [unavailableObjectsSelectable]);
 
+    // Repainted in place: the listed seats change colour, nothing remounts.
+    // The manager ignores a list with the same labels, so a host that rebuilds
+    // the array each render costs no repaint.
+    useEffect(() => {
+      managerRef.current?.setUnavailableObjects(unavailableObjects ?? [], unavailableObjectsReason);
+    }, [unavailableObjects, unavailableObjectsReason]);
+
     useEffect(() => {
       managerRef.current?.setMaxSelectedObjects(maxSelectedObjects);
     }, [maxSelectedObjects]);
@@ -278,6 +290,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         deselectCategories: (keys) => managerRef.current?.deselectCategories(keys) ?? [],
         setSelectableObjects: (labels) => managerRef.current?.setSelectableObjects(labels),
         setUnavailableObjectsSelectable: (enabled) => managerRef.current?.setUnavailableObjectsSelectable(enabled),
+        setUnavailableObjects: (labels, reason) => managerRef.current?.setUnavailableObjects(labels, reason),
         setObjectSelectable: (predicate) => managerRef.current?.setObjectSelectable(predicate),
         setMaxSelectedObjects: (max) => managerRef.current?.setMaxSelectedObjects(max),
         setNumberOfPlacesToSelect: (required) => managerRef.current?.setNumberOfPlacesToSelect(required),
