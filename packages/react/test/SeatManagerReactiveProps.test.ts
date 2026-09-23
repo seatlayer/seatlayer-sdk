@@ -20,6 +20,7 @@ class MockManager {
   setFollowLive = vi.fn();
   setSelectableObjects = vi.fn();
   setUnavailableObjectsSelectable = vi.fn();
+  setUnavailableObjects = vi.fn();
   setMaxSelectedObjects = vi.fn();
   setNumberOfPlacesToSelect = vi.fn();
   setObjectSelectable = vi.fn();
@@ -125,6 +126,34 @@ describe('SeatManager reactive props', () => {
       root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one' }));
     });
     expect(instance.setTokenRefresh).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('passes unavailable seats at mount and repaints them in place when the list changes', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    const first = ['A-1', 'A-2'];
+    await act(async () => {
+      root.render(createElement(SeatManager, {
+        eventKey: 'ev_1', token: 'mse_one', unavailableObjects: first, unavailableObjectsReason: 'Kept for renewal',
+      }));
+    });
+    const instance = instances[0]!;
+    expect(instance.options.unavailableObjects).toBe(first);
+    expect(instance.options.unavailableObjectsReason).toBe('Kept for renewal');
+
+    instance.setUnavailableObjects.mockClear();
+    await act(async () => {
+      root.render(createElement(SeatManager, {
+        eventKey: 'ev_1', token: 'mse_one', unavailableObjects: ['A-2', 'B-7'], unavailableObjectsReason: 'Kept for renewal',
+      }));
+    });
+    expect(instance.setUnavailableObjects).toHaveBeenCalledWith(['A-2', 'B-7'], 'Kept for renewal');
+
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one' }));
+    });
+    expect(instance.setUnavailableObjects).toHaveBeenLastCalledWith([], undefined);
+    expect(instances).toHaveLength(1);
+    expect(instance.destroy).not.toHaveBeenCalled();
   });
 
   it('forwards the `tools` list to the cockpit at mount', async () => {
