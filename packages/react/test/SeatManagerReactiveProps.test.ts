@@ -21,6 +21,7 @@ class MockManager {
   setSelectableObjects = vi.fn();
   setUnavailableObjectsSelectable = vi.fn();
   setUnavailableObjects = vi.fn();
+  setCategoryPrices = vi.fn();
   setMaxSelectedObjects = vi.fn();
   setNumberOfPlacesToSelect = vi.fn();
   setObjectSelectable = vi.fn();
@@ -152,6 +153,29 @@ describe('SeatManager reactive props', () => {
       root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one' }));
     });
     expect(instance.setUnavailableObjects).toHaveBeenLastCalledWith([], undefined);
+    expect(instances).toHaveLength(1);
+    expect(instance.destroy).not.toHaveBeenCalled();
+  });
+
+  it('passes hover prices at mount and changes them in place', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    const season = { prem: 300, std: { min: 150, max: 220 } };
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one', categoryPrices: season }));
+    });
+    const instance = instances[0]!;
+    expect(instance.options.categoryPrices).toBe(season);
+
+    instance.setCategoryPrices.mockClear();
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one', categoryPrices: null }));
+    });
+    expect(instance.setCategoryPrices).toHaveBeenCalledWith(null);
+
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one' }));
+    });
+    expect(instance.setCategoryPrices).toHaveBeenLastCalledWith(undefined);
     expect(instances).toHaveLength(1);
     expect(instance.destroy).not.toHaveBeenCalled();
   });

@@ -16,6 +16,7 @@ import {
   type SeatManagerConnection,
   type SeatManagerFilteredSection,
   type SeatManagerSelectionValidity,
+  type SeatManagerCategoryPrice,
   type EventTableBookingMode,
   type ReportResult,
   type ControlRoomSnapshot,
@@ -38,6 +39,7 @@ export type {
   SeatManagerConnection,
   SeatManagerFilteredSection,
   SeatManagerSelectionValidity,
+  SeatManagerCategoryPrice,
   EventTableBookingMode,
 } from '@seatlayer/js/manager';
 
@@ -72,6 +74,8 @@ export interface SeatManagerHandle {
   setUnavailableObjectsSelectable(enabled: boolean): void;
   /** Replace the labels shown as unavailable (and their hover word) without remounting. */
   setUnavailableObjects(labels: readonly string[], reason?: string): void;
+  /** Replace the prices the map's hover shows: a map overrides, null hides, undefined uses the chart's. */
+  setCategoryPrices(prices: Record<string, SeatManagerCategoryPrice> | null | undefined): void;
   setObjectSelectable(predicate: SeatManagerOptions['isObjectSelectable']): void;
   setMaxSelectedObjects(max: number | undefined): void;
   setNumberOfPlacesToSelect(required: number | undefined): void;
@@ -117,7 +121,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
       className, style, apiBase, eventKey, token, tokenExpiresAt,
       mode, currency, keepLiveWhileHidden, followLive, capabilities,
       selectedObjects, selectableObjects, unavailableObjectsSelectable,
-      unavailableObjects, unavailableObjectsReason,
+      unavailableObjects, unavailableObjectsReason, categoryPrices,
       maxSelectedObjects, numberOfPlacesToSelect, isObjectSelectable, tools, chrome,
     } = props;
 
@@ -147,6 +151,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         unavailableObjectsSelectable,
         unavailableObjects,
         unavailableObjectsReason,
+        categoryPrices,
         maxSelectedObjects,
         numberOfPlacesToSelect,
         isObjectSelectable,
@@ -250,6 +255,12 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
       managerRef.current?.setUnavailableObjects(unavailableObjects ?? [], unavailableObjectsReason);
     }, [unavailableObjects, unavailableObjectsReason]);
 
+    // Hover prices change in place. The renderer ignores an equal price map,
+    // so a host that rebuilds the object each render costs no repaint.
+    useEffect(() => {
+      managerRef.current?.setCategoryPrices(categoryPrices);
+    }, [categoryPrices]);
+
     useEffect(() => {
       managerRef.current?.setMaxSelectedObjects(maxSelectedObjects);
     }, [maxSelectedObjects]);
@@ -291,6 +302,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         setSelectableObjects: (labels) => managerRef.current?.setSelectableObjects(labels),
         setUnavailableObjectsSelectable: (enabled) => managerRef.current?.setUnavailableObjectsSelectable(enabled),
         setUnavailableObjects: (labels, reason) => managerRef.current?.setUnavailableObjects(labels, reason),
+        setCategoryPrices: (prices) => managerRef.current?.setCategoryPrices(prices),
         setObjectSelectable: (predicate) => managerRef.current?.setObjectSelectable(predicate),
         setMaxSelectedObjects: (max) => managerRef.current?.setMaxSelectedObjects(max),
         setNumberOfPlacesToSelect: (required) => managerRef.current?.setNumberOfPlacesToSelect(required),
