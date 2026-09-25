@@ -6,11 +6,12 @@
 [![npm @seatlayer/angular](https://img.shields.io/npm/v/@seatlayer/angular?label=%40seatlayer%2Fangular)](https://www.npmjs.com/package/@seatlayer/angular)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](LICENSE)
 
-SeatLayer is interactive seating chart software built for stadium scale. Platforms embed the white-label seat picker with their own checkout; organizers sell seated events on their own website with their own payment gateway.
-
-The official framework wrappers for SeatLayer reserved seating. Add an
-interactive seating chart and seat picker to a ticketing app, show live seat
-availability, and let buyers take temporary holds on the inventory they choose.
+The official React, Vue and Angular components for the SeatLayer seat map SDK.
+`@seatlayer/react`, `@seatlayer/vue` and `@seatlayer/angular` add an interactive
+seating chart and seat picker to a ticketing app, show live seat availability,
+and let buyers take temporary holds on the seats they choose. SeatLayer is
+seating chart and reserved-seat ticketing software built for venues up to
+stadium scale.
 
 Each wrapper is a real component for its framework with a typed imperative
 handle: the browser selects and **holds**, and your trusted server **books**.
@@ -56,6 +57,12 @@ wrapper here depends on.
 
 ```bash
 npm install @seatlayer/react   # or @seatlayer/vue, @seatlayer/angular
+```
+
+For plain JavaScript without a framework, install the browser SDK directly:
+
+```bash
+npm install @seatlayer/js
 ```
 
 ## React quick start
