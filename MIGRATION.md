@@ -8,8 +8,8 @@ runtime implementation private.
 
 | Area | Repository | Published form | License |
 | --- | --- | --- | --- |
-| Engine, designer, layout, picker internals, and 3D implementation | Private `seatlayer/seatlayer-runtime` plus private `paiteq/seatmap` source | Never published as source; compiled runtime/CDN bytes only | Proprietary from runtime `0.53.0` |
-| `@seatlayer/core` and `@seatlayer/js` | Private `seatlayer/seatlayer-runtime` | npm `dist/` and CDN bundles without source maps | SeatLayer Runtime License from `0.53.0` |
+| Engine, designer, layout, picker internals, and 3D implementation | Private SeatLayer repositories | Never published as source; compiled runtime/CDN bytes only | Proprietary from runtime `0.53.0` |
+| `@seatlayer/core` and `@seatlayer/js` | Private SeatLayer runtime repository | npm `dist/` and CDN bundles without source maps | SeatLayer Runtime License from `0.53.0` |
 | React, Vue, and Angular wrappers | Public `seatlayer/seatlayer-sdk` | Public TypeScript source and npm packages | MIT |
 | Documentation, examples, and public issue intake | Public `seatlayer/seatlayer-sdk` and docs site | Public | MIT/docs terms |
 
@@ -19,11 +19,11 @@ from private runtime code.
 
 ## Release order
 
-1. In the private app, commit the engine and widget changes. The app remains the
-   source of truth.
-2. In a clean checkout, run the private runtime `release:prep` with
-   `SEATMAP_REPO` pointing at that app commit. This checks the mirror and the
-   vendored widget byte-for-byte and records both provenance SHAs.
+1. Commit the engine and widget changes in the private source repository, which
+   remains the source of truth.
+2. In a clean checkout of the private runtime repository, run its release
+   preparation step against that commit. This checks the mirror and the vendored
+   widget byte-for-byte and records both provenance SHAs.
 3. Merge the private runtime change and tag `vX.Y.Z`. Its workflow builds the
    minified, map-free core/JS packages, verifies the CDN manifest and Worker
    routing, uploads the immutable CDN prefix, publishes npm core/JS, and only
@@ -63,7 +63,7 @@ new proprietary releases, not technically impossible to reverse-engineer.
 
 ## Operational security checklist
 
-- Keep `seatlayer-runtime` private and disable private forks.
+- Keep the runtime repository private and disable private forks.
 - Protect public `main` with the `verify` check and prevent force-pushes.
 - Keep CDN prefixes immutable; promote aliases only through `versions.json`.
 - Keep `NPM_TOKEN`, Cloudflare credentials, and any read-only deployment keys in
