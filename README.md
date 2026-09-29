@@ -66,6 +66,26 @@ For plain JavaScript without a framework, install the browser SDK directly:
 npm install @seatlayer/js
 ```
 
+### Upgrading from 0.x to 1.0
+
+1.0.0 is the first major release. The React, Vue and Angular components take
+the same props and emit the same events as in 0.105.x, so for most apps the
+upgrade is a version change:
+
+```bash
+npm install @seatlayer/react@1   # or @seatlayer/vue@1, @seatlayer/angular@1
+```
+
+- A `^0.x` range in `package.json` does not pick up 1.0.0. Change it to `^1.0.0`.
+- Each wrapper pins `@seatlayer/core` and `@seatlayer/js` to its own version, so
+  upgrade them together. If you also import `@seatlayer/js` directly, move it
+  to 1.0.0 as well.
+- One removal: the browser global no longer has `seatlayer.ChannelsMode` or
+  `seatlayer.bucketRowsHtml`. Only the Control room used them, and the wrappers
+  never exposed them.
+- Script tags keep working. `https://cdn.seatlayer.io/seatlayer-js@0/…` now
+  serves 1.x, the same as `seatlayer-js@1/…`.
+
 ## React quick start
 
 ```tsx
