@@ -80,11 +80,11 @@ npm install @seatlayer/react@1   # or @seatlayer/vue@1, @seatlayer/angular@1
 - Each wrapper pins `@seatlayer/core` and `@seatlayer/js` to its own version, so
   upgrade them together. If you also import `@seatlayer/js` directly, move it
   to 1.0.0 as well.
-- One removal: the browser global no longer has `seatlayer.ChannelsMode` or
-  `seatlayer.bucketRowsHtml`. Only the Control room used them, and the wrappers
-  never exposed them.
-- Script tags keep working. `https://cdn.seatlayer.io/seatlayer-js@0/…` now
-  serves 1.x, the same as `seatlayer-js@1/…`.
+- One removal: `ChannelsMode` and `bucketRowsHtml` are gone from
+  `@seatlayer/js/manager` and from the `seatlayer` browser global. Only the
+  Control room used them, and the wrappers never exposed them.
+- Script tags keep working as they are. `https://cdn.seatlayer.io/seatlayer-js@0/…`
+  still serves the newest 0.x; use `seatlayer-js@1/…` for 1.x.
 
 ## React quick start
 
