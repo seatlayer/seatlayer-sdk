@@ -12,6 +12,7 @@ import {
   SeatingChart as CoreSeatingChart,
   SEATING_CHART_IDENTITY_PROPS,
   bindSeatingChartHandle,
+  prewarmSeatPicker,
   buildSeatingChartOptions,
   type RendererViewMode,
   type SeatingChartHandle,
@@ -263,6 +264,20 @@ export const SeatingChart = defineComponent({
       chart.value = instance;
       void instance.render();
     };
+
+    // Start the chart's first request from setup (and on every change of what it
+    // fetches), before the post-flush build below: the mount adopts it, so the
+    // page still makes ONE bootstrap. Browser only, and only when the mount will
+    // adopt it (a public key, no host-supplied buyer access). `sync` so it runs
+    // ahead of that build, not after it.
+    watch(
+      () => [props.event, props.apiBase, props.publicKey, props.buyerAccessToken, props.buyerAccessTokenProvider] as const,
+      ([event, apiBase, publicKey, token, provider]) => {
+        if (typeof window === 'undefined' || !event || !publicKey || token || provider) return;
+        prewarmSeatPicker({ event, publicKey, apiBase });
+      },
+      { immediate: true, flush: 'sync' },
+    );
 
     // `flush: 'post'` so the container element exists on the first run — a
     // pre-flush watcher would fire before the DOM node is attached.
