@@ -60,10 +60,22 @@
   },
   "module": "./dist/fesm2022/seatlayer-angular.mjs",
   "types": "./dist/index.d.ts",
+  "//typesVersions": "Legacy (pre-`exports`) TypeScript resolution for the ./manager secondary entry, mirroring @seatlayer/react. `exports` alone leaves node10 consumers unable to see the types, which attw fails the release on.",
+  "typesVersions": {
+    "*": {
+      "manager": [
+        "./dist/manager/index.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/fesm2022/seatlayer-angular.mjs"
+    },
+    "./manager": {
+      "types": "./dist/manager/index.d.ts",
+      "default": "./dist/fesm2022/seatlayer-angular-manager.mjs"
     },
     "./package.json": {
       "default": "./package.json"

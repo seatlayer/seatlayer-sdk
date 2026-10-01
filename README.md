@@ -97,7 +97,8 @@ Netlify for the React example, Vercel for the Next.js example.
 | `SeatPicker` | Complete buyer flow with map, legend, priced tray, holds, and checkout hand-off | React component; `SeatPickerWidget` modal re-exported by all three packages |
 | `SeatingChart` | Lower-level chart inside controls and checkout UI owned by your application | React, Vue, and Angular components |
 | `SeasonPicker` | Fixed-inclusion Season selection and returning-holder intent | React, Vue, and Angular components |
-| `SeatManager` / `EmbeddedDesigner` | Event-scoped organizer operations and hosted chart editing | React components |
+| `SeatManager` | Event-scoped organizer operations in the live control room | React, Vue, and Angular components (Vue and Angular from their `/manager` entry) |
+| `EmbeddedDesigner` | Hosted chart editing | React component |
 
 The complete picker can opt into
 [buyer WebMCP seat-selection tools](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)

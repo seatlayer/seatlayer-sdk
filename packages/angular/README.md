@@ -29,10 +29,14 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
   `seatlayer-seating-chart` selector.
 - `SeatLayerSeasonPickerComponent`: fixed-inclusion Season selection and
   returning-holder intent with the `seatlayer-season-picker` selector.
+- `SeatLayerSeatManagerComponent`: the organizer control room, for dashboards
+  that monitor and block live inventory, with the `seatlayer-seat-manager`
+  selector. It lives on its own entry, `@seatlayer/angular/manager`, so a buyer
+  app never carries it.
 - `SeatPickerWidget`: the framework-agnostic one-call buyer modal.
 - `attachPickerFrame`: the host-side iframe helper for embedded pickers.
 - An Angular Package Format build (`fesm2022`) with TypeScript declarations at
-  `dist/index.d.ts`.
+  `dist/index.d.ts`, plus the `@seatlayer/angular/manager` entry.
 
 ## Requirements
 
@@ -206,6 +210,82 @@ throwing, so a template ref used one frame early is safe.
 
 > `holdSelection()` rather than `hold()`: `hold` is already the name of the
 > `@Output`, and a class cannot have both.
+
+## Embed the live control room
+
+Import `SeatLayerSeatManagerComponent` from `@seatlayer/angular/manager`, not
+from the package root. That entry holds the control room and nothing else, so
+your buyer pages stay the same size.
+
+Pass a short-lived, event-scoped manage token minted by your backend. The
+`token` input takes an `mse_` browser grant. Tenant `sk_` secrets do not work
+in browser code and must stay on your server. Keep the grant in memory, never
+in a URL, browser storage, or logs.
+
+```ts
+import { Component } from '@angular/core';
+import {
+  SeatLayerSeatManagerComponent,
+  type SeatManagerMode,
+  type SeatManagerOpenOrder,
+  type SeatManagerRoomState,
+} from '@seatlayer/angular/manager';
+
+@Component({
+  selector: 'app-control-room',
+  standalone: true,
+  imports: [SeatLayerSeatManagerComponent],
+  template: `
+    <seatlayer-seat-manager
+      #room
+      apiBase="https://api.seatlayer.io"
+      eventKey="ev_9f3a"
+      [token]="session.token"
+      [tokenExpiresAt]="session.expiresAt"
+      [onTokenRefresh]="mintManageSession"
+      [(mode)]="mode"
+      (roomStateChange)="onRoomState($event)"
+      (openOrder)="openOrder($event)"
+      style="height: calc(100vh - 96px)"
+    />
+    <button (click)="room.showObjects(resaleSeats, 'Resale')">Show resale seats</button>
+  `,
+})
+export class ControlRoomComponent {
+  mode: SeatManagerMode = 'view';
+  // session, mintManageSession, resaleSeats, onRoomState and openOrder are yours.
+}
+```
+
+The inputs are the `SeatManager` options from `@seatlayer/js/manager`, without
+`container`. The board is rebuilt only when `eventKey` or `apiBase` changes.
+These inputs change the running board in place, keeping the camera, selection,
+live connection and DOM: `token`, `tokenExpiresAt`, `onTokenRefresh`,
+`capabilities`, `currency`, `theme`, `themeMode`, `keepLiveWhileHidden`,
+`mode`, `followLive`, `selectableObjects`, `unavailableObjectsSelectable`,
+`unavailableObjects`, `unavailableObjectsReason`, `categoryPrices`,
+`maxSelectedObjects`, `numberOfPlacesToSelect`, `isObjectSelectable`, `sale`
+and `mapInsets` (the last two compared by value). The rest, such as `tools`,
+`chrome`, `kpis`, `timeZone`, `organizationName`, `colourBy`, the `focus*`
+inputs and `arrivedFrom`, are read once when the board opens.
+
+Outputs: `(ready)`, `(tallies)`, `(activity)`, `(controlRoom)`,
+`(modeChange)`, `(followLiveChange)`, `(selectionChange)`, `(objectSelected)`,
+`(objectDeselected)`, `(selectionValidityChange)`, `(selectionValid)`,
+`(selectionInvalid)`, `(selectionLimit)`, `(filteredSectionChange)`,
+`(areaClick)`, `(actionComplete)`, `(connectionChange)`, `(roomStateChange)`,
+`(errored)`, `(openOrder)` and `(openTrend)`. `mode` and `followLive` pair with
+their change outputs, so `[(mode)]` and `[(followLive)]` work.
+
+The room offers "Open order" and the trend link only when you bind
+`(openOrder)` or `(openTrend)`, so it never shows a link that goes nowhere.
+`onTokenRefresh` is a function input, like `buyerAccessTokenProvider`, because
+the room needs the new token back.
+
+The template ref has the same methods as the React `SeatManagerHandle`,
+including `setMode`, `block`, `unblock`, `selectObjects`, `focusSection`,
+`getReport`, `getConnection` and `showObjects`. The `[focusSection]` input
+opens the room on a section; the `focusSection()` method frames one later.
 
 ## Zone behaviour
 
