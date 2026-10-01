@@ -27,6 +27,7 @@ export type {
   SeatManagerActivity,
   SeatManagerActionResult,
   SeatManagerConnection,
+  SeatManagerRoomState,
 } from './SeatManager';
 export type {
   ControlRoomActivityEntry,
