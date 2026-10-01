@@ -230,6 +230,7 @@ describe('Angular SeatManager inputs', () => {
     const onRoomStateChange = vi.fn();
     const onOpenOrder = vi.fn();
     const onOpenTrend = vi.fn();
+    const onOpenDesigner = vi.fn();
     const arrivedFrom = { from: 'Performance', where: 'Stalls' };
     mount({
       eventKey: 'ev_1', token: 'mse',
@@ -240,6 +241,7 @@ describe('Angular SeatManager inputs', () => {
       component.roomStateChange.subscribe(onRoomStateChange);
       component.openOrder.subscribe(onOpenOrder);
       component.openTrend.subscribe(onOpenTrend);
+      component.openDesigner.subscribe(onOpenDesigner);
     });
     const options = instances[0]!.options;
     expect(options).toMatchObject({
@@ -253,6 +255,8 @@ describe('Angular SeatManager inputs', () => {
     expect(onOpenOrder).toHaveBeenCalledWith({ id: 'ord_1', displayRef: 'SL-1' });
     (options.onOpenTrend as (focus: { kpi: string }) => void)({ kpi: 'sold' });
     expect(onOpenTrend).toHaveBeenCalledWith({ kpi: 'sold' });
+    (options.onOpenDesigner as () => void)();
+    expect(onOpenDesigner).toHaveBeenCalled();
   });
 
   it('turns every reporting callback into an @Output, emitted inside the zone', () => {
@@ -288,6 +292,7 @@ describe('Angular SeatManager inputs', () => {
     mount({ eventKey: 'ev_1', token: 'mse' });
     expect(instances[0]!.options.onOpenOrder).toBeUndefined();
     expect(instances[0]!.options.onOpenTrend).toBeUndefined();
+    expect(instances[0]!.options.onOpenDesigner).toBeUndefined();
   });
 
   it('runs the way back inside the zone, since it is host code', () => {
