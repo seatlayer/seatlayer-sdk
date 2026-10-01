@@ -210,13 +210,14 @@ describe('Vue SeatManager reactive props', () => {
     const onRoomStateChange = vi.fn();
     const onOpenOrder = vi.fn();
     const onOpenTrend = vi.fn();
+    const onOpenDesigner = vi.fn();
     const arrivedFrom = { from: 'Performance', where: 'Stalls' };
     const view = await mount({
       eventKey: 'ev_1', token: 'mse',
       kpis: false, timeZone: 'Europe/London', colourBy: 'channel',
       focusSection: 'stalls', focusSeat: 'A-1', focusCategory: 'vip', arrivedFrom,
       // Vue's listener spelling: `@room-state-change` / `@open-order` / `@open-trend`.
-      onRoomStateChange, onOpenOrder, onOpenTrend,
+      onRoomStateChange, onOpenOrder, onOpenTrend, onOpenDesigner,
     });
     const options = view.instance().options;
     expect(options).toMatchObject({
@@ -230,6 +231,8 @@ describe('Vue SeatManager reactive props', () => {
     expect(onOpenOrder).toHaveBeenCalledWith({ id: 'ord_1', displayRef: 'SL-1' });
     (options.onOpenTrend as (focus: { kpi: string }) => void)({ kpi: 'sold' });
     expect(onOpenTrend).toHaveBeenCalledWith({ kpi: 'sold' });
+    (options.onOpenDesigner as () => void)();
+    expect(onOpenDesigner).toHaveBeenCalled();
   });
 
   it('turns every reporting callback into a Vue event', async () => {

@@ -225,6 +225,8 @@ export class SeatLayerSeatManagerComponent implements OnChanges {
   @Output() readonly openOrder: EventEmitter<SeatManagerOpenOrder> = new EventEmitter<SeatManagerOpenOrder>();
   /** The operator opened your trend view for a number. Only offered when bound. */
   @Output() readonly openTrend: EventEmitter<SeatManagerOpenTrend> = new EventEmitter<SeatManagerOpenTrend>();
+  /** Sections on a chart without any offers "Open the designer". Only offered when bound. */
+  @Output() readonly openDesigner: EventEmitter<void> = new EventEmitter<void>();
 
   @ViewChild('container', { static: true })
   private readonly container!: ElementRef<HTMLDivElement>;
@@ -425,6 +427,7 @@ export class SeatLayerSeatManagerComponent implements OnChanges {
         // otherwise, so the room never offers a dead one.
         onOpenOrder: hasHandler(this.openOrder) ? (order) => emit(this.openOrder, order) : undefined,
         onOpenTrend: hasHandler(this.openTrend) ? (focus) => emit(this.openTrend, focus) : undefined,
+        onOpenDesigner: hasHandler(this.openDesigner) ? () => emit(this.openDesigner, undefined) : undefined,
         onTokenRefresh: this.tokenRefresh(),
         onReady: () => this.zone.run(() => this.ready.emit()),
         onTallies: (tallies) => emit(this.tallies, tallies),

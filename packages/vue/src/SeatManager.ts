@@ -180,6 +180,7 @@ const seatManagerProps = {
   onOpenOrder: { type: Function as PropType<Opt<'onOpenOrder'>>, default: undefined },
   /** Open your trend view for a number. Only when given does the room link to it. */
   onOpenTrend: { type: Function as PropType<Opt<'onOpenTrend'>>, default: undefined },
+  onOpenDesigner: { type: Function as PropType<Opt<'onOpenDesigner'>>, default: undefined },
 } as const;
 
 /**
@@ -360,6 +361,7 @@ export const SeatManager = defineComponent({
         // Only a host that has a trend view / an orders page gets the link.
         // Left unset otherwise, so the room never offers a dead one.
         onOpenTrend: props.onOpenTrend ? (focus) => props.onOpenTrend?.(focus) : undefined,
+        onOpenDesigner: props.onOpenDesigner ? () => props.onOpenDesigner?.() : undefined,
         onOpenOrder: props.onOpenOrder ? (order) => props.onOpenOrder?.(order) : undefined,
         onTokenRefresh: tokenRefresh(),
         onReady,

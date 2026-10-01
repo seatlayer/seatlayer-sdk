@@ -191,6 +191,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         focusCategory: callbacks.current.focusCategory,
         arrivedFrom: callbacks.current.arrivedFrom,
         onOpenTrend: callbacks.current.onOpenTrend ? (focus) => callbacks.current.onOpenTrend?.(focus) : undefined,
+        onOpenDesigner: callbacks.current.onOpenDesigner ? () => callbacks.current.onOpenDesigner?.() : undefined,
         onReady: () => callbacks.current.onReady?.(),
         onTallies: (t: SeatManagerTallies) => callbacks.current.onTallies?.(t),
         onActivity: (activity: SeatManagerActivity) => callbacks.current.onActivity?.(activity),
