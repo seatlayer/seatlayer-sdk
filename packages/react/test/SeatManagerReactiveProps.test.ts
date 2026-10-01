@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createElement } from 'react';
+import { createElement, createRef } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
@@ -27,6 +27,7 @@ class MockManager {
   setObjectSelectable = vi.fn();
   setSale = vi.fn();
   setMapInsets = vi.fn();
+  showObjects = vi.fn();
 
   constructor(options: Record<string, unknown>) {
     this.options = options;
@@ -180,6 +181,56 @@ describe('SeatManager reactive props', () => {
     expect(instance.setCategoryPrices).toHaveBeenLastCalledWith(undefined);
     expect(instances).toHaveLength(1);
     expect(instance.destroy).not.toHaveBeenCalled();
+  });
+
+  it('forwards the 0.105 room options at mount, and calls the host back through them', async () => {
+    // Regression guard: wrappers 0.105.0 dropped every one of these, so a host's
+    // kpis: false, clock and room-state wiring type-checked and then did nothing.
+    const { SeatManager } = await import('../src/SeatManager');
+    const onRoomStateChange = vi.fn();
+    const onOpenOrder = vi.fn();
+    const onOpenTrend = vi.fn();
+    const arrivedFrom = { from: 'Performance', where: 'Stalls' };
+    await act(async () => {
+      root.render(createElement(SeatManager, {
+        eventKey: 'ev_1', token: 'mse',
+        kpis: false, timeZone: 'Europe/London', colourBy: 'channel',
+        focusSection: 'stalls', focusSeat: 'A-1', focusCategory: 'vip', arrivedFrom,
+        onRoomStateChange, onOpenOrder, onOpenTrend,
+      } as never));
+    });
+    const options = instances[0]!.options;
+    expect(options).toMatchObject({
+      kpis: false, timeZone: 'Europe/London', colourBy: 'channel',
+      focusSection: 'stalls', focusSeat: 'A-1', focusCategory: 'vip', arrivedFrom,
+    });
+
+    (options.onRoomStateChange as (state: string) => void)('paused');
+    expect(onRoomStateChange).toHaveBeenCalledWith('paused');
+    (options.onOpenOrder as (order: { id: string; displayRef: string }) => void)({ id: 'ord_1', displayRef: 'SL-1' });
+    expect(onOpenOrder).toHaveBeenCalledWith({ id: 'ord_1', displayRef: 'SL-1' });
+    (options.onOpenTrend as (focus: { kpi: string }) => void)({ kpi: 'sold' });
+    expect(onOpenTrend).toHaveBeenCalledWith({ kpi: 'sold' });
+  });
+
+  it('lights the host’s own seats through the handle (showObjects)', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    const ref = createRef<{ showObjects(labels: readonly string[] | null, name?: string): void }>();
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse', ref } as never));
+    });
+    ref.current!.showObjects(['A-2', 'A-3'], 'Resale');
+    expect(instances[0]!.showObjects).toHaveBeenCalledWith(['A-2', 'A-3'], 'Resale');
+    ref.current!.showObjects(null);
+    expect(instances[0]!.showObjects).toHaveBeenLastCalledWith(null, undefined);
+  });
+
+  it('leaves onOpenOrder unset when the host has no orders page, so the room offers no dead link', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse' }));
+    });
+    expect(instances[0]!.options.onOpenOrder).toBeUndefined();
   });
 
   it('forwards the organisation name at mount (CR16)', async () => {
