@@ -53,7 +53,7 @@ export interface EmbeddedDesignerProps {
    * fixed pixel height you manage yourself.
    */
   height?: 'fill' | number;
-  /** Lower bound for `'fill'` sizing. Defaults to `480`. */
+  /** Lower bound for `'fill'` sizing. Defaults to `0` so a small host is never overrun. */
   minHeight?: number;
   /**
    * Legacy content-height auto-grow via the `seatlayer.designer.resize`

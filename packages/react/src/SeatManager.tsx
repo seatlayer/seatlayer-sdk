@@ -11,9 +11,11 @@ import {
   type SeatManagerMode,
   type EventScopedManageToken,
   type SeatManagerTallies,
+  type SeatManagerSale,
   type SeatManagerActivity,
   type SeatManagerActionResult,
   type SeatManagerConnection,
+  type SeatManagerRoomState,
   type SeatManagerFilteredSection,
   type SeatManagerSelectionValidity,
   type SeatManagerCategoryPrice,
@@ -34,9 +36,11 @@ export type {
   SeatManagerMode,
   EventScopedManageToken,
   SeatManagerTallies,
+  SeatManagerSale,
   SeatManagerActivity,
   SeatManagerActionResult,
   SeatManagerConnection,
+  SeatManagerRoomState,
   SeatManagerFilteredSection,
   SeatManagerSelectionValidity,
   SeatManagerCategoryPrice,
@@ -100,6 +104,8 @@ export interface SeatManagerHandle {
    */
   getConnection(): SeatManagerConnection | null;
   zoomToFit(): void;
+  /** Light these seats and frame them, named in the legend; null clears (CR18). */
+  showObjects(labels: readonly string[] | null, name?: string): void;
 }
 
 export interface SeatManagerProps extends Omit<SeatManagerOptions, 'container'> {
@@ -122,7 +128,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
       mode, currency, keepLiveWhileHidden, followLive, capabilities,
       selectedObjects, selectableObjects, unavailableObjectsSelectable,
       unavailableObjects, unavailableObjectsReason, categoryPrices,
-      maxSelectedObjects, numberOfPlacesToSelect, isObjectSelectable, tools, chrome,
+      maxSelectedObjects, numberOfPlacesToSelect, isObjectSelectable, tools, chrome, kpis, timeZone,
     } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -162,11 +168,29 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         // `minimal` = just the map (a host with its own search, totals and
         // actions). Read once at mount, like `tools`.
         chrome,
+        // false when the host shows the numbers in its own header (CR04). Read once at mount.
+        kpis,
+        // The event's clock for every time the room shows (audit M8). Read once at mount.
+        timeZone,
+        // "Ask an admin of <organisation>" (CR16). Read once at mount.
+        organizationName: callbacks.current.organizationName,
+        // The host's sale facts (CR18); updated in place below.
+        sale: callbacks.current.sale,
+        // The host's overlays over the map (CR18 resale strip); updated in place below.
+        mapInsets: callbacks.current.mapInsets,
         theme: callbacks.current.theme,
         // Light / dark / follow the operator's own preference. Applied before
         // first paint so a cockpit asked for light never flashes the war-room
         // dark on the way in.
         themeMode: callbacks.current.themeMode,
+        // Where a link opens the room (board CR24): read once at mount, like `mode`.
+        colourBy: callbacks.current.colourBy,
+        focusSection: callbacks.current.focusSection,
+        focusSeat: callbacks.current.focusSeat,
+        focusSeats: callbacks.current.focusSeats,
+        focusCategory: callbacks.current.focusCategory,
+        arrivedFrom: callbacks.current.arrivedFrom,
+        onOpenTrend: callbacks.current.onOpenTrend ? (focus) => callbacks.current.onOpenTrend?.(focus) : undefined,
         onReady: () => callbacks.current.onReady?.(),
         onTallies: (t: SeatManagerTallies) => callbacks.current.onTallies?.(t),
         onActivity: (activity: SeatManagerActivity) => callbacks.current.onActivity?.(activity),
@@ -183,8 +207,11 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         onSelectionLimit: (max) => callbacks.current.onSelectionLimit?.(max),
         onFilteredSectionChange: (sections) => callbacks.current.onFilteredSectionChange?.(sections),
         onAreaClick: (area) => callbacks.current.onAreaClick?.(area),
+        // Only a host that can show an order gets the search's "Open order".
+        onOpenOrder: callbacks.current.onOpenOrder ? (order: { id: string; displayRef: string }) => callbacks.current.onOpenOrder?.(order) : undefined,
         onActionComplete: (r: SeatManagerActionResult) => callbacks.current.onActionComplete?.(r),
         onConnectionChange: (s: SeatManagerConnection) => callbacks.current.onConnectionChange?.(s),
+        onRoomStateChange: (s) => callbacks.current.onRoomStateChange?.(s),
         onError: (e: unknown) => callbacks.current.onError?.(e),
       });
       managerRef.current = manager;
@@ -214,6 +241,18 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
     useEffect(() => {
       managerRef.current?.setTheme(props.theme);
     }, [props.theme]);
+
+    // By value: a host that rebuilds the object each render costs no repaint.
+    const sale = props.sale;
+    useEffect(() => {
+      managerRef.current?.setSale(sale);
+    }, [sale?.status, sale?.tone, sale?.openedAt, sale?.pageUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // By value: a host that rebuilds the object each render costs no refit.
+    const insets = props.mapInsets;
+    useEffect(() => {
+      managerRef.current?.setMapInsets(insets ?? null);
+    }, [insets?.top, insets?.right, insets?.bottom, insets?.left]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Reflected in place: the cockpit keeps the operator's selection, the
     // camera and the realtime socket across a mode change.
@@ -320,6 +359,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         getConnection: () => managerRef.current?.getConnection() ?? null,
         setHoldTtl: (ms) => managerRef.current?.setHoldTtl(ms) ?? Promise.resolve(),
         zoomToFit: () => managerRef.current?.zoomToFit(),
+        showObjects: (labels, name) => managerRef.current?.showObjects(labels, name),
       }),
       [],
     );

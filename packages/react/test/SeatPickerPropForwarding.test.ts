@@ -132,6 +132,21 @@ describe('SeatPicker prop forwarding', () => {
     expect(imperativeCalls).toContainEqual({ method: 'destroy', args: [] });
   });
 
+  it('forwards holdOnClose and rebuilds when the host changes it', async () => {
+    const { SeatPicker } = await import('../src/SeatPicker');
+    await act(async () => {
+      root.render(createElement(SeatPicker, { event: 'evt_test', holdOnClose: 'keep' } as never));
+    });
+    expect(constructorCalls[0]).toMatchObject({ holdOnClose: 'keep' });
+
+    await act(async () => {
+      root.render(createElement(SeatPicker, { event: 'evt_test', holdOnClose: 'release' } as never));
+    });
+    expect(constructorCalls).toHaveLength(2);
+    expect(constructorCalls[1]).toMatchObject({ holdOnClose: 'release' });
+    expect(imperativeCalls).toContainEqual({ method: 'destroy', args: [] });
+  });
+
   it('keeps React-only props out of the core options', async () => {
     const options = await mountWith({ className: 'w-full', style: { height: 400 } });
     expect(options).not.toHaveProperty('className');

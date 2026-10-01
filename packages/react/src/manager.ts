@@ -23,6 +23,7 @@ export type {
   SeatManagerMode,
   EventScopedManageToken,
   SeatManagerTallies,
+  SeatManagerSale,
   SeatManagerActivity,
   SeatManagerActionResult,
   SeatManagerConnection,
