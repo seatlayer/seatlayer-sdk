@@ -60,9 +60,11 @@ export type {
   SeatManagerMode,
   EventScopedManageToken,
   SeatManagerTallies,
+  SeatManagerSale,
   SeatManagerActivity,
   SeatManagerActionResult,
   SeatManagerConnection,
+  SeatManagerRoomState,
 } from './SeatManager';
 export type {
   ControlRoomActivityEntry,

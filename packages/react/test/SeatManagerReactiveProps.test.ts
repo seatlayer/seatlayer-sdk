@@ -25,6 +25,8 @@ class MockManager {
   setMaxSelectedObjects = vi.fn();
   setNumberOfPlacesToSelect = vi.fn();
   setObjectSelectable = vi.fn();
+  setSale = vi.fn();
+  setMapInsets = vi.fn();
 
   constructor(options: Record<string, unknown>) {
     this.options = options;
@@ -178,6 +180,60 @@ describe('SeatManager reactive props', () => {
     expect(instance.setCategoryPrices).toHaveBeenLastCalledWith(undefined);
     expect(instances).toHaveLength(1);
     expect(instance.destroy).not.toHaveBeenCalled();
+  });
+
+  it('forwards the organisation name at mount (CR16)', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse', organizationName: 'Jazz Nights Ltd' }));
+    });
+    expect(instances[0]!.options.organizationName).toBe('Jazz Nights Ltd');
+  });
+
+  it('passes the sale facts at mount and changes them in place, by value (CR18)', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse', sale: { status: 'On sale', pageUrl: 'https://x.test/e' } }));
+    });
+    const instance = instances[0]!;
+    expect(instance.options.sale).toEqual({ status: 'On sale', pageUrl: 'https://x.test/e' });
+    instance.setSale.mockClear();
+    // A new object with the same facts: nothing to repaint.
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse', sale: { status: 'On sale', pageUrl: 'https://x.test/e' } }));
+    });
+    expect(instance.setSale).not.toHaveBeenCalled();
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse', sale: { status: 'Paused', tone: 'warn' } }));
+    });
+    expect(instance.setSale).toHaveBeenLastCalledWith({ status: 'Paused', tone: 'warn' });
+    expect(instances).toHaveLength(1);
+  });
+
+  it('passes the host’s map insets at mount and changes them in place, by value (CR18)', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse', mapInsets: { bottom: 124 } }));
+    });
+    const instance = instances[0]!;
+    expect(instance.options.mapInsets).toEqual({ bottom: 124 });
+    instance.setMapInsets.mockClear();
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse', mapInsets: { bottom: 124 } }));
+    });
+    expect(instance.setMapInsets).not.toHaveBeenCalled();
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse' }));
+    });
+    expect(instance.setMapInsets).toHaveBeenLastCalledWith(null);
+  });
+
+  it('forwards an order’s seats for arrival at mount (m43)', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse', focusSeat: 'A-1', focusSeats: ['A-1', 'A-2'] }));
+    });
+    expect(instances[0]!.options).toMatchObject({ focusSeat: 'A-1', focusSeats: ['A-1', 'A-2'] });
   });
 
   it('forwards the `tools` list to the cockpit at mount', async () => {
