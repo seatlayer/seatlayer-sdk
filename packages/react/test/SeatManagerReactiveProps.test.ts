@@ -190,13 +190,14 @@ describe('SeatManager reactive props', () => {
     const onRoomStateChange = vi.fn();
     const onOpenOrder = vi.fn();
     const onOpenTrend = vi.fn();
+    const onOpenDesigner = vi.fn();
     const arrivedFrom = { from: 'Performance', where: 'Stalls' };
     await act(async () => {
       root.render(createElement(SeatManager, {
         eventKey: 'ev_1', token: 'mse',
         kpis: false, timeZone: 'Europe/London', colourBy: 'channel',
         focusSection: 'stalls', focusSeat: 'A-1', focusCategory: 'vip', arrivedFrom,
-        onRoomStateChange, onOpenOrder, onOpenTrend,
+        onRoomStateChange, onOpenOrder, onOpenTrend, onOpenDesigner,
       } as never));
     });
     const options = instances[0]!.options;
@@ -211,6 +212,8 @@ describe('SeatManager reactive props', () => {
     expect(onOpenOrder).toHaveBeenCalledWith({ id: 'ord_1', displayRef: 'SL-1' });
     (options.onOpenTrend as (focus: { kpi: string }) => void)({ kpi: 'sold' });
     expect(onOpenTrend).toHaveBeenCalledWith({ kpi: 'sold' });
+    (options.onOpenDesigner as () => void)();
+    expect(onOpenDesigner).toHaveBeenCalled();
   });
 
   it('lights the host’s own seats through the handle (showObjects)', async () => {

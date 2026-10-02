@@ -28,10 +28,14 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 - `SeatingChart`: one Vue 3 component wrapper (`SeatLayerSeatingChart`), written
   as a render function so no Vue compiler plugin is needed.
 - `SeasonPicker`: fixed-inclusion Season selection and returning-holder intent.
+- `SeatManager`: the organizer control room, for dashboards that monitor and
+  block live inventory. It lives on its own entry, `@seatlayer/vue/manager`, so
+  a buyer app never carries it.
 - `SeatPickerWidget`: the framework-agnostic one-call buyer modal.
 - `attachPickerFrame`: the host-side iframe helper for embedded pickers.
 - TypeScript declarations for ESM (`dist/index.d.ts`) and CommonJS
-  (`dist/index.d.cts`), including the `SeatingChartExposed` handle type.
+  (`dist/index.d.cts`), including the `SeatingChartExposed` handle type, plus
+  the `@seatlayer/vue/manager` subpath.
 
 ## Requirements
 
@@ -192,6 +196,71 @@ Everything on the template ref, typed as `SeatingChartExposed`:
 
 Calling any of them before the chart exists returns an empty answer rather than
 throwing, so a template ref used one frame early is safe.
+
+## Embed the live control room
+
+Import `SeatManager` from `@seatlayer/vue/manager`, not from the package root.
+That entry holds the control room and nothing else, so your buyer pages stay
+the same size.
+
+Pass a short-lived, event-scoped manage token minted by your backend. The
+`token` prop takes an `mse_` browser grant. Tenant `sk_` secrets do not work in
+browser code and must stay on your server. Keep the grant in memory, never in a
+URL, browser storage, or logs.
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue';
+import { SeatManager, type SeatManagerExposed, type SeatManagerRoomState } from '@seatlayer/vue/manager';
+
+const manager = ref<SeatManagerExposed | null>(null);
+
+function onRoomState(state: SeatManagerRoomState) {
+  console.log('room is', state);
+}
+</script>
+
+<template>
+  <SeatManager
+    ref="manager"
+    api-base="https://api.seatlayer.io"
+    event-key="ev_9f3a"
+    :token="session.token"
+    :token-expires-at="session.expiresAt"
+    :on-token-refresh="mintManageSession"
+    style="width: 100%; height: calc(100vh - 96px)"
+    @room-state-change="onRoomState"
+  />
+</template>
+```
+
+The props are the `SeatManager` options from `@seatlayer/js/manager`, without
+`container`. The board is rebuilt only when `eventKey` or `apiBase` changes.
+These props change the running board in place, keeping the camera, selection,
+live connection and DOM: `token`, `tokenExpiresAt`, `onTokenRefresh`,
+`capabilities`, `currency`, `theme`, `themeMode`, `keepLiveWhileHidden`,
+`mode`, `followLive`, `selectableObjects`, `unavailableObjectsSelectable`,
+`unavailableObjects`, `unavailableObjectsReason`, `categoryPrices`,
+`maxSelectedObjects`, `numberOfPlacesToSelect`, `isObjectSelectable`, `sale`
+and `mapInsets` (the last two compared by value). The rest, such as `tools`,
+`chrome`, `kpis`, `timeZone`, `organizationName`, `colourBy` and the `focus*`
+and `arrivedFrom` options, are read once when the board opens.
+
+Events: `@ready`, `@tallies`, `@activity`, `@control-room`, `@mode-change`,
+`@follow-live-change`, `@selection-change`, `@object-selected`,
+`@object-deselected`, `@selection-validity-change`, `@selection-valid`,
+`@selection-invalid`, `@selection-limit`, `@filtered-section-change`,
+`@area-click`, `@action-complete`, `@connection-change`, `@room-state-change`
+and `@error`.
+
+`onTokenRefresh`, `onOpenOrder` and `onOpenTrend` are props, because the room
+needs a value back or needs to know you passed one. The room offers "Open
+order" and the trend link only when you give it a handler. `@open-order` and
+`@open-trend` work too.
+
+The template ref, typed `SeatManagerExposed`, has the same methods as the React
+`SeatManagerHandle`, including `setMode`, `block`, `unblock`, `selectObjects`,
+`focusSection`, `getReport`, `getConnection` and `showObjects`.
 
 ## Also exported
 

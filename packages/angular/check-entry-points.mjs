@@ -36,6 +36,26 @@ if (source.exports['.'].types !== expected.typesPath) {
   problems.push(`exports["."].types: "${source.exports['.'].types}" vs "${expected.typesPath}"`);
 }
 
+// Secondary entry points (ng-packagr subdirectories with their own
+// ng-package.json), e.g. `./manager`. Each one the build generates must be
+// mirrored in the root manifest, with the same `./dist/` prefix.
+for (const [subpath, entry] of Object.entries(generated.exports)) {
+  if (subpath === '.' || subpath === './package.json') continue;
+  const mirrored = source.exports[subpath];
+  const importPath = `./dist/${entry.default.replace(/^\.\//, '')}`;
+  const typesPath = `./dist/${entry.types.replace(/^\.\//, '')}`;
+  if (!mirrored) {
+    problems.push(`exports["${subpath}"]: missing from the manifest (generated "${importPath}")`);
+    continue;
+  }
+  if (mirrored.default !== importPath) {
+    problems.push(`exports["${subpath}"].default: "${mirrored.default}" vs "${importPath}"`);
+  }
+  if (mirrored.types !== typesPath) {
+    problems.push(`exports["${subpath}"].types: "${mirrored.types}" vs "${typesPath}"`);
+  }
+}
+
 if (problems.length) {
   console.error('\n@seatlayer/angular entry points drifted from ng-packagr output:\n');
   for (const problem of problems) console.error(`  ${problem}`);

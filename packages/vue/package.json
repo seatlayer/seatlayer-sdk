@@ -1,6 +1,6 @@
 {
   "name": "@seatlayer/vue",
-  "version": "0.105.1",
+  "version": "0.106.0",
   "description": "SeatLayer's official Vue seating chart and seat map SDK: live availability, seat selection, temporary holds, and a typed TypeScript API for ticketing apps.",
   "license": "MIT",
   "author": {
@@ -20,6 +20,14 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "//typesVersions": "Legacy (pre-`exports`) TypeScript resolution for the ./manager subpath, mirroring @seatlayer/react. `exports` alone leaves node10 consumers unable to see the types, which attw fails the release on.",
+  "typesVersions": {
+    "*": {
+      "manager": [
+        "./dist/manager.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "import": {
@@ -29,6 +37,16 @@
       "require": {
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
+      }
+    },
+    "./manager": {
+      "import": {
+        "types": "./dist/manager.d.ts",
+        "default": "./dist/manager.js"
+      },
+      "require": {
+        "types": "./dist/manager.d.cts",
+        "default": "./dist/manager.cjs"
       }
     }
   },
@@ -60,8 +78,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@seatlayer/core": "0.105.1",
-    "@seatlayer/js": "0.105.1"
+    "@seatlayer/core": "0.106.0",
+    "@seatlayer/js": "0.106.0"
   },
   "peerDependencies": {
     "vue": ">=3.3.0"
