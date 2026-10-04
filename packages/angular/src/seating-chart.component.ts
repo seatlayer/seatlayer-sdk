@@ -15,6 +15,7 @@ import {
 import {
   SeatingChart as CoreSeatingChart,
   SEATING_CHART_IDENTITY_PROPS,
+  prewarmSeatPicker,
   bindSeatingChartHandle,
   buildSeatingChartOptions,
   type RendererViewMode,
@@ -206,6 +207,16 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
   }
 
   ngOnChanges(changes: SimpleChanges): void {
+    // Start the chart's first request as soon as its inputs arrive (the first
+    // ngOnChanges runs before the view exists, so ahead of the first build),
+    // and again when what it fetches changes: the build adopts it, so the page
+    // still makes ONE bootstrap. Browser only, and only when the build will
+    // adopt it (a public key, no host-supplied buyer access).
+    if (['event', 'apiBase', 'publicKey'].some((name) => name in changes)
+      && typeof window !== 'undefined' && this.event && this.publicKey
+      && !this.buyerAccessToken && !this.buyerAccessTokenProvider) {
+      prewarmSeatPicker({ event: this.event, publicKey: this.publicKey, apiBase: this.apiBase });
+    }
     const needsRebuild = SeatLayerSeatingChartComponent.REBUILD_INPUTS.some((name) => name in changes);
     if (needsRebuild) {
       this.build();
