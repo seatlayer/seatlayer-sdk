@@ -142,6 +142,10 @@ apply the package price, tax, and payment decision before booking the
 identity-only allocation. `SeatLayerSeasonPickerComponent` is supported in
 `@seatlayer/angular` `0.72.0` and newer.
 
+The component exposes the same calls as `@seatlayer/js`, including Season
+Best Available: `seasonPicker.holdBestAvailable(2, 'sop_checkout_1184', {
+categoryKey: 'stalls' })` holds the best two seats free on every date.
+
 ## Inputs
 
 | Input | Type | Notes |

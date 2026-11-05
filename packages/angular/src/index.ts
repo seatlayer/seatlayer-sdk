@@ -15,6 +15,7 @@ export type {
   HoldLineItem,
   SeatHoverDetails,
   SeasonAvailability,
+  SeasonBestAvailableOptions,
   SeasonCheckoutHandoff,
   SeasonDescriptor,
   SeasonOperation,

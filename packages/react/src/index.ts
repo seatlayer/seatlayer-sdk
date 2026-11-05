@@ -35,6 +35,7 @@ export type {
   SeasonPickerProps,
   SeasonPickerOptions,
   SeasonAvailability,
+  SeasonBestAvailableOptions,
   SeasonCheckoutHandoff,
   SeasonDescriptor,
   SeasonOperation,

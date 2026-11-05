@@ -14,6 +14,10 @@ vi.mock('@seatlayer/js', () => ({
       calls.push({ method: 'holdSameSeat', args });
       return Promise.resolve({ operationId: args[1] });
     }
+    holdBestAvailable(...args: unknown[]) {
+      calls.push({ method: 'holdBestAvailable', args });
+      return Promise.resolve({ operationId: args[1] });
+    }
     restoreOperation() { return Promise.resolve(null); }
     release() { return Promise.resolve(); }
     createRenewalIntent(...args: unknown[]) { return Promise.resolve({ offerId: args[0] }); }
@@ -62,6 +66,11 @@ describe('@seatlayer/vue SeasonPicker', () => {
     expect(onHoldChange).toHaveBeenCalledWith({ operationId: 'sop_1' });
     await expect(exposed.value?.holdSameSeat(['A-1'], 'sop_1'))
       .resolves.toEqual({ operationId: 'sop_1' });
+    const bestAvailable = { categoryKey: 'stalls', zoneId: 'zone_lower', accessibility: ['wheelchair'] as const, requireContiguous: true };
+    await expect(exposed.value!.holdBestAvailable(2, 'sop_2', bestAvailable))
+      .resolves.toEqual({ operationId: 'sop_2' });
+    expect(calls.find((call) => call.method === 'holdBestAvailable')?.args)
+      .toEqual([2, 'sop_2', bestAvailable]);
     expect(exposed.value?.getAvailability()).toEqual({ freeCount: 4 });
 
     seasonKey.value = 'sea_2';
