@@ -14,6 +14,10 @@ vi.mock('@seatlayer/js', () => ({
       state.calls.push({ method: 'holdSameSeat', args });
       return Promise.resolve({ operationId: args[1] });
     }
+    holdBestAvailable(...args: unknown[]) {
+      state.calls.push({ method: 'holdBestAvailable', args });
+      return Promise.resolve({ operationId: args[1] });
+    }
     restoreOperation(...args: unknown[]) {
       state.calls.push({ method: 'restoreOperation', args });
       return Promise.resolve(null);
@@ -32,6 +36,7 @@ vi.mock('@seatlayer/js', () => ({
 type Component = Record<string, unknown> & {
   ngOnChanges(changes: Record<string, unknown>): void;
   holdSameSeat(labels: readonly string[], operationId: string): Promise<unknown>;
+  holdBestAvailable(qty: number, operationId: string, options?: unknown): Promise<unknown>;
   getDescriptor(): unknown;
 };
 
@@ -71,6 +76,11 @@ describe('@seatlayer/angular SeasonPicker', () => {
       .toHaveBeenCalledWith({ operationId: 'sop_1' });
     await expect(component.holdSameSeat(['A-1'], 'sop_1'))
       .resolves.toEqual({ operationId: 'sop_1' });
+    const bestAvailable = { categoryKey: 'stalls', zoneId: 'zone_lower', accessibility: ['wheelchair'] as const, requireContiguous: true };
+    await expect(component.holdBestAvailable(2, 'sop_2', bestAvailable))
+      .resolves.toEqual({ operationId: 'sop_2' });
+    expect(state.calls.find((call) => call.method === 'holdBestAvailable')?.args)
+      .toEqual([2, 'sop_2', bestAvailable]);
     expect(component.getDescriptor()).toEqual({ key: 'sea_1' });
 
     component.season = 'sea_2';

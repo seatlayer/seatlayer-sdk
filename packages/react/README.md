@@ -98,6 +98,8 @@ const season = useRef<SeasonPickerHandle>(null);
 />
 
 await season.current?.holdSameSeat(['A-1'], 'sop_checkout_1183');
+// Or let SeatLayer pick the best 2 seats free on every date:
+await season.current?.holdBestAvailable(2, 'sop_checkout_1184', { categoryKey: 'stalls' });
 ```
 
 The browser handoff is opaque and price-free. Its `pricingAuthority: "host"`

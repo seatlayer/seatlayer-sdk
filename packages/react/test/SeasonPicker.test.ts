@@ -15,6 +15,10 @@ vi.mock('@seatlayer/js', () => ({
       calls.push({ method: 'holdSameSeat', args });
       return Promise.resolve({ operationId: args[1] });
     }
+    holdBestAvailable(...args: unknown[]) {
+      calls.push({ method: 'holdBestAvailable', args });
+      return Promise.resolve({ operationId: args[1] });
+    }
     restoreOperation(...args: unknown[]) {
       calls.push({ method: 'restoreOperation', args });
       return Promise.resolve(null);
@@ -71,6 +75,11 @@ describe('@seatlayer/react SeasonPicker', () => {
 
     await expect(ref.current?.holdSameSeat(['A-1'], 'sop_1'))
       .resolves.toEqual({ operationId: 'sop_1' });
+    const bestAvailable = { categoryKey: 'stalls', zoneId: 'zone_lower', accessibility: ['wheelchair'] as const, requireContiguous: true };
+    await expect(ref.current!.holdBestAvailable(2, 'sop_2', bestAvailable))
+      .resolves.toEqual({ operationId: 'sop_2' });
+    expect(calls.find((call) => call.method === 'holdBestAvailable')?.args)
+      .toEqual([2, 'sop_2', bestAvailable]);
     await ref.current?.release('sra_1');
     await expect(ref.current?.createRenewalIntent('sro_1'))
       .resolves.toEqual({ offerId: 'sro_1' });

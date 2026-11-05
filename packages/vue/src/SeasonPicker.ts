@@ -11,6 +11,7 @@ import {
 import {
   SeasonPicker as CoreSeasonPicker,
   type SeasonAvailability,
+  type SeasonBestAvailableOptions,
   type SeasonCheckoutHandoff,
   type SeasonDescriptor,
   type SeasonPickerOptions,
@@ -21,6 +22,14 @@ import {
 /** Imperative controls exposed through a Vue template ref. */
 export interface SeasonPickerExposed {
   holdSameSeat(labels: readonly string[], operationId: string): Promise<SeasonCheckoutHandoff>;
+  /**
+   * Holds the best `qty` seats free on every included performance, as a map
+   * selection would. Same contract as `@seatlayer/js` `holdBestAvailable`: a
+   * caller-stable `sop_` id, 1 to `maxSelection` seats, one call at a time.
+   */
+  holdBestAvailable(
+    qty: number, operationId: string, options?: SeasonBestAvailableOptions,
+  ): Promise<SeasonCheckoutHandoff>;
   restoreOperation(operationId: string): Promise<SeasonCheckoutHandoff | null>;
   release(releaseActionId: string): Promise<void>;
   createRenewalIntent(offerId: string): Promise<SeasonRenewalIntent>;
@@ -127,6 +136,7 @@ export const SeasonPicker = defineComponent({
     };
     const exposed: SeasonPickerExposed = {
       holdSameSeat: (labels, operationId) => current().holdSameSeat(labels, operationId),
+      holdBestAvailable: (qty, operationId, options) => current().holdBestAvailable(qty, operationId, options),
       restoreOperation: (operationId) => current().restoreOperation(operationId),
       release: (releaseActionId) => current().release(releaseActionId),
       createRenewalIntent: (offerId) => current().createRenewalIntent(offerId),

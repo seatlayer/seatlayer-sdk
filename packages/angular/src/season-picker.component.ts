@@ -15,6 +15,7 @@ import {
 import {
   SeasonPicker as CoreSeasonPicker,
   type SeasonAvailability,
+  type SeasonBestAvailableOptions,
   type SeasonCheckoutHandoff,
   type SeasonDescriptor,
   type SeasonPickerOptions,
@@ -112,6 +113,17 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   /** Holds the same labels across every included occurrence. */
   holdSameSeat(labels: readonly string[], operationId: string): Promise<SeasonCheckoutHandoff> {
     return this.current().holdSameSeat(labels, operationId);
+  }
+
+  /**
+   * Holds the best `qty` seats free on every included performance, as a map
+   * selection would. Same contract as `@seatlayer/js` `holdBestAvailable`: a
+   * caller-stable `sop_` id, 1 to `maxSelection` seats, one call at a time.
+   */
+  holdBestAvailable(
+    qty: number, operationId: string, options?: SeasonBestAvailableOptions,
+  ): Promise<SeasonCheckoutHandoff> {
+    return this.current().holdBestAvailable(qty, operationId, options);
   }
 
   /** Restores a caller-stable Season operation after uncertainty. */
