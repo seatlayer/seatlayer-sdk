@@ -1,5 +1,4 @@
 import {
-  computed,
   defineComponent,
   h,
   onBeforeUnmount,
@@ -16,22 +15,13 @@ import {
   type SeasonCheckoutHandoff,
   type SeasonDescriptor,
   type SeasonPickerOptions,
-  type SeasonPriceType,
   type SeasonRenewalIntent,
-  type SeasonSeatPriceTypes,
   type SeasonStatusEvent,
 } from '@seatlayer/js';
 
 /** Imperative controls exposed through a Vue template ref. */
 export interface SeasonPickerExposed {
-  /**
-   * Holds the same labels for every included performance. `priceTypes` names
-   * each seat's price type by label (`{ 'A-2': 'child' }`); a label it leaves
-   * out is adult. Same contract as `@seatlayer/js` `holdSameSeat`.
-   */
-  holdSameSeat(
-    labels: readonly string[], operationId: string, priceTypes?: SeasonSeatPriceTypes,
-  ): Promise<SeasonCheckoutHandoff>;
+  holdSameSeat(labels: readonly string[], operationId: string): Promise<SeasonCheckoutHandoff>;
   /**
    * Holds the best `qty` seats free on every included performance, as a map
    * selection would. Same contract as `@seatlayer/js` `holdBestAvailable`: a
@@ -71,14 +61,6 @@ export const SeasonPicker = defineComponent({
     initialOperationId: { type: String, default: undefined },
     recoveryTimeoutMs: { type: Number, default: undefined },
     fetch: { type: Function as PropType<typeof fetch>, default: undefined },
-    /**
-     * The price types the picker sells, e.g. `['adult', 'child']`. With a type
-     * besides adult, the buyer chooses one per seat before the hold.
-     */
-    priceTypes: {
-      type: Array as PropType<readonly SeasonPriceType[]>,
-      default: undefined,
-    },
   },
   emits: {
     hold: (_handoff: SeasonCheckoutHandoff) => true,
@@ -94,10 +76,6 @@ export const SeasonPicker = defineComponent({
   setup(props, { emit, expose }) {
     const container: Ref<HTMLDivElement | null> = ref(null);
     const picker = shallowRef<CoreSeasonPicker | null>(null);
-    // By content, so an inline `:price-types="['adult', 'child']"` does not
-    // rebuild the picker on every parent render (a computed only notifies the
-    // watch below when its value changes).
-    const priceTypesKey = computed(() => (props.priceTypes ?? []).join(','));
 
     const destroy = () => {
       picker.value?.destroy();
@@ -119,7 +97,6 @@ export const SeasonPicker = defineComponent({
         initialOperationId: props.initialOperationId,
         recoveryTimeoutMs: props.recoveryTimeoutMs,
         fetch: props.fetch,
-        priceTypes: props.priceTypes,
         onHold: (handoff) => emit('hold', handoff),
         onHoldChange: (handoff) => emit('hold-change', handoff),
         onContinue: (handoff) => emit('continue', handoff),
@@ -147,7 +124,6 @@ export const SeasonPicker = defineComponent({
         props.initialOperationId,
         props.recoveryTimeoutMs,
         props.fetch,
-        priceTypesKey.value,
       ],
       build,
       { immediate: true, flush: 'post' },
@@ -159,7 +135,7 @@ export const SeasonPicker = defineComponent({
       return picker.value;
     };
     const exposed: SeasonPickerExposed = {
-      holdSameSeat: (labels, operationId, priceTypes) => current().holdSameSeat(labels, operationId, priceTypes),
+      holdSameSeat: (labels, operationId) => current().holdSameSeat(labels, operationId),
       holdBestAvailable: (qty, operationId, options) => current().holdBestAvailable(qty, operationId, options),
       restoreOperation: (operationId) => current().restoreOperation(operationId),
       release: (releaseActionId) => current().release(releaseActionId),

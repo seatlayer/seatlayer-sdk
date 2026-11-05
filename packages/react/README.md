@@ -102,11 +102,6 @@ await season.current?.holdSameSeat(['A-1'], 'sop_checkout_1183');
 await season.current?.holdBestAvailable(2, 'sop_checkout_1184', { categoryKey: 'stalls' });
 ```
 
-To sell child or concession seats too, pass `priceTypes={['adult', 'child']}`:
-the buyer chooses a type per seat before the hold, and the handoff's `seats`
-lists each seat's `priceTypeKey`. `holdSameSeat(labels, operationId,
-{ 'A-2': 'child' })` names them yourself; a label left out is adult.
-
 The browser handoff is opaque and price-free. Its `pricingAuthority: "host"`
 and `authoritativeAmountIncluded: false` flags mean trusted server code must
 apply the package price, tax, and payment decision before booking the
