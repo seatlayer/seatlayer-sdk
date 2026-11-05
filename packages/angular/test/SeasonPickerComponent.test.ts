@@ -35,7 +35,7 @@ vi.mock('@seatlayer/js', () => ({
 
 type Component = Record<string, unknown> & {
   ngOnChanges(changes: Record<string, unknown>): void;
-  holdSameSeat(labels: readonly string[], operationId: string): Promise<unknown>;
+  holdSameSeat(labels: readonly string[], operationId: string, priceTypes?: unknown): Promise<unknown>;
   holdBestAvailable(qty: number, operationId: string, options?: unknown): Promise<unknown>;
   getDescriptor(): unknown;
 };
@@ -87,5 +87,22 @@ describe('@seatlayer/angular SeasonPicker', () => {
     component.ngOnChanges({ season: { currentValue: 'sea_2' } });
     expect(state.constructed).toHaveLength(2);
     expect(state.calls.filter((call) => call.method === 'destroy')).toHaveLength(1);
+  });
+
+  it('forwards priceTypes, rebuilds when the types change, and passes a type map to holdSameSeat', async () => {
+    const component = await makeComponent();
+    component.priceTypes = ['adult', 'child'];
+    component.ngOnChanges({ season: { currentValue: 'sea_1' }, priceTypes: { currentValue: ['adult', 'child'] } });
+    expect(state.constructed[0]).toMatchObject({ priceTypes: ['adult', 'child'] });
+
+    component.priceTypes = ['adult', 'child', 'senior'];
+    component.ngOnChanges({ priceTypes: { currentValue: ['adult', 'child', 'senior'] } });
+    expect(state.constructed).toHaveLength(2);
+    expect(state.constructed[1]).toMatchObject({ priceTypes: ['adult', 'child', 'senior'] });
+    expect(state.calls.filter((call) => call.method === 'destroy')).toHaveLength(1);
+
+    await component.holdSameSeat(['A-1', 'A-2'], 'sop_1', { 'A-2': 'child' });
+    expect(state.calls.find((call) => call.method === 'holdSameSeat')?.args)
+      .toEqual([['A-1', 'A-2'], 'sop_1', { 'A-2': 'child' }]);
   });
 });

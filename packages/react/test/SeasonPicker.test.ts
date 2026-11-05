@@ -101,4 +101,30 @@ describe('@seatlayer/react SeasonPicker', () => {
     expect(constructed).toHaveLength(2);
     expect(calls.filter((call) => call.method === 'destroy')).toHaveLength(1);
   });
+
+  it('forwards priceTypes, rebuilds only when the types change, and passes a type map to holdSameSeat', async () => {
+    const { SeasonPicker } = await import('../src/SeasonPicker');
+    const ref = createRef<SeasonPickerHandle>();
+    const render = (priceTypes: Array<'adult' | 'child' | 'senior'>) => act(async () => {
+      root.render(createElement(SeasonPicker, {
+        ref, season: 'sea_1', buyerAccessToken: 'bss_secret', priceTypes,
+      }));
+    });
+
+    await render(['adult', 'child']);
+    expect(constructed[0]).toMatchObject({ priceTypes: ['adult', 'child'] });
+
+    // A new array with the same types (an inline prop on every render) keeps the picker.
+    await render(['adult', 'child']);
+    expect(constructed).toHaveLength(1);
+
+    await render(['adult', 'child', 'senior']);
+    expect(constructed).toHaveLength(2);
+    expect(constructed[1]).toMatchObject({ priceTypes: ['adult', 'child', 'senior'] });
+    expect(calls.filter((call) => call.method === 'destroy')).toHaveLength(1);
+
+    await ref.current!.holdSameSeat(['A-1', 'A-2'], 'sop_1', { 'A-2': 'child' });
+    expect(calls.find((call) => call.method === 'holdSameSeat')?.args)
+      .toEqual([['A-1', 'A-2'], 'sop_1', { 'A-2': 'child' }]);
+  });
 });

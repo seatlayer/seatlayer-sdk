@@ -19,7 +19,9 @@ import {
   type SeasonCheckoutHandoff,
   type SeasonDescriptor,
   type SeasonPickerOptions,
+  type SeasonPriceType,
   type SeasonRenewalIntent,
+  type SeasonSeatPriceTypes,
   type SeasonStatusEvent,
 } from '@seatlayer/js';
 
@@ -62,6 +64,12 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   /** Test or host fetch implementation. */
   @Input() fetch?: typeof fetch;
 
+  /**
+   * The price types the picker sells, e.g. `['adult', 'child']`. With a type
+   * besides adult, the buyer chooses one per seat before the hold.
+   */
+  @Input() priceTypes?: readonly SeasonPriceType[];
+
   /** A same-seat hold reached a safe handoff. */
   @Output() readonly hold = new EventEmitter<SeasonCheckoutHandoff>();
 
@@ -95,7 +103,7 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   private static readonly REBUILD_INPUTS = new Set([
     'season', 'apiBase', 'publicKey', 'checkout', 'returnUrl',
     'buyerAccessTokenProvider', 'buyerAccessToken',
-    'initialOperationId', 'recoveryTimeoutMs', 'fetch',
+    'initialOperationId', 'recoveryTimeoutMs', 'fetch', 'priceTypes',
   ]);
   private readonly zone = inject(NgZone);
   private picker: CoreSeasonPicker | null = null;
@@ -110,9 +118,15 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
     }
   }
 
-  /** Holds the same labels across every included occurrence. */
-  holdSameSeat(labels: readonly string[], operationId: string): Promise<SeasonCheckoutHandoff> {
-    return this.current().holdSameSeat(labels, operationId);
+  /**
+   * Holds the same labels across every included occurrence. `priceTypes` names
+   * each seat's price type by label (`{ 'A-2': 'child' }`); a label it leaves
+   * out is adult.
+   */
+  holdSameSeat(
+    labels: readonly string[], operationId: string, priceTypes?: SeasonSeatPriceTypes,
+  ): Promise<SeasonCheckoutHandoff> {
+    return this.current().holdSameSeat(labels, operationId, priceTypes);
   }
 
   /**
@@ -171,6 +185,7 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
         initialOperationId: this.initialOperationId,
         recoveryTimeoutMs: this.recoveryTimeoutMs,
         fetch: this.fetch,
+        priceTypes: this.priceTypes,
         onHold: (value) => this.zone.run(() => this.hold.emit(value)),
         onHoldChange: (value) => this.zone.run(() => this.holdChange.emit(value)),
         onContinue: (value) => this.zone.run(() => this.continued.emit(value)),

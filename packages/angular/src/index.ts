@@ -17,11 +17,14 @@ export type {
   SeasonAvailability,
   SeasonBestAvailableOptions,
   SeasonCheckoutHandoff,
+  SeasonCheckoutSeat,
   SeasonDescriptor,
   SeasonOperation,
   SeasonOperationState,
   SeasonPickerOptions,
+  SeasonPriceType,
   SeasonRenewalIntent,
+  SeasonSeatPriceTypes,
   SeasonStatusEvent,
 } from '@seatlayer/js';
 

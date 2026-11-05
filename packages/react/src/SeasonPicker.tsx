@@ -13,24 +13,35 @@ import {
   type SeasonDescriptor,
   type SeasonPickerOptions,
   type SeasonRenewalIntent,
+  type SeasonSeatPriceTypes,
 } from '@seatlayer/js';
 
 export type {
   SeasonAvailability,
   SeasonBestAvailableOptions,
   SeasonCheckoutHandoff,
+  SeasonCheckoutSeat,
   SeasonDescriptor,
   SeasonOperation,
   SeasonOperationState,
   SeasonOfferPresentation,
   SeasonPickerOptions,
+  SeasonPriceType,
   SeasonRenewalIntent,
+  SeasonSeatPriceTypes,
   SeasonStatusEvent,
 } from '@seatlayer/js';
 
 /** Imperative controls for the fixed-inclusion Season buyer flow. */
 export interface SeasonPickerHandle {
-  holdSameSeat(labels: readonly string[], operationId: string): Promise<SeasonCheckoutHandoff>;
+  /**
+   * Holds the same labels for every included performance. `priceTypes` names
+   * each seat's price type by label (`{ 'A-2': 'child' }`); a label it leaves
+   * out is adult. Same contract as `@seatlayer/js` `holdSameSeat`.
+   */
+  holdSameSeat(
+    labels: readonly string[], operationId: string, priceTypes?: SeasonSeatPriceTypes,
+  ): Promise<SeasonCheckoutHandoff>;
   /**
    * Holds the best `qty` seats free on every included performance, as a map
    * selection would. Same contract as `@seatlayer/js` `holdBestAvailable`: a
@@ -77,6 +88,7 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
       initialView,
       enable3D,
       theme,
+      priceTypes,
       className,
       style,
     } = props;
@@ -86,6 +98,9 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
     latest.current = props;
     const offerKey = JSON.stringify(offer ?? null);
     const themeKey = JSON.stringify(theme ?? null);
+    // By content, so `priceTypes={['adult', 'child']}` written inline does not
+    // rebuild the picker on every render.
+    const priceTypesKey = (priceTypes ?? []).join(',');
 
     useEffect(() => {
       const container = containerRef.current;
@@ -118,10 +133,12 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
       season, apiBase, publicKey, checkout, returnUrl,
       buyerAccessToken, initialOperationId, recoveryTimeoutMs, fetch,
       offerKey, maxSelection, numberOfPlacesToSelect, locale, initialView, enable3D, themeKey,
+      priceTypesKey,
     ]);
 
     useImperativeHandle(ref, (): SeasonPickerHandle => ({
-      holdSameSeat: (labels, operationId) => required(pickerRef).holdSameSeat(labels, operationId),
+      holdSameSeat: (labels, operationId, priceTypes) =>
+        required(pickerRef).holdSameSeat(labels, operationId, priceTypes),
       holdBestAvailable: (qty, operationId, options) =>
         required(pickerRef).holdBestAvailable(qty, operationId, options),
       restoreOperation: (operationId) => required(pickerRef).restoreOperation(operationId),

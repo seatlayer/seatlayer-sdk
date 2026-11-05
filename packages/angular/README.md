@@ -146,6 +146,11 @@ The component exposes the same calls as `@seatlayer/js`, including Season
 Best Available: `seasonPicker.holdBestAvailable(2, 'sop_checkout_1184', {
 categoryKey: 'stalls' })` holds the best two seats free on every date.
 
+To sell child or concession seats too, bind `[priceTypes]="['adult', 'child']"`:
+the buyer chooses a type per seat before the hold, and the handoff's `seats`
+lists each seat's `priceTypeKey`. `seasonPicker.holdSameSeat(labels,
+operationId, { 'A-2': 'child' })` names them yourself; a label left out is adult.
+
 ## Inputs
 
 | Input | Type | Notes |
