@@ -48,6 +48,10 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
 
   /** Where a redirecting gateway returns the buyer, for hosted checkout. */
   @Input() returnUrl?: string;
+  /** Prefills SeatLayer checkout's email field (a signed-in member's). */
+  @Input() buyerEmail?: string;
+  /** Prefills SeatLayer checkout's name field. */
+  @Input() buyerName?: string;
 
   /** Refreshable one-time browser bearer provider. */
   @Input() buyerAccessTokenProvider?: SeasonPickerOptions['buyerAccessTokenProvider'];
@@ -151,6 +155,11 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
     return this.current().restoreOperation(operationId);
   }
 
+  /** Your server booked the held seats: show booked and stop the hold clock. */
+  markBooked(): Promise<boolean> {
+    return this.current().markBooked();
+  }
+
   /** Releases the active selection with a caller-stable action id. */
   release(releaseActionId: string): Promise<void> {
     return this.current().release(releaseActionId);
@@ -186,6 +195,8 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
         publicKey: this.publicKey,
         checkout: this.checkout,
         returnUrl: this.returnUrl,
+        buyerEmail: this.buyerEmail,
+        buyerName: this.buyerName,
         buyerAccessTokenProvider: this.buyerAccessTokenProvider,
         buyerAccessToken: this.buyerAccessToken,
         initialOperationId: this.initialOperationId,

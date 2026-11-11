@@ -41,6 +41,8 @@ export interface SeasonPickerExposed {
     qty: number, operationId: string, options?: SeasonBestAvailableOptions,
   ): Promise<SeasonCheckoutHandoff>;
   restoreOperation(operationId: string): Promise<SeasonCheckoutHandoff | null>;
+  /** Your server booked the held seats: show booked and stop the hold clock. */
+  markBooked(): Promise<boolean>;
   release(releaseActionId: string): Promise<void>;
   createRenewalIntent(offerId: string): Promise<SeasonRenewalIntent>;
   getDescriptor(): SeasonDescriptor | null;
@@ -60,6 +62,8 @@ export const SeasonPicker = defineComponent({
       default: undefined,
     },
     returnUrl: { type: String, default: undefined },
+    buyerEmail: { type: String, default: undefined },
+    buyerName: { type: String, default: undefined },
     buyerAccessTokenProvider: {
       type: Function as PropType<SeasonPickerOptions['buyerAccessTokenProvider']>,
       default: undefined,
@@ -118,6 +122,8 @@ export const SeasonPicker = defineComponent({
         publicKey: props.publicKey,
         checkout: props.checkout,
         returnUrl: props.returnUrl,
+        buyerEmail: props.buyerEmail,
+        buyerName: props.buyerName,
         buyerAccessTokenProvider: props.buyerAccessTokenProvider,
         buyerAccessToken: props.buyerAccessToken,
         initialOperationId: props.initialOperationId,
@@ -170,6 +176,7 @@ export const SeasonPicker = defineComponent({
       holdSameSeat: (labels, operationId, priceTypes) => current().holdSameSeat(labels, operationId, priceTypes),
       holdBestAvailable: (qty, operationId, options) => current().holdBestAvailable(qty, operationId, options),
       restoreOperation: (operationId) => current().restoreOperation(operationId),
+      markBooked: () => current().markBooked(),
       release: (releaseActionId) => current().release(releaseActionId),
       createRenewalIntent: (offerId) => current().createRenewalIntent(offerId),
       getDescriptor: () => picker.value?.getDescriptor() ?? null,

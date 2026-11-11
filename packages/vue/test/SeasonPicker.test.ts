@@ -19,6 +19,7 @@ vi.mock('@seatlayer/js', () => ({
       return Promise.resolve({ operationId: args[1] });
     }
     restoreOperation() { return Promise.resolve(null); }
+    markBooked() { return Promise.resolve(true); }
     release() { return Promise.resolve(); }
     createRenewalIntent(...args: unknown[]) { return Promise.resolve({ offerId: args[0] }); }
     getDescriptor() { return { key: 'sea_1' }; }
@@ -72,6 +73,7 @@ describe('@seatlayer/vue SeasonPicker', () => {
     await exposed.value!.holdBestAvailable(1, 'sop_3');
     expect(calls.filter((call) => call.method === 'holdBestAvailable').map((call) => call.args))
       .toEqual([[2, 'sop_2', bestAvailable], [1, 'sop_3', undefined]]);
+    await expect(exposed.value!.markBooked()).resolves.toBe(true);
     expect(exposed.value?.getAvailability()).toEqual({ freeCount: 4 });
 
     seasonKey.value = 'sea_2';
@@ -116,5 +118,14 @@ describe('@seatlayer/vue SeasonPicker', () => {
     await nextTick();
     expect(constructed).toHaveLength(2);
     expect(constructed[1]).toMatchObject({ package: 'spl_full' });
+  });
+
+  it('forwards `buyerEmail` and `buyerName` for the checkout card', async () => {
+    app = createApp(defineComponent({
+      setup: () => () => h(SeasonPicker, { season: 'sea_1', buyerEmail: 'member@example.com', buyerName: 'Asha Rao' }),
+    }));
+    app.mount(host);
+    await nextTick();
+    expect(constructed[0]).toMatchObject({ buyerEmail: 'member@example.com', buyerName: 'Asha Rao' });
   });
 });
