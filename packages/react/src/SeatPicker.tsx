@@ -18,6 +18,7 @@ import {
   type RendererViewMode,
   type SelectedSeat,
   type HoldResult,
+  type HoldSelectionResult,
 } from '@seatlayer/js';
 
 export type {
@@ -70,6 +71,8 @@ export interface SeatPickerHandle {
   removeHeldTicket(label: string): Promise<boolean>;
   /** Release the current hold (if any) and reset the tray. */
   release(): Promise<void>;
+  /** Hold the picked seats as the checkout button does, without its handoff (for `checkoutBar: false`). */
+  holdSelection(): Promise<HoldSelectionResult>;
   /**
    * Re-acquire the buyer access session after your app re-authorizes the buyer
    * (Sales Channels). Resolves false when the picker is not access-scoped.
@@ -201,6 +204,8 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         resumeHold: (holdId) => pickerRef.current?.resumeHold(holdId) ?? Promise.resolve(null),
         removeHeldTicket: (label) => pickerRef.current?.removeHeldTicket(label) ?? Promise.resolve(false),
         release: () => pickerRef.current?.release() ?? Promise.resolve(),
+        holdSelection: () => pickerRef.current?.holdSelection()
+          ?? Promise.resolve({ ok: false, reason: 'nothing_selected', message: '' }),
         refreshAccess: () => pickerRef.current?.refreshAccess() ?? Promise.resolve(false),
         setMapTheme: (map) => pickerRef.current?.setMapTheme(map),
         setEventDetailsHidden: (hidden) => pickerRef.current?.setEventDetailsHidden(hidden),

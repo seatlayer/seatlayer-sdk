@@ -14,6 +14,10 @@ vi.mock('@seatlayer/js', () => ({
       state.calls.push({ method: 'holdSameSeat', args });
       return Promise.resolve({ operationId: args[1] });
     }
+    holdBestAvailable(...args: unknown[]) {
+      state.calls.push({ method: 'holdBestAvailable', args });
+      return Promise.resolve({ operationId: args[1] });
+    }
     restoreOperation(...args: unknown[]) {
       state.calls.push({ method: 'restoreOperation', args });
       return Promise.resolve(null);
@@ -31,7 +35,8 @@ vi.mock('@seatlayer/js', () => ({
 
 type Component = Record<string, unknown> & {
   ngOnChanges(changes: Record<string, unknown>): void;
-  holdSameSeat(labels: readonly string[], operationId: string): Promise<unknown>;
+  holdSameSeat(labels: readonly string[], operationId: string, priceTypes?: unknown): Promise<unknown>;
+  holdBestAvailable(qty: number, operationId: string, options?: unknown): Promise<unknown>;
   getDescriptor(): unknown;
 };
 
@@ -71,11 +76,43 @@ describe('@seatlayer/angular SeasonPicker', () => {
       .toHaveBeenCalledWith({ operationId: 'sop_1' });
     await expect(component.holdSameSeat(['A-1'], 'sop_1'))
       .resolves.toEqual({ operationId: 'sop_1' });
+    const bestAvailable = { categoryKey: 'stalls', zoneId: 'zone_lower', accessibility: ['wheelchair'] as const, requireContiguous: true };
+    await expect(component.holdBestAvailable(2, 'sop_2', bestAvailable))
+      .resolves.toEqual({ operationId: 'sop_2' });
+    await component.holdBestAvailable(1, 'sop_3');
+    expect(state.calls.filter((call) => call.method === 'holdBestAvailable').map((call) => call.args))
+      .toEqual([[2, 'sop_2', bestAvailable], [1, 'sop_3', undefined]]);
     expect(component.getDescriptor()).toEqual({ key: 'sea_1' });
 
     component.season = 'sea_2';
     component.ngOnChanges({ season: { currentValue: 'sea_2' } });
     expect(state.constructed).toHaveLength(2);
     expect(state.calls.filter((call) => call.method === 'destroy')).toHaveLength(1);
+  });
+
+  it('forwards priceTypes, rebuilds when they change, and passes a type map to holdSameSeat', async () => {
+    const component = await makeComponent();
+    component.priceTypes = ['adult', 'child'];
+    component.ngOnChanges({ season: { currentValue: 'sea_1' }, priceTypes: { currentValue: ['adult', 'child'] } });
+    expect(state.constructed[0]).toMatchObject({ priceTypes: ['adult', 'child'] });
+    component.priceTypes = ['adult', 'child', 'senior'];
+    component.ngOnChanges({ priceTypes: { currentValue: ['adult', 'child', 'senior'] } });
+    expect(state.constructed).toHaveLength(2);
+    expect(state.constructed[1]).toMatchObject({ priceTypes: ['adult', 'child', 'senior'] });
+    await component.holdSameSeat(['A-1', 'A-2'], 'sop_1', { 'A-2': 'child' });
+    expect(state.calls.filter((call) => call.method === 'holdSameSeat').at(-1)?.args)
+      .toEqual([['A-1', 'A-2'], 'sop_1', { 'A-2': 'child' }]);
+  });
+
+  it('forwards `package`, and opens on another package when it changes', async () => {
+    const component = await makeComponent();
+    component.package = 'spl_half';
+    component.ticketsByEmail = true;
+    component.ngOnChanges({ season: { currentValue: 'sea_1' }, package: { currentValue: 'spl_half' } });
+    expect(state.constructed[0]).toMatchObject({ package: 'spl_half', ticketsByEmail: true });
+    component.package = 'spl_full';
+    component.ngOnChanges({ package: { currentValue: 'spl_full' } });
+    expect(state.constructed).toHaveLength(2);
+    expect(state.constructed[1]).toMatchObject({ package: 'spl_full' });
   });
 });
