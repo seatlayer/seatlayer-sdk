@@ -157,6 +157,11 @@ Season's first one; a host token is already bound to one package, so it ignores
 this. If your own checkout emails a ticket for every date, bind
 `[ticketsByEmail]="true"` and step 1 says so.
 
+With SeatLayer checkout, bind `[buyerEmail]` and `[buyerName]` to fill in the
+payment card for a signed-in member; the buyer can still change them. On your
+own checkout, call `seasonPicker.markBooked()` once your server has booked the
+hold: the picker shows the booked screen instead of offering checkout again.
+
 ## Inputs
 
 | Input | Type | Notes |

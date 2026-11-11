@@ -23,6 +23,7 @@ vi.mock('@seatlayer/js', () => ({
       calls.push({ method: 'restoreOperation', args });
       return Promise.resolve(null);
     }
+    markBooked() { return Promise.resolve(true); }
     release(...args: unknown[]) { calls.push({ method: 'release', args }); return Promise.resolve(); }
     createRenewalIntent(...args: unknown[]) {
       calls.push({ method: 'createRenewalIntent', args });
@@ -81,6 +82,7 @@ describe('@seatlayer/react SeasonPicker', () => {
     await ref.current!.holdBestAvailable(1, 'sop_3');
     expect(calls.filter((call) => call.method === 'holdBestAvailable').map((call) => call.args))
       .toEqual([[2, 'sop_2', bestAvailable], [1, 'sop_3', undefined]]);
+    await expect(ref.current!.markBooked()).resolves.toBe(true);
     await ref.current?.release('sra_1');
     await expect(ref.current?.createRenewalIntent('sro_1'))
       .resolves.toEqual({ offerId: 'sro_1' });
@@ -130,5 +132,13 @@ describe('@seatlayer/react SeasonPicker', () => {
     await act(async () => root.render(createElement(SeasonPicker, { ...props, package: 'spl_full' })));
     expect(constructed).toHaveLength(2);
     expect(constructed[1]).toMatchObject({ package: 'spl_full' });
+  });
+
+  it('forwards `buyerEmail` and `buyerName` for the checkout card', async () => {
+    const { SeasonPicker } = await import('../src/SeasonPicker');
+    await act(async () => root.render(createElement(SeasonPicker, {
+      season: 'sea_1', buyerEmail: 'member@example.com', buyerName: 'Asha Rao',
+    })));
+    expect(constructed[0]).toMatchObject({ buyerEmail: 'member@example.com', buyerName: 'Asha Rao' });
   });
 });

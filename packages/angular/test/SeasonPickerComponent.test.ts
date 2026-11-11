@@ -22,6 +22,7 @@ vi.mock('@seatlayer/js', () => ({
       state.calls.push({ method: 'restoreOperation', args });
       return Promise.resolve(null);
     }
+    markBooked() { return Promise.resolve(true); }
     release(...args: unknown[]) { state.calls.push({ method: 'release', args }); return Promise.resolve(); }
     createRenewalIntent(...args: unknown[]) {
       state.calls.push({ method: 'createRenewalIntent', args });
@@ -37,6 +38,7 @@ type Component = Record<string, unknown> & {
   ngOnChanges(changes: Record<string, unknown>): void;
   holdSameSeat(labels: readonly string[], operationId: string, priceTypes?: unknown): Promise<unknown>;
   holdBestAvailable(qty: number, operationId: string, options?: unknown): Promise<unknown>;
+  markBooked(): Promise<boolean>;
   getDescriptor(): unknown;
 };
 
@@ -82,6 +84,7 @@ describe('@seatlayer/angular SeasonPicker', () => {
     await component.holdBestAvailable(1, 'sop_3');
     expect(state.calls.filter((call) => call.method === 'holdBestAvailable').map((call) => call.args))
       .toEqual([[2, 'sop_2', bestAvailable], [1, 'sop_3', undefined]]);
+    await expect(component.markBooked()).resolves.toBe(true);
     expect(component.getDescriptor()).toEqual({ key: 'sea_1' });
 
     component.season = 'sea_2';
@@ -114,5 +117,13 @@ describe('@seatlayer/angular SeasonPicker', () => {
     component.ngOnChanges({ package: { currentValue: 'spl_full' } });
     expect(state.constructed).toHaveLength(2);
     expect(state.constructed[1]).toMatchObject({ package: 'spl_full' });
+  });
+
+  it('forwards `buyerEmail` and `buyerName` for the checkout card', async () => {
+    const component = await makeComponent();
+    component.buyerEmail = 'member@example.com';
+    component.buyerName = 'Asha Rao';
+    component.ngOnChanges({ season: { currentValue: 'sea_1' } });
+    expect(state.constructed[0]).toMatchObject({ buyerEmail: 'member@example.com', buyerName: 'Asha Rao' });
   });
 });

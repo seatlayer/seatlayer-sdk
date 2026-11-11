@@ -50,6 +50,8 @@ export interface SeasonPickerHandle {
     qty: number, operationId: string, options?: SeasonBestAvailableOptions,
   ): Promise<SeasonCheckoutHandoff>;
   restoreOperation(operationId: string): Promise<SeasonCheckoutHandoff | null>;
+  /** Your server booked the held seats: show booked and stop the hold clock. */
+  markBooked(): Promise<boolean>;
   release(releaseActionId: string): Promise<void>;
   createRenewalIntent(offerId: string): Promise<SeasonRenewalIntent>;
   getDescriptor(): SeasonDescriptor | null;
@@ -142,6 +144,7 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
       holdBestAvailable: (qty, operationId, options) =>
         required(pickerRef).holdBestAvailable(qty, operationId, options),
       restoreOperation: (operationId) => required(pickerRef).restoreOperation(operationId),
+      markBooked: () => required(pickerRef).markBooked(),
       release: (releaseActionId) => required(pickerRef).release(releaseActionId),
       createRenewalIntent: (offerId) => required(pickerRef).createRenewalIntent(offerId),
       getDescriptor: () => pickerRef.current?.getDescriptor() ?? null,
