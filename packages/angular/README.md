@@ -142,6 +142,21 @@ apply the package price, tax, and payment decision before booking the
 identity-only allocation. `SeatLayerSeasonPickerComponent` is supported in
 `@seatlayer/angular` `0.72.0` and newer.
 
+The component exposes the same calls as `@seatlayer/js`, including Season
+Best Available: `seasonPicker.holdBestAvailable(2, 'sop_checkout_1184', {
+categoryKey: 'stalls' })` holds the best two seats free on every date.
+
+To sell child or concession seats too, bind `[priceTypes]="['adult', 'child']"`:
+the buyer chooses a type per seat before the hold, and the handoff's `seats`
+lists each seat's `priceTypeKey`. `seasonPicker.holdSameSeat(labels,
+operationId, { 'A-2': 'child' })` names them yourself; a label left out is adult.
+
+The picker opens on step 1, the package with its dates and prices. Bind
+`package="spl_half"` (the package's key) to open on that package instead of the
+Season's first one; a host token is already bound to one package, so it ignores
+this. If your own checkout emails a ticket for every date, bind
+`[ticketsByEmail]="true"` and step 1 says so.
+
 ## Inputs
 
 | Input | Type | Notes |

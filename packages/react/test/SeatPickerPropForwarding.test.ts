@@ -39,6 +39,10 @@ vi.mock('@seatlayer/js', () => ({
     resumeHold() { return Promise.resolve(null); }
     removeHeldTicket() { return Promise.resolve(false); }
     release() { return Promise.resolve(); }
+    holdSelection() {
+      imperativeCalls.push({ method: 'holdSelection', args: [] });
+      return Promise.resolve({ ok: true, hold: { holdId: 'hold-2', expiresAt: 456, seats: [] }, seats: [] });
+    }
     refreshAccess() {
       imperativeCalls.push({ method: 'refreshAccess', args: [] });
       return Promise.resolve(true);
@@ -188,6 +192,16 @@ describe('SeatPicker prop forwarding', () => {
   it('leaves the provider undefined when the host did not pass one', async () => {
     const options = await mountWith({});
     expect(options.buyerAccessTokenProvider).toBeUndefined();
+  });
+
+  it('forwards holdSelection, the button\'s hold without its handoff', async () => {
+    const { SeatPicker } = await import('../src/SeatPicker');
+    const ref = createRef<SeatPickerHandle>();
+    await act(async () => {
+      root.render(createElement(SeatPicker, { event: 'evt_test', ref }));
+    });
+    await expect(ref.current!.holdSelection()).resolves.toMatchObject({ ok: true, hold: { holdId: 'hold-2' } });
+    expect(imperativeCalls).toEqual([{ method: 'holdSelection', args: [] }]);
   });
 
   it('forwards the safe imperative picker contract and best-available options', async () => {

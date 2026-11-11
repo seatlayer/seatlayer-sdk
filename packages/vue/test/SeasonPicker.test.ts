@@ -14,6 +14,10 @@ vi.mock('@seatlayer/js', () => ({
       calls.push({ method: 'holdSameSeat', args });
       return Promise.resolve({ operationId: args[1] });
     }
+    holdBestAvailable(...args: unknown[]) {
+      calls.push({ method: 'holdBestAvailable', args });
+      return Promise.resolve({ operationId: args[1] });
+    }
     restoreOperation() { return Promise.resolve(null); }
     release() { return Promise.resolve(); }
     createRenewalIntent(...args: unknown[]) { return Promise.resolve({ offerId: args[0] }); }
@@ -62,11 +66,55 @@ describe('@seatlayer/vue SeasonPicker', () => {
     expect(onHoldChange).toHaveBeenCalledWith({ operationId: 'sop_1' });
     await expect(exposed.value?.holdSameSeat(['A-1'], 'sop_1'))
       .resolves.toEqual({ operationId: 'sop_1' });
+    const bestAvailable = { categoryKey: 'stalls', zoneId: 'zone_lower', accessibility: ['wheelchair'] as const, requireContiguous: true };
+    await expect(exposed.value!.holdBestAvailable(2, 'sop_2', bestAvailable))
+      .resolves.toEqual({ operationId: 'sop_2' });
+    await exposed.value!.holdBestAvailable(1, 'sop_3');
+    expect(calls.filter((call) => call.method === 'holdBestAvailable').map((call) => call.args))
+      .toEqual([[2, 'sop_2', bestAvailable], [1, 'sop_3', undefined]]);
     expect(exposed.value?.getAvailability()).toEqual({ freeCount: 4 });
 
     seasonKey.value = 'sea_2';
     await nextTick();
     expect(constructed).toHaveLength(2);
     expect(calls.filter((call) => call.method === 'destroy')).toHaveLength(1);
+  });
+
+  it('forwards priceTypes, rebuilds only when they change, and passes a type map to holdSameSeat', async () => {
+    const priceTypes = ref<Array<'adult' | 'child' | 'senior'>>(['adult', 'child']);
+    const exposed = ref<SeasonPickerExposed | null>(null);
+    app = createApp(defineComponent({
+      setup: () => () => h(SeasonPicker, {
+        ref: exposed, season: 'sea_1', buyerAccessToken: 'bss_secret', priceTypes: priceTypes.value,
+      }),
+    }));
+    app.mount(host);
+    await nextTick();
+    expect(constructed[0]).toMatchObject({ priceTypes: ['adult', 'child'] });
+    // A fresh array with the same types, as an inline prop is: same picker.
+    priceTypes.value = ['adult', 'child'];
+    await nextTick();
+    expect(constructed).toHaveLength(1);
+    priceTypes.value = ['adult', 'child', 'senior'];
+    await nextTick();
+    expect(constructed).toHaveLength(2);
+    expect(constructed[1]).toMatchObject({ priceTypes: ['adult', 'child', 'senior'] });
+    await exposed.value!.holdSameSeat(['A-1', 'A-2'], 'sop_1', { 'A-2': 'child' });
+    expect(calls.filter((call) => call.method === 'holdSameSeat').at(-1)?.args)
+      .toEqual([['A-1', 'A-2'], 'sop_1', { 'A-2': 'child' }]);
+  });
+
+  it('forwards `package`, and opens on another package when it changes', async () => {
+    const chosen = ref('spl_half');
+    app = createApp(defineComponent({
+      setup: () => () => h(SeasonPicker, { season: 'sea_1', package: chosen.value, ticketsByEmail: true }),
+    }));
+    app.mount(host);
+    await nextTick();
+    expect(constructed[0]).toMatchObject({ package: 'spl_half', ticketsByEmail: true });
+    chosen.value = 'spl_full';
+    await nextTick();
+    expect(constructed).toHaveLength(2);
+    expect(constructed[1]).toMatchObject({ package: 'spl_full' });
   });
 });

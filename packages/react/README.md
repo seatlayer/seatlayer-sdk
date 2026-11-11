@@ -98,6 +98,8 @@ const season = useRef<SeasonPickerHandle>(null);
 />
 
 await season.current?.holdSameSeat(['A-1'], 'sop_checkout_1183');
+// Or let SeatLayer pick the best 2 seats free on every date:
+await season.current?.holdBestAvailable(2, 'sop_checkout_1184', { categoryKey: 'stalls' });
 ```
 
 The browser handoff is opaque and price-free. Its `pricingAuthority: "host"`
@@ -105,6 +107,17 @@ and `authoritativeAmountIncluded: false` flags mean trusted server code must
 apply the package price, tax, and payment decision before booking the
 identity-only allocation. `SeasonPicker` is supported in `@seatlayer/react`
 `0.72.0` and newer.
+
+To sell child or concession seats too, pass `priceTypes={['adult', 'child']}`:
+the buyer chooses a type per seat before the hold, and the handoff's `seats`
+lists each seat's `priceTypeKey`. `holdSameSeat(labels, operationId,
+{ 'A-2': 'child' })` names them yourself; a label left out is adult.
+
+The picker opens on step 1, the package with its dates and prices. Pass
+`package="spl_half"` (the package's key) to open on that package instead of the
+Season's first one; a host token is already bound to one package, so it ignores
+this. If your own checkout emails a ticket for every date, pass
+`ticketsByEmail` and step 1 says so.
 
 For the complete buyer experience (map, legend, priced tray, and the checkout
 hand-off), render `SeatPicker` instead:

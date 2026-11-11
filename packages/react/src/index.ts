@@ -35,12 +35,15 @@ export type {
   SeasonPickerProps,
   SeasonPickerOptions,
   SeasonAvailability,
+  SeasonBestAvailableOptions,
   SeasonCheckoutHandoff,
+  SeasonCheckoutSeat,
   SeasonDescriptor,
   SeasonOperation,
   SeasonOperationState,
-  SeasonOfferPresentation,
+  SeasonPriceType,
   SeasonRenewalIntent,
+  SeasonSeatPriceTypes,
   SeasonStatusEvent,
 } from './SeasonPicker';
 // The framework-agnostic widget class — for the one-call modal (SeatPickerWidget.open()).

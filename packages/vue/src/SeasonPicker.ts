@@ -1,4 +1,5 @@
 import {
+  computed,
   defineComponent,
   h,
   onBeforeUnmount,
@@ -11,16 +12,34 @@ import {
 import {
   SeasonPicker as CoreSeasonPicker,
   type SeasonAvailability,
+  type SeasonBestAvailableOptions,
   type SeasonCheckoutHandoff,
   type SeasonDescriptor,
   type SeasonPickerOptions,
+  type SeasonPriceType,
   type SeasonRenewalIntent,
+  type SeasonSeatPriceTypes,
   type SeasonStatusEvent,
 } from '@seatlayer/js';
 
 /** Imperative controls exposed through a Vue template ref. */
 export interface SeasonPickerExposed {
-  holdSameSeat(labels: readonly string[], operationId: string): Promise<SeasonCheckoutHandoff>;
+  /**
+   * Holds the same labels for every included performance. `priceTypes` names
+   * each seat's price type by label (`{ 'A-2': 'child' }`); a label it leaves
+   * out is adult. Same contract as `@seatlayer/js` `holdSameSeat`.
+   */
+  holdSameSeat(
+    labels: readonly string[], operationId: string, priceTypes?: SeasonSeatPriceTypes,
+  ): Promise<SeasonCheckoutHandoff>;
+  /**
+   * Holds the best `qty` seats free on every included performance, as a map
+   * selection would. Same contract as `@seatlayer/js` `holdBestAvailable`: a
+   * caller-stable `sop_` id, 1 to `maxSelection` seats, one call at a time.
+   */
+  holdBestAvailable(
+    qty: number, operationId: string, options?: SeasonBestAvailableOptions,
+  ): Promise<SeasonCheckoutHandoff>;
   restoreOperation(operationId: string): Promise<SeasonCheckoutHandoff | null>;
   release(releaseActionId: string): Promise<void>;
   createRenewalIntent(offerId: string): Promise<SeasonRenewalIntent>;
@@ -50,8 +69,20 @@ export const SeasonPicker = defineComponent({
       default: undefined,
     },
     initialOperationId: { type: String, default: undefined },
+    /** The package to open on, by its key; the first package without it. */
+    package: { type: String, default: undefined },
+    /** The host emails a ticket per date itself: step 1 says so. */
+    ticketsByEmail: { type: Boolean, default: undefined },
     recoveryTimeoutMs: { type: Number, default: undefined },
     fetch: { type: Function as PropType<typeof fetch>, default: undefined },
+    /**
+     * The price types the picker sells, e.g. `['adult', 'child']`. With a type
+     * besides adult, the buyer chooses one per seat before the hold.
+     */
+    priceTypes: {
+      type: Array as PropType<readonly SeasonPriceType[]>,
+      default: undefined,
+    },
   },
   emits: {
     hold: (_handoff: SeasonCheckoutHandoff) => true,
@@ -67,6 +98,10 @@ export const SeasonPicker = defineComponent({
   setup(props, { emit, expose }) {
     const container: Ref<HTMLDivElement | null> = ref(null);
     const picker = shallowRef<CoreSeasonPicker | null>(null);
+    // By content, so an inline `:price-types="['adult', 'child']"` does not
+    // rebuild the picker on every parent render (a computed only notifies the
+    // watch below when its value changes).
+    const priceTypesKey = computed(() => (props.priceTypes ?? []).join(','));
 
     const destroy = () => {
       picker.value?.destroy();
@@ -86,8 +121,11 @@ export const SeasonPicker = defineComponent({
         buyerAccessTokenProvider: props.buyerAccessTokenProvider,
         buyerAccessToken: props.buyerAccessToken,
         initialOperationId: props.initialOperationId,
+        package: props.package,
+        ticketsByEmail: props.ticketsByEmail,
         recoveryTimeoutMs: props.recoveryTimeoutMs,
         fetch: props.fetch,
+        priceTypes: props.priceTypes,
         onHold: (handoff) => emit('hold', handoff),
         onHoldChange: (handoff) => emit('hold-change', handoff),
         onContinue: (handoff) => emit('continue', handoff),
@@ -113,8 +151,11 @@ export const SeasonPicker = defineComponent({
         props.buyerAccessTokenProvider,
         props.buyerAccessToken,
         props.initialOperationId,
+        props.package,
+        props.ticketsByEmail,
         props.recoveryTimeoutMs,
         props.fetch,
+        priceTypesKey.value,
       ],
       build,
       { immediate: true, flush: 'post' },
@@ -126,7 +167,8 @@ export const SeasonPicker = defineComponent({
       return picker.value;
     };
     const exposed: SeasonPickerExposed = {
-      holdSameSeat: (labels, operationId) => current().holdSameSeat(labels, operationId),
+      holdSameSeat: (labels, operationId, priceTypes) => current().holdSameSeat(labels, operationId, priceTypes),
+      holdBestAvailable: (qty, operationId, options) => current().holdBestAvailable(qty, operationId, options),
       restoreOperation: (operationId) => current().restoreOperation(operationId),
       release: (releaseActionId) => current().release(releaseActionId),
       createRenewalIntent: (offerId) => current().createRenewalIntent(offerId),

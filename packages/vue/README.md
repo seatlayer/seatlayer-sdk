@@ -135,6 +135,21 @@ apply the package price, tax, and payment decision before booking the
 identity-only allocation. `SeasonPicker` is supported in `@seatlayer/vue`
 `0.72.0` and newer.
 
+The component ref exposes the same calls as `@seatlayer/js`, including Season
+Best Available: `season.value.holdBestAvailable(2, 'sop_checkout_1184', {
+categoryKey: 'stalls' })` holds the best two seats free on every date.
+
+To sell child or concession seats too, pass `:price-types="['adult', 'child']"`:
+the buyer chooses a type per seat before the hold, and the handoff's `seats`
+lists each seat's `priceTypeKey`. `season.value.holdSameSeat(labels,
+operationId, { 'A-2': 'child' })` names them yourself; a label left out is adult.
+
+The picker opens on step 1, the package with its dates and prices. Pass
+`package="spl_half"` (the package's key) to open on that package instead of the
+Season's first one; a host token is already bound to one package, so it ignores
+this. If your own checkout emails a ticket for every date, pass
+`:tickets-by-email="true"` and step 1 says so.
+
 ## Props
 
 | Prop | Type | Notes |

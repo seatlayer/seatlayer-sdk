@@ -15,10 +15,13 @@ import {
 import {
   SeasonPicker as CoreSeasonPicker,
   type SeasonAvailability,
+  type SeasonBestAvailableOptions,
   type SeasonCheckoutHandoff,
   type SeasonDescriptor,
   type SeasonPickerOptions,
+  type SeasonPriceType,
   type SeasonRenewalIntent,
+  type SeasonSeatPriceTypes,
   type SeasonStatusEvent,
 } from '@seatlayer/js';
 
@@ -55,11 +58,23 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   /** Operation restored after an uncertain create response. */
   @Input() initialOperationId?: string;
 
+  /** The package to open on, by its key; the first package without it. */
+  @Input() package?: string;
+
+  /** The host emails a ticket per date itself: step 1 says so. */
+  @Input() ticketsByEmail?: boolean;
+
   /** Maximum recovery polling time. */
   @Input() recoveryTimeoutMs?: number;
 
   /** Test or host fetch implementation. */
   @Input() fetch?: typeof fetch;
+
+  /**
+   * The price types the picker sells, e.g. `['adult', 'child']`. With a type
+   * besides adult, the buyer chooses one per seat before the hold.
+   */
+  @Input() priceTypes?: readonly SeasonPriceType[];
 
   /** A same-seat hold reached a safe handoff. */
   @Output() readonly hold = new EventEmitter<SeasonCheckoutHandoff>();
@@ -94,7 +109,7 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   private static readonly REBUILD_INPUTS = new Set([
     'season', 'apiBase', 'publicKey', 'checkout', 'returnUrl',
     'buyerAccessTokenProvider', 'buyerAccessToken',
-    'initialOperationId', 'recoveryTimeoutMs', 'fetch',
+    'initialOperationId', 'package', 'ticketsByEmail', 'recoveryTimeoutMs', 'fetch', 'priceTypes',
   ]);
   private readonly zone = inject(NgZone);
   private picker: CoreSeasonPicker | null = null;
@@ -109,9 +124,26 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
     }
   }
 
-  /** Holds the same labels across every included occurrence. */
-  holdSameSeat(labels: readonly string[], operationId: string): Promise<SeasonCheckoutHandoff> {
-    return this.current().holdSameSeat(labels, operationId);
+  /**
+   * Holds the same labels across every included occurrence. `priceTypes` names
+   * each seat's price type by label (`{ 'A-2': 'child' }`); a label it leaves
+   * out is adult.
+   */
+  holdSameSeat(
+    labels: readonly string[], operationId: string, priceTypes?: SeasonSeatPriceTypes,
+  ): Promise<SeasonCheckoutHandoff> {
+    return this.current().holdSameSeat(labels, operationId, priceTypes);
+  }
+
+  /**
+   * Holds the best `qty` seats free on every included performance, as a map
+   * selection would. Same contract as `@seatlayer/js` `holdBestAvailable`: a
+   * caller-stable `sop_` id, 1 to `maxSelection` seats, one call at a time.
+   */
+  holdBestAvailable(
+    qty: number, operationId: string, options?: SeasonBestAvailableOptions,
+  ): Promise<SeasonCheckoutHandoff> {
+    return this.current().holdBestAvailable(qty, operationId, options);
   }
 
   /** Restores a caller-stable Season operation after uncertainty. */
@@ -157,8 +189,11 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
         buyerAccessTokenProvider: this.buyerAccessTokenProvider,
         buyerAccessToken: this.buyerAccessToken,
         initialOperationId: this.initialOperationId,
+        package: this.package,
+        ticketsByEmail: this.ticketsByEmail,
         recoveryTimeoutMs: this.recoveryTimeoutMs,
         fetch: this.fetch,
+        priceTypes: this.priceTypes,
         onHold: (value) => this.zone.run(() => this.hold.emit(value)),
         onHoldChange: (value) => this.zone.run(() => this.holdChange.emit(value)),
         onContinue: (value) => this.zone.run(() => this.continued.emit(value)),
