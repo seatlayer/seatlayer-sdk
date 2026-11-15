@@ -25,6 +25,7 @@ vi.mock('@seatlayer/js', () => ({
     getDescriptor() { return { key: 'sea_1' }; }
     getAvailability() { return { freeCount: 4 }; }
     getHandoff() { return { operationId: 'sop_1' }; }
+    getHeldOrder() { return { operationId: 'sop_1', expiresAt: 1, currency: 'USD', seats: [], totalMinor: 0 }; }
   },
 }));
 
@@ -75,6 +76,7 @@ describe('@seatlayer/vue SeasonPicker', () => {
       .toEqual([[2, 'sop_2', bestAvailable], [1, 'sop_3', undefined]]);
     await expect(exposed.value!.markBooked()).resolves.toBe(true);
     expect(exposed.value?.getAvailability()).toEqual({ freeCount: 4 });
+    expect(exposed.value?.getHeldOrder()).toEqual({ operationId: 'sop_1', expiresAt: 1, currency: 'USD', seats: [], totalMinor: 0 });
 
     seasonKey.value = 'sea_2';
     await nextTick();

@@ -18,6 +18,7 @@ import {
   type SeasonBestAvailableOptions,
   type SeasonCheckoutHandoff,
   type SeasonDescriptor,
+  type SeasonHeldOrder,
   type SeasonPickerOptions,
   type SeasonPriceType,
   type SeasonRenewalIntent,
@@ -183,6 +184,15 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   /** Current opaque checkout handoff. */
   getHandoff(): SeasonCheckoutHandoff | null {
     return this.picker?.getHandoff() ?? null;
+  }
+
+  /**
+   * The held Season order for your own order summary: each held seat with its
+   * price type and package price, and the total. Null with no live hold.
+   * Display only: checkout prices the order on the server.
+   */
+  getHeldOrder(): SeasonHeldOrder | null {
+    return this.picker?.getHeldOrder() ?? null;
   }
 
   private build(): void {

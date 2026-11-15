@@ -155,6 +155,11 @@ payment card for a signed-in member; the buyer can still change them. On your
 own checkout, call `season.value.markBooked()` once your server has booked the
 hold: the picker shows the booked screen instead of offering checkout again.
 
+Since 0.111.0, `season.value.getHeldOrder()` gives the held order for your own summary: each held
+seat with its price type and package price, the currency and the total in
+minor units (null with no live hold). It is for display; checkout prices the
+order on the server.
+
 ## Props
 
 | Prop | Type | Notes |
