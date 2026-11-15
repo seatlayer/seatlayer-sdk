@@ -63,4 +63,45 @@ describe('SeatingChart prop forwarding', () => {
       initialView: 'isometric', errorDisplay: 'message', selectionValidators: nextValidators,
     });
   });
+
+  it('forwards the three 3D options, and remounts when one changes', async () => {
+    const { SeatingChart } = await import('../src/SeatingChart');
+    const three = { enable3D: false, enable3DCrowd: false, touchNavigation3D: 'classic' as const };
+    await act(async () => {
+      root.render(createElement(SeatingChart, { event: 'ev_1', ...three }));
+    });
+    expect(constructed).toHaveLength(1);
+    expect(constructed[0]).toMatchObject(three);
+
+    // Same values again: no rebuild.
+    await act(async () => {
+      root.render(createElement(SeatingChart, { event: 'ev_1', ...three }));
+    });
+    expect(constructed).toHaveLength(1);
+
+    for (const [prop, value] of [
+      ['enable3D', true], ['enable3DCrowd', true], ['touchNavigation3D', 'map'],
+    ] as const) {
+      const before = constructed.length;
+      await act(async () => {
+        root.render(createElement(SeatingChart, { event: 'ev_1', ...three, [prop]: value }));
+      });
+      expect(constructed, `${prop} did not rebuild`).toHaveLength(before + 1);
+      expect(constructed.at(-1)).toMatchObject({ [prop]: value });
+      // Back to the base values for the next prop.
+      await act(async () => {
+        root.render(createElement(SeatingChart, { event: 'ev_1', ...three }));
+      });
+    }
+  });
+
+  it('sends the three 3D options as undefined when the host sets none', async () => {
+    const { SeatingChart } = await import('../src/SeatingChart');
+    await act(async () => {
+      root.render(createElement(SeatingChart, { event: 'ev_1' }));
+    });
+    expect(constructed[0]?.enable3D).toBeUndefined();
+    expect(constructed[0]?.enable3DCrowd).toBeUndefined();
+    expect(constructed[0]?.touchNavigation3D).toBeUndefined();
+  });
 });

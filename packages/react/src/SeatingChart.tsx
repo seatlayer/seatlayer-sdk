@@ -33,7 +33,7 @@ export interface SeatingChartProps extends Omit<SeatingChartOptions, 'container'
  * freely between renders without re-mounting the canvas — only the props in
  * `SEATING_CHART_IDENTITY_PROPS` (`event`, `apiBase`, `maxSelection`, `numberOfPlacesToSelect`, `selectionValidators`,
  * `publicKey`, `locale`, `currency`, `colorblindSafe`, `initialView`,
- * `errorDisplay`) trigger a rebuild.
+ * `errorDisplay`, `enable3D`, `enable3DCrowd`, `touchNavigation3D`) trigger a rebuild.
  * (`messages`, `selectedObjects`, and `selectableObjects` are read once per
  * mount; change selection policy later through the imperative handle.)
  */
@@ -42,7 +42,7 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
     const {
       className, style, event, apiBase, maxSelection, selectedObjects, selectableObjects,
       numberOfPlacesToSelect, selectionValidators, publicKey, locale, currency,
-      colorblindSafe, initialView, errorDisplay,
+      colorblindSafe, initialView, errorDisplay, enable3D, enable3DCrowd, touchNavigation3D,
     } = props;
 
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -72,6 +72,9 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
           colorblindSafe,
           initialView,
           errorDisplay,
+          enable3D,
+          enable3DCrowd,
+          touchNavigation3D,
           messages: callbacks.current.messages,
           seatTooltip: props.seatTooltip,
           // Read through the ref so a host may pass the provider as an inline
@@ -112,7 +115,7 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
       // array is SEATING_CHART_IDENTITY_PROPS, spelled out because React's
       // linter (and its compiler) must see the literal list.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [event, apiBase, maxSelection, numberOfPlacesToSelect, selectionValidators, publicKey, locale, currency, colorblindSafe, initialView, errorDisplay]);
+    }, [event, apiBase, maxSelection, numberOfPlacesToSelect, selectionValidators, publicKey, locale, currency, colorblindSafe, initialView, errorDisplay, enable3D, enable3DCrowd, touchNavigation3D]);
 
     useImperativeHandle(ref, () => bindSeatingChartHandle(() => chartRef.current), []);
 
@@ -134,6 +137,7 @@ type MissingIdentityDeps = Exclude<
   | 'event' | 'apiBase' | 'maxSelection' | 'numberOfPlacesToSelect' | 'selectionValidators'
   | 'publicKey' | 'locale'
   | 'currency' | 'colorblindSafe' | 'initialView' | 'errorDisplay'
+  | 'enable3D' | 'enable3DCrowd' | 'touchNavigation3D'
 >;
 type Assert<T extends true> = T;
 type _IdentityDepsAreComplete = Assert<[MissingIdentityDeps] extends [never] ? true : false>;

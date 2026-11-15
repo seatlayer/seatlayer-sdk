@@ -130,4 +130,44 @@ describe('@seatlayer/vue SeasonPicker', () => {
     await nextTick();
     expect(constructed[0]).toMatchObject({ buyerEmail: 'member@example.com', buyerName: 'Asha Rao' });
   });
+
+  it('forwards the three 3D options, and rebuilds when one changes', async () => {
+    const enable3D = ref(false);
+    const enable3DCrowd = ref(false);
+    const touchNavigation3D = ref<'map' | 'classic'>('classic');
+    app = createApp(defineComponent({
+      setup: () => () => h(SeasonPicker, {
+        season: 'sea_1',
+        enable3D: enable3D.value,
+        enable3DCrowd: enable3DCrowd.value,
+        touchNavigation3D: touchNavigation3D.value,
+      }),
+    }));
+    app.mount(host);
+    await nextTick();
+    expect(constructed[0]).toMatchObject({
+      enable3D: false, enable3DCrowd: false, touchNavigation3D: 'classic',
+    });
+    enable3D.value = true;
+    await nextTick();
+    expect(constructed).toHaveLength(2);
+    expect(constructed[1]).toMatchObject({ enable3D: true });
+    enable3DCrowd.value = true;
+    await nextTick();
+    expect(constructed).toHaveLength(3);
+    expect(constructed[2]).toMatchObject({ enable3DCrowd: true });
+    touchNavigation3D.value = 'map';
+    await nextTick();
+    expect(constructed).toHaveLength(4);
+    expect(constructed[3]).toMatchObject({ touchNavigation3D: 'map' });
+  });
+
+  it('sends the three 3D options as undefined when the host sets none', async () => {
+    app = createApp(defineComponent({ setup: () => () => h(SeasonPicker, { season: 'sea_1' }) }));
+    app.mount(host);
+    await nextTick();
+    expect(constructed[0]?.enable3D).toBeUndefined();
+    expect(constructed[0]?.enable3DCrowd).toBeUndefined();
+    expect(constructed[0]?.touchNavigation3D).toBeUndefined();
+  });
 });

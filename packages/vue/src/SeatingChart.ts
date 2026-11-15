@@ -47,7 +47,8 @@ export type SeatingChartExposed = SeatingChartHandle;
  * The canvas is created once and torn down on unmount. Only the props that
  * change the chart's identity (`SEATING_CHART_IDENTITY_PROPS`: `event`,
  * `apiBase`, `maxSelection`, `numberOfPlacesToSelect`, `publicKey`, `locale`, `currency`,
- * `colorblindSafe`, `initialView`, `errorDisplay`) trigger a rebuild;
+ * `colorblindSafe`, `initialView`, `errorDisplay`, `enable3D`, `enable3DCrowd`,
+ * `touchNavigation3D`) trigger a rebuild;
  * everything else is read live, so a parent re-render never destroys the canvas
  * mid-selection.
  *
@@ -115,6 +116,15 @@ export const SeatingChart = defineComponent({
      */
     errorDisplay: {
       type: String as PropType<'message' | 'none'>,
+      default: undefined,
+    },
+    /** Offer the 3D venue view (default true). Changing it rebuilds. */
+    enable3D: { type: Boolean, default: undefined },
+    /** The standing crowd in 3D, drawn by default; false turns it off. Changing it rebuilds. */
+    enable3DCrowd: { type: Boolean, default: undefined },
+    /** How fingers move the 3D view: `'map'` (default) or `'classic'`. Changing it rebuilds. */
+    touchNavigation3D: {
+      type: String as PropType<'map' | 'classic'>,
       default: undefined,
     },
     /** Copy overrides, read once per mount. */
@@ -235,6 +245,9 @@ export const SeatingChart = defineComponent({
           colorblindSafe: props.colorblindSafe,
           initialView: props.initialView,
           errorDisplay: props.errorDisplay,
+          enable3D: props.enable3D,
+          enable3DCrowd: props.enable3DCrowd,
+          touchNavigation3D: props.touchNavigation3D,
           messages: props.messages,
           seatTooltip: props.seatTooltip,
           buyerAccessTokenProvider: props.buyerAccessTokenProvider,

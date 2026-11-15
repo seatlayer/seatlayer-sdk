@@ -42,7 +42,8 @@ import {
  * The canvas is created once and torn down on destroy. Only the inputs that
  * change the chart's identity (`SEATING_CHART_IDENTITY_PROPS`: `event`,
  * `apiBase`, `maxSelection`, `numberOfPlacesToSelect`, `publicKey`, `locale`, `currency`,
- * `colorblindSafe`, `initialView`, `errorDisplay`) trigger a rebuild, so an
+ * `colorblindSafe`, `initialView`, `errorDisplay`, `enable3D`, `enable3DCrowd`,
+ * `touchNavigation3D`) trigger a rebuild, so an
  * unrelated change-detection pass never destroys the canvas mid-selection.
  *
  * @example
@@ -111,6 +112,15 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
    * render their own failure UI from `errored`.
    */
   @Input() errorDisplay?: 'message' | 'none';
+
+  /** Offer the 3D venue view (default true). Changing it rebuilds. */
+  @Input() enable3D?: boolean;
+
+  /** The standing crowd in 3D, drawn by default; false turns it off. Changing it rebuilds. */
+  @Input() enable3DCrowd?: boolean;
+
+  /** How fingers move the 3D view: `'map'` (default) or `'classic'`. Changing it rebuilds. */
+  @Input() touchNavigation3D?: 'map' | 'classic';
 
   /** Show the built-in seat tooltip. Set false to draw your own from `seatHover`. */
   @Input() seatTooltip?: boolean;
@@ -370,6 +380,9 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
           colorblindSafe: this.colorblindSafe,
           initialView: this.initialView,
           errorDisplay: this.errorDisplay,
+          enable3D: this.enable3D,
+          enable3DCrowd: this.enable3DCrowd,
+          touchNavigation3D: this.touchNavigation3D,
           messages: this.messages,
           seatTooltip: this.seatTooltip,
           buyerAccessTokenProvider: this.buyerAccessTokenProvider,

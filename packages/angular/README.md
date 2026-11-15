@@ -52,6 +52,24 @@ npm install @seatlayer/angular
 
 The component is **standalone**: import it directly, no NgModule needed.
 
+## Upgrading to 0.112.0
+
+Nothing needs a code change, and nothing changes for a page that already works.
+
+- **`SeatingChart` and the Season picker take `enable3D`, `enable3DCrowd` and
+  `touchNavigation3D` as inputs.** Before 0.112.0 they had no such inputs.
+  `[enable3D]="false"` hides the 3D view, `[enable3DCrowd]="false"` leaves
+  standing areas an empty floor in 3D, and `touchNavigation3D="classic"` keeps
+  the earlier touch gestures. Unset, `true` and `'map'` are the defaults.
+- **Changing one of the three after the first render rebuilds the picker.** A
+  page that drives `enable3D` from state, for example from the screen width,
+  remounts the chart each time the value changes, as a change of `event` or
+  `locale` does. Set it once where you can.
+- **One version of the SDK.** `@seatlayer/js` and `@seatlayer/core` are
+  dependencies of this package, pinned to the same version. If your app also
+  installs `@seatlayer/js` itself, move it to 0.112.0 as well; an older direct
+  install leaves two copies of the SDK in your bundle.
+
 ## Quick start
 
 ```ts
@@ -151,6 +169,9 @@ the buyer chooses a type per seat before the hold, and the handoff's `seats`
 lists each seat's `priceTypeKey`. `seasonPicker.holdSameSeat(labels,
 operationId, { 'A-2': 'child' })` names them yourself; a label left out is adult.
 
+The Season picker takes the same three 3D props as the seating chart:
+`enable3D`, `enable3DCrowd` and `touchNavigation3D`. Changing one rebuilds it.
+
 The picker opens on step 1, the package with its dates and prices. Bind
 `package="spl_half"` (the package's key) to open on that package instead of the
 Season's first one; a host token is already bound to one package, so it ignores
@@ -182,6 +203,9 @@ order on the server.
 | `locale` | `string` | BCP-47 locale for built-in copy. |
 | `currency` | `string` | ISO currency for price formatting. |
 | `colorblindSafe` | `boolean` | Render colorblind-safe seat glyphs. |
+| `enable3D` | `boolean` | Offer the 3D venue view. On by default; `false` hides it. |
+| `enable3DCrowd` | `boolean` | The standing crowd in 3D. Drawn by default; `false` turns it off. |
+| `touchNavigation3D` | `'map' \| 'classic'` | How fingers move the 3D view. `'map'` by default; `'classic'` keeps the older gestures. |
 | `seatTooltip` | `boolean` | Set `false` to draw your own popover from `(seatHover)`. |
 | `messages` | `object` | Copy overrides. Read once per rebuild. |
 | `initialView` | `RendererViewMode` | Initial 2D projection, read once per rebuild. |

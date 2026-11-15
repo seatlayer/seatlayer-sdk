@@ -69,6 +69,12 @@ export interface SeatPickerHandle {
   resumeHold(holdId: string): Promise<HoldResult | null>;
   /** Remove one held ticket while preserving the remainder. */
   removeHeldTicket(label: string): Promise<boolean>;
+  /**
+   * Your page booked the held seats itself: the picker shows its booked state
+   * and stops offering checkout. Resolves false when nothing (or another hold)
+   * is held. Same contract as `@seatlayer/js` `markBooked`.
+   */
+  markBooked(holdId?: string): Promise<boolean>;
   /** Release the current hold (if any) and reset the tray. */
   release(): Promise<void>;
   /** Hold the picked seats as the checkout button does, without its handoff (for `checkoutBar: false`). */
@@ -203,6 +209,7 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         getCurrentHold: () => pickerRef.current?.getCurrentHold() ?? null,
         resumeHold: (holdId) => pickerRef.current?.resumeHold(holdId) ?? Promise.resolve(null),
         removeHeldTicket: (label) => pickerRef.current?.removeHeldTicket(label) ?? Promise.resolve(false),
+        markBooked: (holdId) => pickerRef.current?.markBooked(holdId) ?? Promise.resolve(false),
         release: () => pickerRef.current?.release() ?? Promise.resolve(),
         holdSelection: () => pickerRef.current?.holdSelection()
           ?? Promise.resolve({ ok: false, reason: 'nothing_selected', message: '' }),

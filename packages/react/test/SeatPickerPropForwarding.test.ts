@@ -47,6 +47,10 @@ vi.mock('@seatlayer/js', () => ({
       imperativeCalls.push({ method: 'refreshAccess', args: [] });
       return Promise.resolve(true);
     }
+    markBooked(...args: unknown[]) {
+      imperativeCalls.push({ method: 'markBooked', args });
+      return Promise.resolve(true);
+    }
     setMapTheme(...args: unknown[]) { imperativeCalls.push({ method: 'setMapTheme', args }); }
     setEventDetailsHidden(...args: unknown[]) {
       imperativeCalls.push({ method: 'setEventDetailsHidden', args });
@@ -227,6 +231,7 @@ describe('SeatPicker prop forwarding', () => {
       handle.bestAvailable(3, 'vip', { preferPremium: true, zoneId: 'floor' }),
     ).resolves.toMatchObject({ holdId: 'hold-1' });
     await expect(handle.refreshAccess()).resolves.toBe(true);
+    await expect(handle.markBooked('hold-2')).resolves.toBe(true);
     handle.close();
     // A host normally follows logical close by removing/changing the component.
     // Cleanup must not destroy the already-closed core instance a second time.
@@ -246,6 +251,7 @@ describe('SeatPicker prop forwarding', () => {
       { method: 'setBuyerView', args: ['venue3d', { flyToSeatId: 'seat-12', resetView: true }] },
       { method: 'bestAvailable', args: [3, 'vip', { preferPremium: true, zoneId: 'floor' }] },
       { method: 'refreshAccess', args: [] },
+      { method: 'markBooked', args: ['hold-2'] },
       { method: 'close', args: [] },
     ]);
   });

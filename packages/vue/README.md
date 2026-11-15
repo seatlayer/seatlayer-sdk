@@ -48,6 +48,32 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 0.112.0
+
+Nothing needs a code change. Three things to know:
+
+- **`SeatingChart` and `SeasonPicker` now honour `enable3D`, `enable3DCrowd`
+  and `touchNavigation3D`.** Before 0.112.0 they were not props, so a value
+  you passed did nothing. If your page already passes one, it takes effect when
+  you upgrade: `false` for `enable3D` hides the 3D view, `false` for
+  `enable3DCrowd` leaves standing areas an empty floor in 3D, and `'classic'`
+  for `touchNavigation3D` keeps the earlier touch gestures. Unset, `true` and
+  `'map'` change nothing.
+- **Bind them with a colon, in camelCase:** `:enable3D="false"`,
+  `:enable3DCrowd="false"`, `touchNavigation3D="classic"`. Without the colon,
+  `enable3D="false"` passes the string `"false"`: Vue warns and the value counts
+  as true, so 3D stays on. In an in-DOM template the kebab form is
+  `:enable3-d`, `:enable3-d-crowd` and `touch-navigation3-d`; `enable-3d` is
+  not the prop and does nothing.
+- **Changing one of the three after mount rebuilds the picker.** A page that
+  drives `enable3D` from state, for example from the screen width, now remounts
+  the chart each time the value changes, as a change of `event` or `locale`
+  does. Set it once where you can.
+- **One version of the SDK.** `@seatlayer/js` and `@seatlayer/core` are
+  dependencies of this package, pinned to the same version. If your app also
+  installs `@seatlayer/js` itself, move it to 0.112.0 as well; an older direct
+  install leaves two copies of the SDK in your bundle.
+
 ## Quick start
 
 ```vue
@@ -144,6 +170,9 @@ the buyer chooses a type per seat before the hold, and the handoff's `seats`
 lists each seat's `priceTypeKey`. `season.value.holdSameSeat(labels,
 operationId, { 'A-2': 'child' })` names them yourself; a label left out is adult.
 
+The Season picker takes the same three 3D props as the seating chart:
+`enable3D`, `enable3DCrowd` and `touchNavigation3D`. Changing one rebuilds it.
+
 The picker opens on step 1, the package with its dates and prices. Pass
 `package="spl_half"` (the package's key) to open on that package instead of the
 Season's first one; a host token is already bound to one package, so it ignores
@@ -175,6 +204,9 @@ order on the server.
 | `locale` | `string` | BCP-47 locale for built-in copy. |
 | `currency` | `string` | ISO currency for price formatting. |
 | `colorblindSafe` | `boolean` | Render colorblind-safe seat glyphs. |
+| `enable3D` | `boolean` | Offer the 3D venue view. On by default; `false` hides it. |
+| `enable3DCrowd` | `boolean` | The standing crowd in 3D. Drawn by default; `false` turns it off. |
+| `touchNavigation3D` | `'map' \| 'classic'` | How fingers move the 3D view. `'map'` by default; `'classic'` keeps the older gestures. |
 | `seatTooltip` | `boolean` | Set `false` to draw your own popover from `@seat-hover`. |
 | `messages` | `object` | Copy overrides. Read once per rebuild. |
 | `initialView` | `RendererViewMode` | Initial 2D projection, read once per rebuild. |
