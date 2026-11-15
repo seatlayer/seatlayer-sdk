@@ -48,6 +48,32 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 0.112.0
+
+Nothing needs a code change. Three things to know:
+
+- **`SeatingChart` and `SeasonPicker` now honour `enable3D`, `enable3DCrowd`
+  and `touchNavigation3D`.** Before 0.112.0 they were not props, so a value
+  you passed did nothing. If your page already passes one, it takes effect when
+  you upgrade: `false` for `enable3D` hides the 3D view, `false` for
+  `enable3DCrowd` leaves standing areas an empty floor in 3D, and `'classic'`
+  for `touchNavigation3D` keeps the earlier touch gestures. Unset, `true` and
+  `'map'` change nothing.
+- **Bind them with a colon, in camelCase:** `:enable3D="false"`,
+  `:enable3DCrowd="false"`, `touchNavigation3D="classic"`. Without the colon,
+  `enable3D="false"` passes the string `"false"`: Vue warns and the value counts
+  as true, so 3D stays on. In an in-DOM template the kebab form is
+  `:enable3-d`, `:enable3-d-crowd` and `touch-navigation3-d`; `enable-3d` is
+  not the prop and does nothing.
+- **Changing one of the three after mount rebuilds the picker.** A page that
+  drives `enable3D` from state, for example from the screen width, now remounts
+  the chart each time the value changes, as a change of `event` or `locale`
+  does. Set it once where you can.
+- **One version of the SDK.** `@seatlayer/js` and `@seatlayer/core` are
+  dependencies of this package, pinned to the same version. If your app also
+  installs `@seatlayer/js` itself, move it to 0.112.0 as well; an older direct
+  install leaves two copies of the SDK in your bundle.
+
 ## Quick start
 
 ```vue

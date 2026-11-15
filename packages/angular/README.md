@@ -52,6 +52,24 @@ npm install @seatlayer/angular
 
 The component is **standalone**: import it directly, no NgModule needed.
 
+## Upgrading to 0.112.0
+
+Nothing needs a code change, and nothing changes for a page that already works.
+
+- **`SeatingChart` and the Season picker take `enable3D`, `enable3DCrowd` and
+  `touchNavigation3D` as inputs.** Before 0.112.0 they had no such inputs.
+  `[enable3D]="false"` hides the 3D view, `[enable3DCrowd]="false"` leaves
+  standing areas an empty floor in 3D, and `touchNavigation3D="classic"` keeps
+  the earlier touch gestures. Unset, `true` and `'map'` are the defaults.
+- **Changing one of the three after the first render rebuilds the picker.** A
+  page that drives `enable3D` from state, for example from the screen width,
+  remounts the chart each time the value changes, as a change of `event` or
+  `locale` does. Set it once where you can.
+- **One version of the SDK.** `@seatlayer/js` and `@seatlayer/core` are
+  dependencies of this package, pinned to the same version. If your app also
+  installs `@seatlayer/js` itself, move it to 0.112.0 as well; an older direct
+  install leaves two copies of the SDK in your bundle.
+
 ## Quick start
 
 ```ts

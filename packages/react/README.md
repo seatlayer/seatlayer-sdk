@@ -53,6 +53,30 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 0.112.0
+
+Nothing needs a code change. Three things to know:
+
+- **`SeatingChart` now honours `enable3D`, `enable3DCrowd` and
+  `touchNavigation3D`.** Before 0.112.0 it ignored them. If your page already
+  passes one, it takes effect when you upgrade: `enable3D={false}` hides the 3D
+  view, `enable3DCrowd={false}` leaves standing areas an empty floor in 3D, and
+  `touchNavigation3D="classic"` keeps the earlier touch gestures. Unset, `true`
+  and `"map"` change nothing. `SeatPicker` and `SeasonPicker` already honoured
+  all three.
+- **Changing one of the three after mount rebuilds the chart.** A page that
+  drives `enable3D` from state, for example from the screen width, now remounts
+  the chart each time the value changes, as a change of `event` or `locale`
+  does. Set it once where you can.
+- **Types.** `SeatPickerHandle` gains a required `markBooked`, and
+  `SeatManagerHandle` gains required `setMarkedObjects`, `setClosedObjects` and
+  `setChannelSeats`. Code that builds its own object of these types, such as a
+  test double, must add them. Use through a ref is unaffected.
+- **One version of the SDK.** `@seatlayer/js` and `@seatlayer/core` are
+  dependencies of this package, pinned to the same version. If your app also
+  installs `@seatlayer/js` itself, move it to 0.112.0 as well; an older direct
+  install leaves two copies of the SDK in your bundle.
+
 ## Quick start
 
 ```tsx
@@ -172,13 +196,19 @@ The full-experience `SeatPicker` exposes the canonical safe widget controls thro
 | `setSelectableObjects()`, `setMaxSelection()`, `getSelectionValidity()` | Update selection policy and inspect exact-count validity. |
 | `bestAvailable(qty, categoryKey?, options?)` | Pick and hold server-authoritative seats; options support `preferPremium` and `zoneId`. |
 | `getCurrentHold()`, `resumeHold()`, `removeHeldTicket()`, `release()` | Inspect and manage the active hold. |
-| `markBooked(holdId?)` | Your page booked the held seats itself: the picker shows its booked state, calls `onBooked` once and unticks that hold's seats. Resolves `false`, changing nothing, for another hold id, no active hold or an unmounted picker. It never books or releases on the server. `SeatPicker` only: the `SeatingChart` wrappers (React, Vue, Angular) do not have it. |
+| `markBooked(holdId?)` | Your page booked the held seats itself: the picker shows its booked state, calls `onBooked` once and unticks that hold's seats. Resolves `false`, changing nothing, for another hold id, no active hold or an unmounted picker. It never books or releases on the server. Right after a rebuild the picker restores a live hold asynchronously: call `markBooked` after `onHoldRestored`, or call it again when it resolves `false` while you expect a hold (see the note under this table). `SeatPicker` only: the `SeatingChart` wrappers (React, Vue, Angular) do not have it. |
 | `setMapTheme()`, `setEventDetailsHidden()`, `setPricing()` | Update host-owned presentation without remounting or losing a hold. |
 | `isColorblindSafe()`, `setColorblindSafe()` | Read and update the shared buyer accessibility preference. |
 | `getViewMode()`, `setViewMode()` | Read and update the 2D map projection. |
 | `getBuyerView()`, `setBuyerView()` | Switch between the map and [interactive 3D seat views](https://seatlayer.io/3d-seat-map/), including optional camera intent. |
 | `refreshAccess()` | Re-acquire a private buyer-access session. |
 | `destroy()` | Intentionally omitted: React owns teardown through component unmount. |
+
+**`markBooked` after a rebuild.** When the picker rebuilds (a prop change that
+remounts it, or a page reload), it restores a live hold asynchronously.
+`markBooked(holdId)` called before the hold is back resolves `false`, and the
+restored hold then offers checkout again. Call it after `onHoldRestored` fires,
+or call it again when it resolves `false` while you expect a hold.
 
 ### Buyer WebMCP tools
 
