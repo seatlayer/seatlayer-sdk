@@ -19,6 +19,8 @@ export type {
   SeasonCheckoutHandoff,
   SeasonCheckoutSeat,
   SeasonDescriptor,
+  SeasonHeldOrder,
+  SeasonHeldSeat,
   SeasonOperation,
   SeasonOperationState,
   SeasonPickerOptions,

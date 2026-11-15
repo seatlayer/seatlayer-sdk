@@ -11,6 +11,7 @@ import {
   type SeasonBestAvailableOptions,
   type SeasonCheckoutHandoff,
   type SeasonDescriptor,
+  type SeasonHeldOrder,
   type SeasonPickerOptions,
   type SeasonRenewalIntent,
   type SeasonSeatPriceTypes,
@@ -22,6 +23,8 @@ export type {
   SeasonCheckoutHandoff,
   SeasonCheckoutSeat,
   SeasonDescriptor,
+  SeasonHeldOrder,
+  SeasonHeldSeat,
   SeasonOperation,
   SeasonOperationState,
   SeasonPickerOptions,
@@ -57,6 +60,12 @@ export interface SeasonPickerHandle {
   getDescriptor(): SeasonDescriptor | null;
   getAvailability(): SeasonAvailability | null;
   getHandoff(): SeasonCheckoutHandoff | null;
+  /**
+   * The held Season order for your own order summary: each held seat with its
+   * price type and package price, and the total. Null with no live hold.
+   * Display only: checkout prices the order on the server.
+   */
+  getHeldOrder(): SeasonHeldOrder | null;
 }
 
 /** Props accepted by the React Season wrapper. */
@@ -87,6 +96,8 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
       locale,
       initialView,
       enable3D,
+      enable3DCrowd,
+      touchNavigation3D,
       theme,
       priceTypes,
       // `package` is a reserved word as a variable name, not as a property.
@@ -134,7 +145,7 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
     }, [
       season, apiBase, publicKey, checkout, returnUrl,
       buyerAccessToken, initialOperationId, recoveryTimeoutMs, fetch,
-      maxSelection, numberOfPlacesToSelect, locale, initialView, enable3D, themeKey,
+      maxSelection, numberOfPlacesToSelect, locale, initialView, enable3D, enable3DCrowd, touchNavigation3D, themeKey,
       priceTypesKey, packageKey, ticketsByEmail,
     ]);
 
@@ -150,6 +161,7 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
       getDescriptor: () => pickerRef.current?.getDescriptor() ?? null,
       getAvailability: () => pickerRef.current?.getAvailability() ?? null,
       getHandoff: () => pickerRef.current?.getHandoff() ?? null,
+      getHeldOrder: () => pickerRef.current?.getHeldOrder() ?? null,
     }), []);
 
     return <div ref={containerRef} className={className} style={style} />;

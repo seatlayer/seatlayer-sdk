@@ -32,6 +32,7 @@ vi.mock('@seatlayer/js', () => ({
     getDescriptor() { return { key: 'sea_1' }; }
     getAvailability() { return { freeCount: 4 }; }
     getHandoff() { return { operationId: 'sop_1' }; }
+    getHeldOrder() { return { operationId: 'sop_1', expiresAt: 1, currency: 'USD', seats: [], totalMinor: 0 }; }
   },
 }));
 
@@ -87,6 +88,7 @@ describe('@seatlayer/react SeasonPicker', () => {
     await expect(ref.current?.createRenewalIntent('sro_1'))
       .resolves.toEqual({ offerId: 'sro_1' });
     expect(ref.current?.getDescriptor()).toEqual({ key: 'sea_1' });
+    expect(ref.current?.getHeldOrder()).toEqual({ operationId: 'sop_1', expiresAt: 1, currency: 'USD', seats: [], totalMinor: 0 });
 
     await act(async () => {
       root.render(createElement(SeasonPicker, {

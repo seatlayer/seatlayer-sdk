@@ -124,6 +124,14 @@ payment card for a signed-in member; the buyer can still change them. On your
 own checkout, call `season.current?.markBooked()` once your server has booked
 the hold: the picker shows the booked screen instead of offering checkout again.
 
+Since 0.111.0, `season.current?.getHeldOrder()` gives the held order for your
+own summary: each held seat with its price type and package price, the
+currency and the total in minor units (null with no live hold). It is for
+display; checkout prices the order on the server. In 3D, standing areas now
+show a crowd and one finger moves the view like the 2D map; pass
+`enable3DCrowd={false}` or `touchNavigation3D="classic"` to `SeatPicker` or
+`SeasonPicker` to keep the earlier look or gestures.
+
 For the complete buyer experience (map, legend, priced tray, and the checkout
 hand-off), render `SeatPicker` instead:
 

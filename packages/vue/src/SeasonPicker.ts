@@ -15,6 +15,7 @@ import {
   type SeasonBestAvailableOptions,
   type SeasonCheckoutHandoff,
   type SeasonDescriptor,
+  type SeasonHeldOrder,
   type SeasonPickerOptions,
   type SeasonPriceType,
   type SeasonRenewalIntent,
@@ -48,6 +49,12 @@ export interface SeasonPickerExposed {
   getDescriptor(): SeasonDescriptor | null;
   getAvailability(): SeasonAvailability | null;
   getHandoff(): SeasonCheckoutHandoff | null;
+  /**
+   * The held Season order for your own order summary: each held seat with its
+   * price type and package price, and the total. Null with no live hold.
+   * Display only: checkout prices the order on the server.
+   */
+  getHeldOrder(): SeasonHeldOrder | null;
 }
 
 /** Vue lifecycle adapter for the distinct fixed-inclusion Season buyer flow. */
@@ -182,6 +189,7 @@ export const SeasonPicker = defineComponent({
       getDescriptor: () => picker.value?.getDescriptor() ?? null,
       getAvailability: () => picker.value?.getAvailability() ?? null,
       getHandoff: () => picker.value?.getHandoff() ?? null,
+      getHeldOrder: () => picker.value?.getHeldOrder() ?? null,
     };
     expose(exposed);
     return () => h('div', { ref: container });

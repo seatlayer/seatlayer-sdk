@@ -31,6 +31,7 @@ vi.mock('@seatlayer/js', () => ({
     getDescriptor() { return { key: 'sea_1' }; }
     getAvailability() { return { freeCount: 4 }; }
     getHandoff() { return { operationId: 'sop_1' }; }
+    getHeldOrder() { return { operationId: 'sop_1', expiresAt: 1, currency: 'USD', seats: [], totalMinor: 0 }; }
   },
 }));
 
@@ -86,6 +87,7 @@ describe('@seatlayer/angular SeasonPicker', () => {
       .toEqual([[2, 'sop_2', bestAvailable], [1, 'sop_3', undefined]]);
     await expect(component.markBooked()).resolves.toBe(true);
     expect(component.getDescriptor()).toEqual({ key: 'sea_1' });
+    expect(component.getHeldOrder()).toEqual({ operationId: 'sop_1', expiresAt: 1, currency: 'USD', seats: [], totalMinor: 0 });
 
     component.season = 'sea_2';
     component.ngOnChanges({ season: { currentValue: 'sea_2' } });
