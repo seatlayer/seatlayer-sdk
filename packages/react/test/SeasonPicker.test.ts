@@ -143,4 +143,30 @@ describe('@seatlayer/react SeasonPicker', () => {
     })));
     expect(constructed[0]).toMatchObject({ buyerEmail: 'member@example.com', buyerName: 'Asha Rao' });
   });
+
+  it('forwards the three 3D options, and rebuilds when one changes', async () => {
+    const { SeasonPicker } = await import('../src/SeasonPicker');
+    const three = { enable3D: false, enable3DCrowd: false, touchNavigation3D: 'classic' as const };
+    await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1', ...three })));
+    expect(constructed[0]).toMatchObject(three);
+    await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1', ...three })));
+    expect(constructed).toHaveLength(1);
+    for (const [prop, value] of [
+      ['enable3D', true], ['enable3DCrowd', true], ['touchNavigation3D', 'map'],
+    ] as const) {
+      const before = constructed.length;
+      await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1', ...three, [prop]: value })));
+      expect(constructed, `${prop} did not rebuild`).toHaveLength(before + 1);
+      expect(constructed.at(-1)).toMatchObject({ [prop]: value });
+      await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1', ...three })));
+    }
+  });
+
+  it('sends none of the three 3D options when the host sets none', async () => {
+    const { SeasonPicker } = await import('../src/SeasonPicker');
+    await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1' })));
+    expect(constructed[0]?.enable3D).toBeUndefined();
+    expect(constructed[0]?.enable3DCrowd).toBeUndefined();
+    expect(constructed[0]?.touchNavigation3D).toBeUndefined();
+  });
 });

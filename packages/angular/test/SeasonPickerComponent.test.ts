@@ -128,4 +128,30 @@ describe('@seatlayer/angular SeasonPicker', () => {
     component.ngOnChanges({ season: { currentValue: 'sea_1' } });
     expect(state.constructed[0]).toMatchObject({ buyerEmail: 'member@example.com', buyerName: 'Asha Rao' });
   });
+
+  it('forwards the three 3D options, and rebuilds when one changes', async () => {
+    const value = await makeComponent();
+    Object.assign(value, { enable3D: false, enable3DCrowd: false, touchNavigation3D: 'classic' });
+    value.ngOnChanges({ season: { currentValue: 'sea_1' } });
+    expect(state.constructed[0]).toMatchObject({
+      enable3D: false, enable3DCrowd: false, touchNavigation3D: 'classic',
+    });
+    for (const [prop, next] of [
+      ['enable3D', true], ['enable3DCrowd', true], ['touchNavigation3D', 'map'],
+    ] as const) {
+      const before = state.constructed.length;
+      value[prop] = next;
+      value.ngOnChanges({ [prop]: { currentValue: next } });
+      expect(state.constructed, `${prop} did not rebuild`).toHaveLength(before + 1);
+      expect(state.constructed.at(-1)).toMatchObject({ [prop]: next });
+    }
+  });
+
+  it('sends the three 3D options as undefined when the host sets none', async () => {
+    const value = await makeComponent();
+    value.ngOnChanges({ season: { currentValue: 'sea_1' } });
+    expect(state.constructed[0]?.enable3D).toBeUndefined();
+    expect(state.constructed[0]?.enable3DCrowd).toBeUndefined();
+    expect(state.constructed[0]?.touchNavigation3D).toBeUndefined();
+  });
 });

@@ -72,6 +72,15 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   /** Maximum recovery polling time. */
   @Input() recoveryTimeoutMs?: number;
 
+  /** Offer the 3D venue view (default true). Changing it rebuilds. */
+  @Input() enable3D?: boolean;
+
+  /** The standing crowd in 3D, drawn by default; false turns it off. Changing it rebuilds. */
+  @Input() enable3DCrowd?: boolean;
+
+  /** How fingers move the 3D view: `'map'` (default) or `'classic'`. Changing it rebuilds. */
+  @Input() touchNavigation3D?: 'map' | 'classic';
+
   /** Test or host fetch implementation. */
   @Input() fetch?: typeof fetch;
 
@@ -115,6 +124,7 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
     'season', 'apiBase', 'publicKey', 'checkout', 'returnUrl',
     'buyerAccessTokenProvider', 'buyerAccessToken',
     'initialOperationId', 'package', 'ticketsByEmail', 'recoveryTimeoutMs', 'fetch', 'priceTypes',
+    'enable3D', 'enable3DCrowd', 'touchNavigation3D',
   ]);
   private readonly zone = inject(NgZone);
   private picker: CoreSeasonPicker | null = null;
@@ -213,6 +223,9 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
         package: this.package,
         ticketsByEmail: this.ticketsByEmail,
         recoveryTimeoutMs: this.recoveryTimeoutMs,
+        enable3D: this.enable3D,
+        enable3DCrowd: this.enable3DCrowd,
+        touchNavigation3D: this.touchNavigation3D,
         fetch: this.fetch,
         priceTypes: this.priceTypes,
         onHold: (value) => this.zone.run(() => this.hold.emit(value)),

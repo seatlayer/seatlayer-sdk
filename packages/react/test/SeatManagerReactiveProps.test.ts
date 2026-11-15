@@ -21,12 +21,15 @@ class MockManager {
   setSelectableObjects = vi.fn();
   setUnavailableObjectsSelectable = vi.fn();
   setUnavailableObjects = vi.fn();
+  setMarkedObjects = vi.fn();
   setCategoryPrices = vi.fn();
   setMaxSelectedObjects = vi.fn();
   setNumberOfPlacesToSelect = vi.fn();
   setObjectSelectable = vi.fn();
   setSale = vi.fn();
   setMapInsets = vi.fn();
+  setClosedObjects = vi.fn();
+  setChannelSeats = vi.fn();
   showObjects = vi.fn();
 
   constructor(options: Record<string, unknown>) {
@@ -156,6 +159,29 @@ describe('SeatManager reactive props', () => {
       root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one' }));
     });
     expect(instance.setUnavailableObjects).toHaveBeenLastCalledWith([], undefined);
+    expect(instances).toHaveLength(1);
+    expect(instance.destroy).not.toHaveBeenCalled();
+  });
+
+  it('passes marked seats at mount and moves the rings in place, without remounting', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    const first = ['A-1'];
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one', markedObjects: first }));
+    });
+    const instance = instances[0]!;
+    expect(instance.options.markedObjects).toBe(first);
+
+    instance.setMarkedObjects.mockClear();
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one', markedObjects: ['B-4'] }));
+    });
+    expect(instance.setMarkedObjects).toHaveBeenCalledWith(['B-4']);
+
+    await act(async () => {
+      root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse_one' }));
+    });
+    expect(instance.setMarkedObjects).toHaveBeenLastCalledWith([]);
     expect(instances).toHaveLength(1);
     expect(instance.destroy).not.toHaveBeenCalled();
   });
@@ -298,5 +324,19 @@ describe('SeatManager reactive props', () => {
       }));
     });
     expect(instances[0]!.options.tools).toEqual(['view', 'block', 'categories']);
+  });
+
+  it('hands the Closed seats and the channel words to the cockpit through the handle (CR26)', async () => {
+    const { SeatManager } = await import('../src/SeatManager');
+    const { createRef } = await import('react');
+    const ref = createRef<import('../src/SeatManager').SeatManagerHandle>();
+    await act(async () => {
+      root.render(createElement(SeatManager, { ref, eventKey: 'ev_1', token: 'mse_one' }));
+    });
+    ref.current!.setClosedObjects(['H-1', 'H-2']);
+    const words = { label: 'With North Hall Tickets', count: 2, names: { 'A-1': 'North Hall Tickets' } };
+    ref.current!.setChannelSeats(words);
+    expect(instances[0]!.setClosedObjects).toHaveBeenCalledWith(['H-1', 'H-2']);
+    expect(instances[0]!.setChannelSeats).toHaveBeenCalledWith(words);
   });
 });

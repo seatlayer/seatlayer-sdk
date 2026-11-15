@@ -181,4 +181,50 @@ describe('SeatingChart prop forwarding', () => {
     // The old canvas is torn down rather than leaked.
     expect(destroyCalls).toHaveLength(1);
   });
+
+  it('forwards the three 3D options, and rebuilds when one changes', async () => {
+    const enable3D = ref(false);
+    const enable3DCrowd = ref(false);
+    const touchNavigation3D = ref<'map' | 'classic'>('classic');
+    app = createApp(defineComponent({
+      setup: () => () => h(SeatingChart, {
+        event: 'summer-gala',
+        enable3D: enable3D.value,
+        enable3DCrowd: enable3DCrowd.value,
+        touchNavigation3D: touchNavigation3D.value,
+      }),
+    }));
+    app.mount(host);
+    await nextTick();
+    expect(constructorCalls).toHaveLength(1);
+    expect(constructorCalls[0]).toMatchObject({
+      enable3D: false, enable3DCrowd: false, touchNavigation3D: 'classic',
+    });
+
+    enable3D.value = true;
+    await nextTick();
+    expect(constructorCalls).toHaveLength(2);
+    expect(constructorCalls[1]).toMatchObject({ enable3D: true });
+
+    enable3DCrowd.value = true;
+    await nextTick();
+    expect(constructorCalls).toHaveLength(3);
+    expect(constructorCalls[2]).toMatchObject({ enable3DCrowd: true });
+
+    touchNavigation3D.value = 'map';
+    await nextTick();
+    expect(constructorCalls).toHaveLength(4);
+    expect(constructorCalls[3]).toMatchObject({ touchNavigation3D: 'map' });
+    expect(destroyCalls).toHaveLength(3);
+  });
+
+  it('sends the three 3D options as undefined when the host sets none', async () => {
+    mount({ event: 'summer-gala' });
+    await nextTick();
+    // Vue casts an absent Boolean prop to false unless it has a default; these
+    // must stay undefined so the SDK's own defaults apply.
+    expect(constructorCalls[0]?.enable3D).toBeUndefined();
+    expect(constructorCalls[0]?.enable3DCrowd).toBeUndefined();
+    expect(constructorCalls[0]?.touchNavigation3D).toBeUndefined();
+  });
 });

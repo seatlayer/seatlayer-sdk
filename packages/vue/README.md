@@ -144,6 +144,9 @@ the buyer chooses a type per seat before the hold, and the handoff's `seats`
 lists each seat's `priceTypeKey`. `season.value.holdSameSeat(labels,
 operationId, { 'A-2': 'child' })` names them yourself; a label left out is adult.
 
+The Season picker takes the same three 3D props as the seating chart:
+`enable3D`, `enable3DCrowd` and `touchNavigation3D`. Changing one rebuilds it.
+
 The picker opens on step 1, the package with its dates and prices. Pass
 `package="spl_half"` (the package's key) to open on that package instead of the
 Season's first one; a host token is already bound to one package, so it ignores
@@ -175,6 +178,9 @@ order on the server.
 | `locale` | `string` | BCP-47 locale for built-in copy. |
 | `currency` | `string` | ISO currency for price formatting. |
 | `colorblindSafe` | `boolean` | Render colorblind-safe seat glyphs. |
+| `enable3D` | `boolean` | Offer the 3D venue view. On by default; `false` hides it. |
+| `enable3DCrowd` | `boolean` | The standing crowd in 3D. Drawn by default; `false` turns it off. |
+| `touchNavigation3D` | `'map' \| 'classic'` | How fingers move the 3D view. `'map'` by default; `'classic'` keeps the older gestures. |
 | `seatTooltip` | `boolean` | Set `false` to draw your own popover from `@seat-hover`. |
 | `messages` | `object` | Copy overrides. Read once per rebuild. |
 | `initialView` | `RendererViewMode` | Initial 2D projection, read once per rebuild. |

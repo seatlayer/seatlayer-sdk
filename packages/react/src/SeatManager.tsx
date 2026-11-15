@@ -78,6 +78,8 @@ export interface SeatManagerHandle {
   setUnavailableObjectsSelectable(enabled: boolean): void;
   /** Replace the labels shown as unavailable (and their hover word) without remounting. */
   setUnavailableObjects(labels: readonly string[], reason?: string): void;
+  /** Replace the labels ringed in ink (paint only) without remounting. */
+  setMarkedObjects(labels: readonly string[]): void;
   /** Replace the prices the map's hover shows: a map overrides, null hides, undefined uses the chart's. */
   setCategoryPrices(prices: Record<string, SeatManagerCategoryPrice> | null | undefined): void;
   setObjectSelectable(predicate: SeatManagerOptions['isObjectSelectable']): void;
@@ -106,6 +108,10 @@ export interface SeatManagerHandle {
   zoomToFit(): void;
   /** Light these seats and frame them, named in the legend; null clears (CR18). */
   showObjects(labels: readonly string[] | null, name?: string): void;
+  /** The Closed seats, drawn hollow with "Not for sale" on their card; [] clears (CR26). */
+  setClosedObjects(labels: readonly string[]): void;
+  /** The legend's channel line and each seat's channel name, from the event's own channels (CR26). */
+  setChannelSeats(seats: SeatManagerOptions['channelSeats']): void;
 }
 
 export interface SeatManagerProps extends Omit<SeatManagerOptions, 'container'> {
@@ -127,7 +133,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
       className, style, apiBase, eventKey, token, tokenExpiresAt,
       mode, currency, keepLiveWhileHidden, followLive, capabilities,
       selectedObjects, selectableObjects, unavailableObjectsSelectable,
-      unavailableObjects, unavailableObjectsReason, categoryPrices,
+      unavailableObjects, unavailableObjectsReason, markedObjects, categoryPrices,
       maxSelectedObjects, numberOfPlacesToSelect, isObjectSelectable, tools, chrome, kpis, timeZone,
     } = props;
 
@@ -157,6 +163,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         unavailableObjectsSelectable,
         unavailableObjects,
         unavailableObjectsReason,
+        markedObjects,
         categoryPrices,
         maxSelectedObjects,
         numberOfPlacesToSelect,
@@ -212,6 +219,8 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         onOpenOrder: callbacks.current.onOpenOrder ? (order: { id: string; displayRef: string }) => callbacks.current.onOpenOrder?.(order) : undefined,
         onActionComplete: (r: SeatManagerActionResult) => callbacks.current.onActionComplete?.(r),
         onConnectionChange: (s: SeatManagerConnection) => callbacks.current.onConnectionChange?.(s),
+        // Read once at mount: whether the panel offers Open seats at all.
+        ...(props.onOpenSeats ? { onOpenSeats: () => callbacks.current.onOpenSeats?.() } : {}),
         onRoomStateChange: (s) => callbacks.current.onRoomStateChange?.(s),
         onError: (e: unknown) => callbacks.current.onError?.(e),
       });
@@ -295,6 +304,11 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
       managerRef.current?.setUnavailableObjects(unavailableObjects ?? [], unavailableObjectsReason);
     }, [unavailableObjects, unavailableObjectsReason]);
 
+    // Rings move in place. With nothing marked the map is never touched.
+    useEffect(() => {
+      managerRef.current?.setMarkedObjects(markedObjects ?? []);
+    }, [markedObjects]);
+
     // Hover prices change in place. The renderer ignores an equal price map,
     // so a host that rebuilds the object each render costs no repaint.
     useEffect(() => {
@@ -342,6 +356,7 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         setSelectableObjects: (labels) => managerRef.current?.setSelectableObjects(labels),
         setUnavailableObjectsSelectable: (enabled) => managerRef.current?.setUnavailableObjectsSelectable(enabled),
         setUnavailableObjects: (labels, reason) => managerRef.current?.setUnavailableObjects(labels, reason),
+        setMarkedObjects: (labels) => managerRef.current?.setMarkedObjects(labels),
         setCategoryPrices: (prices) => managerRef.current?.setCategoryPrices(prices),
         setObjectSelectable: (predicate) => managerRef.current?.setObjectSelectable(predicate),
         setMaxSelectedObjects: (max) => managerRef.current?.setMaxSelectedObjects(max),
@@ -361,6 +376,8 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         setHoldTtl: (ms) => managerRef.current?.setHoldTtl(ms) ?? Promise.resolve(),
         zoomToFit: () => managerRef.current?.zoomToFit(),
         showObjects: (labels, name) => managerRef.current?.showObjects(labels, name),
+        setClosedObjects: (labels) => managerRef.current?.setClosedObjects(labels),
+        setChannelSeats: (seats) => managerRef.current?.setChannelSeats(seats),
       }),
       [],
     );

@@ -113,6 +113,9 @@ the buyer chooses a type per seat before the hold, and the handoff's `seats`
 lists each seat's `priceTypeKey`. `holdSameSeat(labels, operationId,
 { 'A-2': 'child' })` names them yourself; a label left out is adult.
 
+The Season picker takes the same three 3D props as the seating chart:
+`enable3D`, `enable3DCrowd` and `touchNavigation3D`. Changing one rebuilds it.
+
 The picker opens on step 1, the package with its dates and prices. Pass
 `package="spl_half"` (the package's key) to open on that package instead of the
 Season's first one; a host token is already bound to one package, so it ignores
@@ -169,6 +172,7 @@ The full-experience `SeatPicker` exposes the canonical safe widget controls thro
 | `setSelectableObjects()`, `setMaxSelection()`, `getSelectionValidity()` | Update selection policy and inspect exact-count validity. |
 | `bestAvailable(qty, categoryKey?, options?)` | Pick and hold server-authoritative seats; options support `preferPremium` and `zoneId`. |
 | `getCurrentHold()`, `resumeHold()`, `removeHeldTicket()`, `release()` | Inspect and manage the active hold. |
+| `markBooked(holdId?)` | Your page booked the held seats itself: the picker shows its booked state, calls `onBooked` once and unticks that hold's seats. Resolves `false`, changing nothing, for another hold id, no active hold or an unmounted picker. It never books or releases on the server. `SeatPicker` only: the `SeatingChart` wrappers (React, Vue, Angular) do not have it. |
 | `setMapTheme()`, `setEventDetailsHidden()`, `setPricing()` | Update host-owned presentation without remounting or losing a hold. |
 | `isColorblindSafe()`, `setColorblindSafe()` | Read and update the shared buyer accessibility preference. |
 | `getViewMode()`, `setViewMode()` | Read and update the 2D map projection. |
@@ -219,6 +223,9 @@ Extends the vanilla SDK options minus `container` (the component owns its own mo
 | `selectableObjects` | `string[] \| null` | Buyer-selectable allow-list. |
 | `numberOfPlacesToSelect` | `number?` | Exact count required for a valid selection. |
 | `selectionValidators` | `PickerSelectionValidator[]?` | Minimum, consecutive-seat, and no-orphan guards. |
+| `enable3D` | `boolean?` | Offer the 3D venue view. On by default; `false` hides it. |
+| `enable3DCrowd` | `boolean?` | The standing crowd in 3D. Drawn by default; `false` turns it off. |
+| `touchNavigation3D` | `'map' \| 'classic'?` | How fingers move the 3D view. `'map'` by default; `'classic'` keeps the older gestures. |
 | `onSelectionChange` | `(seats) => void` | Fires when the selection changes. |
 | `onSelectionValidityChange` | `(state) => void` | Rule state and typed `violations` after selection changes. |
 | `onHold` | `(result) => void` | Fires when seats are held; hand `holdId` to your server. |
@@ -291,6 +298,10 @@ and reports the matched sections through the React callback and ref methods.
   style={{ width: '100%', height: 'calc(100vh - 96px)' }}
 />
 ```
+
+`markedObjects={['B-12']}` rings seats in ink (paint only), for example a
+guest's current seat while you move them; a new array moves the rings in place,
+and the ref's `setMarkedObjects(labels)` does the same.
 
 Token rotation and tool changes preserve the live renderer, camera, selection,
 WebSocket, and DOM. The component responds to its own container, including

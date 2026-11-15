@@ -85,6 +85,15 @@ export const SeasonPicker = defineComponent({
     /** The host emails a ticket per date itself: step 1 says so. */
     ticketsByEmail: { type: Boolean, default: undefined },
     recoveryTimeoutMs: { type: Number, default: undefined },
+    /** Offer the 3D venue view (default true). Changing it rebuilds. */
+    enable3D: { type: Boolean, default: undefined },
+    /** The standing crowd in 3D, drawn by default; false turns it off. Changing it rebuilds. */
+    enable3DCrowd: { type: Boolean, default: undefined },
+    /** How fingers move the 3D view: `'map'` (default) or `'classic'`. Changing it rebuilds. */
+    touchNavigation3D: {
+      type: String as PropType<'map' | 'classic'>,
+      default: undefined,
+    },
     fetch: { type: Function as PropType<typeof fetch>, default: undefined },
     /**
      * The price types the picker sells, e.g. `['adult', 'child']`. With a type
@@ -137,6 +146,9 @@ export const SeasonPicker = defineComponent({
         package: props.package,
         ticketsByEmail: props.ticketsByEmail,
         recoveryTimeoutMs: props.recoveryTimeoutMs,
+        enable3D: props.enable3D,
+        enable3DCrowd: props.enable3DCrowd,
+        touchNavigation3D: props.touchNavigation3D,
         fetch: props.fetch,
         priceTypes: props.priceTypes,
         onHold: (handoff) => emit('hold', handoff),
@@ -167,6 +179,9 @@ export const SeasonPicker = defineComponent({
         props.package,
         props.ticketsByEmail,
         props.recoveryTimeoutMs,
+        props.enable3D,
+        props.enable3DCrowd,
+        props.touchNavigation3D,
         props.fetch,
         priceTypesKey.value,
       ],
