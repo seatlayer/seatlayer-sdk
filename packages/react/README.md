@@ -30,8 +30,9 @@ selects and **holds**, and your trusted server **books** the hold.
   your styles own.
 - `SeatPicker`: the complete buyer experience: map, legend, tray, pricing, and
   the checkout hand-off.
-- `SeasonPicker`: fixed-inclusion Season selection and returning-holder intent
-  with the same typed lifecycle and imperative-handle conventions.
+- `SeasonPicker`: season tickets. The buyer picks a seat once and holds it on
+  every date of the season; returning holders can say they will renew. Same
+  typed lifecycle and imperative handle as the other components.
 - `SeatManager`: the organizer control room, for dashboards that monitor and
   block live inventory.
 - `EmbeddedDesigner`: a hosted chart Designer inside your own application.
@@ -109,7 +110,7 @@ await chart.current?.releaseLabels(['A-12']);          // keep the remainder hel
 await chart.current?.release();                        // release the current hold
 ```
 
-### Fixed renewable Season
+### Season tickets: the same seat on every date
 
 ```tsx
 const season = useRef<SeasonPickerHandle>(null);

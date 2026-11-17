@@ -27,8 +27,9 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 
 - `SeatLayerSeatingChartComponent`: one standalone Angular component with the
   `seatlayer-seating-chart` selector.
-- `SeatLayerSeasonPickerComponent`: fixed-inclusion Season selection and
-  returning-holder intent with the `seatlayer-season-picker` selector.
+- `SeatLayerSeasonPickerComponent`: season tickets, with the
+  `seatlayer-season-picker` selector. The buyer picks a seat once and holds it
+  on every date of the season; returning holders can say they will renew.
 - `SeatLayerSeatManagerComponent`: the organizer control room, for dashboards
   that monitor and block live inventory, with the `seatlayer-seat-manager`
   selector. It lives on its own entry, `@seatlayer/angular/manager`, so a buyer
@@ -143,7 +144,7 @@ hold. These tools do not take payment or book seats. See the
 [buyer WebMCP seat-selection guide](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)
 for the full contract and iframe origin controls.
 
-### Fixed renewable Season
+### Season tickets: the same seat on every date
 
 ```html
 <seatlayer-season-picker

@@ -27,7 +27,8 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 
 - `SeatingChart`: one Vue 3 component wrapper (`SeatLayerSeatingChart`), written
   as a render function so no Vue compiler plugin is needed.
-- `SeasonPicker`: fixed-inclusion Season selection and returning-holder intent.
+- `SeasonPicker`: season tickets. The buyer picks a seat once and holds it on
+  every date of the season; returning holders can say they will renew.
 - `SeatManager`: the organizer control room, for dashboards that monitor and
   block live inventory. It lives on its own entry, `@seatlayer/vue/manager`, so
   a buyer app never carries it.
@@ -144,7 +145,7 @@ hold. These tools do not take payment or book seats. See the
 [buyer WebMCP seat-selection guide](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)
 for the full contract and iframe origin controls.
 
-### Fixed renewable Season
+### Season tickets: the same seat on every date
 
 ```vue
 <SeasonPicker
