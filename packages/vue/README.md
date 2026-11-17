@@ -401,8 +401,8 @@ that, which books no real inventory.
 - [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
   to connect a buyer hold id to payment and idempotent booking.
 - [Compare SeatLayer's mobile seat map SDKs](https://docs.seatlayer.io/buyer-sdk/mobile/)
-  when the same event also has to render in native iOS, Android, Flutter, or
-  React Native apps.
+  when the same event also has to appear in your iOS, Android, Flutter or React
+  Native app.
 - [Use the separate `@seatlayer/js` EmbeddedDesigner API](https://docs.seatlayer.io/platform/embedded-designer/)
   when organizers need hosted chart editing inside a Vue product.
 - [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the

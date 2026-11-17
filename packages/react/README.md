@@ -552,8 +552,8 @@ that imports it, or load it through `next/dynamic` with `ssr: false`.
 - [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
   to connect a buyer hold id to payment and idempotent booking.
 - [Compare SeatLayer's mobile seat map SDKs](https://docs.seatlayer.io/buyer-sdk/mobile/)
-  when the same event also has to render in native iOS, Android, Flutter, or
-  React Native apps.
+  when the same event also has to appear in your iOS, Android, Flutter or React
+  Native app.
 - [Read the embedded Designer guide](https://docs.seatlayer.io/platform/embedded-designer/)
   to let organizers draw their own venues inside your product.
 - [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the
