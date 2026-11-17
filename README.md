@@ -87,8 +87,8 @@ Two complete applications you can clone and run:
 - [seatlayer-nextjs-example](https://github.com/seatlayer/seatlayer-nextjs-example): the same flow on Next.js 15 App Router, with an `/api/hold` server route that shows where the trusted half of the integration belongs.
 
 Each one reads an `.env.local` with your event key and public key, copied from the
-`.env.example` in its repository. Deploy buttons are in both READMEs: Vercel and
-Netlify for the React example, Vercel for the Next.js example.
+`.env.example` in its repository. The Next.js example has a Deploy with Vercel
+button.
 
 ## Choose the buyer surface
 
