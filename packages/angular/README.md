@@ -406,10 +406,9 @@ This is what prevents double-selling without locking seats forever.
 
 ### Can I use my own payment provider?
 
-Yes. Nothing in this package takes a payment. The browser hands your code a
-`holdId` and priced line items, your backend charges through whatever provider
-you already use, and it then books the hold through the
-[server-side checkout flow](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/).
+Yes. By default nothing in this package takes a payment. The browser hands your
+code a `holdId` and priced line items, and your backend charges through the
+provider you already use, then books the hold.
 
 ### Can I evaluate it without a SeatLayer account?
 
