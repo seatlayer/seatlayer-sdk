@@ -27,8 +27,9 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 
 - `SeatLayerSeatingChartComponent`: one standalone Angular component with the
   `seatlayer-seating-chart` selector.
-- `SeatLayerSeasonPickerComponent`: fixed-inclusion Season selection and
-  returning-holder intent with the `seatlayer-season-picker` selector.
+- `SeatLayerSeasonPickerComponent`: season tickets, with the
+  `seatlayer-season-picker` selector. The buyer picks a seat once and holds it
+  on every date of the season; returning holders can say they will renew.
 - `SeatLayerSeatManagerComponent`: the organizer control room, for dashboards
   that monitor and block live inventory, with the `seatlayer-seat-manager`
   selector. It lives on its own entry, `@seatlayer/angular/manager`, so a buyer
@@ -143,7 +144,7 @@ hold. These tools do not take payment or book seats. See the
 [buyer WebMCP seat-selection guide](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)
 for the full contract and iframe origin controls.
 
-### Fixed renewable Season
+### Season tickets: the same seat on every date
 
 ```html
 <seatlayer-season-picker
@@ -389,11 +390,11 @@ covers inputs, outputs, holds, and checkout in depth.
 ### Is this a real Angular component or an iframe?
 
 `SeatLayerSeatingChartComponent` is a real standalone Angular component whose
-template is a plain `<div>` in your own tree, with no iframe and no stylesheet of
-its own. Its render loop and pointer handlers are created outside the Angular
-zone and re-enter it only to emit, so a running chart does not schedule change
-detection on every frame. If you would rather embed the buyer picker in an iframe,
-`attachPickerFrame` is exported for that.
+template is a plain `<div>` in your own tree, with no iframe. Its render loop
+and pointer handlers run outside the Angular zone and re-enter it only to emit,
+so a running chart does not trigger change detection on every frame. If you
+would rather embed the buyer picker in an iframe, `attachPickerFrame` is
+exported for that.
 
 ### How do temporary seat holds work?
 
@@ -406,10 +407,9 @@ This is what prevents double-selling without locking seats forever.
 
 ### Can I use my own payment provider?
 
-Yes. Nothing in this package takes a payment. The browser hands your code a
-`holdId` and priced line items, your backend charges through whatever provider
-you already use, and it then books the hold through the
-[server-side checkout flow](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/).
+Yes. By default nothing in this package takes a payment. The browser hands your
+code a `holdId` and priced line items, and your backend charges through the
+provider you already use, then books the hold.
 
 ### Can I evaluate it without a SeatLayer account?
 
@@ -428,12 +428,12 @@ that, which books no real inventory.
 - [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
   to connect a buyer hold id to payment and idempotent booking.
 - [Compare SeatLayer's mobile seat map SDKs](https://docs.seatlayer.io/buyer-sdk/mobile/)
-  when the same event also has to render in native iOS, Android, Flutter, or
-  React Native apps.
+  when the same event also has to appear in your iOS, Android, Flutter or React
+  Native app.
 - [Use the separate `@seatlayer/js` EmbeddedDesigner API](https://docs.seatlayer.io/platform/embedded-designer/)
   when organizers need hosted chart editing inside an Angular product.
-- [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the
-  interactive venue view available through `SeatPickerWidget` in supported browsers.
+- [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the 3D
+  venue and the view from each seat, which `SeatLayerSeatingChartComponent`, the Season picker and `SeatPickerWidget` all offer in supported browsers. 3D is offered for venues up to 30,000 seats on phones and 60,000 on desktop by default.
 - [Point AI coding agents at the SeatLayer docs index](https://docs.seatlayer.io/llms.txt)
   (`llms.txt`) for an agent-readable map of the documentation.
 

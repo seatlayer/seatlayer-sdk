@@ -30,8 +30,9 @@ selects and **holds**, and your trusted server **books** the hold.
   your styles own.
 - `SeatPicker`: the complete buyer experience: map, legend, tray, pricing, and
   the checkout hand-off.
-- `SeasonPicker`: fixed-inclusion Season selection and returning-holder intent
-  with the same typed lifecycle and imperative-handle conventions.
+- `SeasonPicker`: season tickets. The buyer picks a seat once and holds it on
+  every date of the season; returning holders can say they will renew. Same
+  typed lifecycle and imperative handle as the other components.
 - `SeatManager`: the organizer control room, for dashboards that monitor and
   block live inventory.
 - `EmbeddedDesigner`: a hosted chart Designer inside your own application.
@@ -55,7 +56,7 @@ npm install @seatlayer/react
 
 ## Upgrading to 0.112.0
 
-Nothing needs a code change. Three things to know:
+Nothing needs a code change. Four things to know:
 
 - **`SeatingChart` now honours `enable3D`, `enable3DCrowd` and
   `touchNavigation3D`.** Before 0.112.0 it ignored them. If your page already
@@ -109,7 +110,7 @@ await chart.current?.releaseLabels(['A-12']);          // keep the remainder hel
 await chart.current?.release();                        // release the current hold
 ```
 
-### Fixed renewable Season
+### Season tickets: the same seat on every date
 
 ```tsx
 const season = useRef<SeasonPickerHandle>(null);
@@ -491,12 +492,12 @@ covers props, events, holds, and checkout in depth.
 
 ### Is this a real React component or an iframe?
 
-`SeatingChart`, `SeatPicker`, and `SeatManager` are real React components that
-render a plain `<div>` into your own tree, with no iframe, no portal, and no
-stylesheet of their own to fight with. `EmbeddedDesigner` is the one exception:
-the organizer Designer is deliberately hosted in a sandboxed iframe so no
-Designer credential ever reaches your bundle. If you *want* an iframe for the
-buyer picker, `attachPickerFrame` is exported for that.
+`SeatingChart`, `SeatPicker` and `SeatManager` are real React components that
+render into a plain `<div>` in your own tree, with no iframe. `EmbeddedDesigner`
+is the one exception: the organizer Designer runs in an iframe served by
+SeatLayer and opened with a short-lived session URL from your backend, so your
+secret key never reaches the browser. If you want an iframe for the buyer
+picker, `attachPickerFrame` is exported for that.
 
 ### What is the difference between `SeatPicker` and `SeatingChart`?
 
@@ -551,8 +552,8 @@ that imports it, or load it through `next/dynamic` with `ssr: false`.
 - [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
   to connect a buyer hold id to payment and idempotent booking.
 - [Compare SeatLayer's mobile seat map SDKs](https://docs.seatlayer.io/buyer-sdk/mobile/)
-  when the same event also has to render in native iOS, Android, Flutter, or
-  React Native apps.
+  when the same event also has to appear in your iOS, Android, Flutter or React
+  Native app.
 - [Read the embedded Designer guide](https://docs.seatlayer.io/platform/embedded-designer/)
   to let organizers draw their own venues inside your product.
 - [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the

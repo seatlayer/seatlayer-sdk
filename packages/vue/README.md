@@ -27,7 +27,8 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 
 - `SeatingChart`: one Vue 3 component wrapper (`SeatLayerSeatingChart`), written
   as a render function so no Vue compiler plugin is needed.
-- `SeasonPicker`: fixed-inclusion Season selection and returning-holder intent.
+- `SeasonPicker`: season tickets. The buyer picks a seat once and holds it on
+  every date of the season; returning holders can say they will renew.
 - `SeatManager`: the organizer control room, for dashboards that monitor and
   block live inventory. It lives on its own entry, `@seatlayer/vue/manager`, so
   a buyer app never carries it.
@@ -50,7 +51,7 @@ npm install @seatlayer/vue
 
 ## Upgrading to 0.112.0
 
-Nothing needs a code change. Three things to know:
+Nothing needs a code change. Four things to know:
 
 - **`SeatingChart` and `SeasonPicker` now honour `enable3D`, `enable3DCrowd`
   and `touchNavigation3D`.** Before 0.112.0 they were not props, so a value
@@ -144,7 +145,7 @@ hold. These tools do not take payment or book seats. See the
 [buyer WebMCP seat-selection guide](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)
 for the full contract and iframe origin controls.
 
-### Fixed renewable Season
+### Season tickets: the same seat on every date
 
 ```vue
 <SeasonPicker
@@ -362,12 +363,11 @@ covers props, events, holds, and checkout in depth.
 
 ### Is this a real Vue component or an iframe?
 
-`SeatingChart` is a Vue 3 component that renders a plain `<div>` into your own
-tree, with no iframe and no stylesheet of its own. It is written as a render
-function rather than a single-file component, so it needs no Vue compiler
-plugin. Use it on the client in Vite, Nuxt, or another Vue 3 bundler. If you
-would rather embed the buyer picker in an iframe, `attachPickerFrame` is
-exported for that.
+`SeatingChart` is a Vue 3 component that renders into a plain `<div>` in your
+own tree, with no iframe. It is written as a render function rather than a
+single-file component, so it needs no Vue compiler plugin, and it runs on the
+client in Vite, Nuxt or another Vue 3 bundler. If you would rather embed the
+buyer picker in an iframe, `attachPickerFrame` is exported for that.
 
 ### How do temporary seat holds work?
 
@@ -380,10 +380,9 @@ without locking seats forever.
 
 ### Can I use my own payment provider?
 
-Yes. Nothing in this package takes a payment. The browser hands your code a
-`holdId` and priced line items, your backend charges through whatever provider
-you already use, and it then books the hold through the
-[server-side checkout flow](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/).
+Yes. By default nothing in this package takes a payment. The browser hands your
+code a `holdId` and priced line items, and your backend charges through the
+provider you already use, then books the hold.
 
 ### Can I evaluate it without a SeatLayer account?
 
@@ -402,12 +401,12 @@ that, which books no real inventory.
 - [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
   to connect a buyer hold id to payment and idempotent booking.
 - [Compare SeatLayer's mobile seat map SDKs](https://docs.seatlayer.io/buyer-sdk/mobile/)
-  when the same event also has to render in native iOS, Android, Flutter, or
-  React Native apps.
+  when the same event also has to appear in your iOS, Android, Flutter or React
+  Native app.
 - [Use the separate `@seatlayer/js` EmbeddedDesigner API](https://docs.seatlayer.io/platform/embedded-designer/)
   when organizers need hosted chart editing inside a Vue product.
-- [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the
-  interactive venue view available through `SeatPickerWidget` in supported browsers.
+- [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the 3D
+  venue and the view from each seat, which `SeatingChart`, `SeasonPicker` and `SeatPickerWidget` all offer in supported browsers. 3D is offered for venues up to 30,000 seats on phones and 60,000 on desktop by default.
 - [Point AI coding agents at the SeatLayer docs index](https://docs.seatlayer.io/llms.txt)
   (`llms.txt`) for an agent-readable map of the documentation.
 

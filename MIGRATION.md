@@ -66,7 +66,7 @@ new proprietary releases, not technically impossible to reverse-engineer.
 - Keep the runtime repository private and disable private forks.
 - Protect public `main` with the `verify` check and prevent force-pushes.
 - Keep CDN prefixes immutable; promote aliases only through `versions.json`.
-- Keep `NPM_TOKEN`, Cloudflare credentials, and any read-only deployment keys in
+- Keep `NPM_TOKEN`, CDN credentials, and any read-only deployment keys in
   repository secrets, never in source or logs.
 - Configure npm trusted publishing for each public wrapper package to the exact
   GitHub workflow `.github/workflows/release.yml`. The account owner must
