@@ -51,7 +51,7 @@ npm install @seatlayer/vue
 
 ## Upgrading to 0.112.0
 
-Nothing needs a code change. Three things to know:
+Nothing needs a code change. Four things to know:
 
 - **`SeatingChart` and `SeasonPicker` now honour `enable3D`, `enable3DCrowd`
   and `touchNavigation3D`.** Before 0.112.0 they were not props, so a value

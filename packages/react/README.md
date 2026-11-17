@@ -56,7 +56,7 @@ npm install @seatlayer/react
 
 ## Upgrading to 0.112.0
 
-Nothing needs a code change. Three things to know:
+Nothing needs a code change. Four things to know:
 
 - **`SeatingChart` now honours `enable3D`, `enable3DCrowd` and
   `touchNavigation3D`.** Before 0.112.0 it ignored them. If your page already
