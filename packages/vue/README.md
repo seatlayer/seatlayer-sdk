@@ -362,12 +362,11 @@ covers props, events, holds, and checkout in depth.
 
 ### Is this a real Vue component or an iframe?
 
-`SeatingChart` is a Vue 3 component that renders a plain `<div>` into your own
-tree, with no iframe and no stylesheet of its own. It is written as a render
-function rather than a single-file component, so it needs no Vue compiler
-plugin. Use it on the client in Vite, Nuxt, or another Vue 3 bundler. If you
-would rather embed the buyer picker in an iframe, `attachPickerFrame` is
-exported for that.
+`SeatingChart` is a Vue 3 component that renders into a plain `<div>` in your
+own tree, with no iframe. It is written as a render function rather than a
+single-file component, so it needs no Vue compiler plugin, and it runs on the
+client in Vite, Nuxt or another Vue 3 bundler. If you would rather embed the
+buyer picker in an iframe, `attachPickerFrame` is exported for that.
 
 ### How do temporary seat holds work?
 

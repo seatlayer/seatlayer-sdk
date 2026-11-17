@@ -389,11 +389,11 @@ covers inputs, outputs, holds, and checkout in depth.
 ### Is this a real Angular component or an iframe?
 
 `SeatLayerSeatingChartComponent` is a real standalone Angular component whose
-template is a plain `<div>` in your own tree, with no iframe and no stylesheet of
-its own. Its render loop and pointer handlers are created outside the Angular
-zone and re-enter it only to emit, so a running chart does not schedule change
-detection on every frame. If you would rather embed the buyer picker in an iframe,
-`attachPickerFrame` is exported for that.
+template is a plain `<div>` in your own tree, with no iframe. Its render loop
+and pointer handlers run outside the Angular zone and re-enter it only to emit,
+so a running chart does not trigger change detection on every frame. If you
+would rather embed the buyer picker in an iframe, `attachPickerFrame` is
+exported for that.
 
 ### How do temporary seat holds work?
 

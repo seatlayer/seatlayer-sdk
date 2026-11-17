@@ -491,12 +491,12 @@ covers props, events, holds, and checkout in depth.
 
 ### Is this a real React component or an iframe?
 
-`SeatingChart`, `SeatPicker`, and `SeatManager` are real React components that
-render a plain `<div>` into your own tree, with no iframe, no portal, and no
-stylesheet of their own to fight with. `EmbeddedDesigner` is the one exception:
-the organizer Designer is deliberately hosted in a sandboxed iframe so no
-Designer credential ever reaches your bundle. If you *want* an iframe for the
-buyer picker, `attachPickerFrame` is exported for that.
+`SeatingChart`, `SeatPicker` and `SeatManager` are real React components that
+render into a plain `<div>` in your own tree, with no iframe. `EmbeddedDesigner`
+is the one exception: the organizer Designer runs in an iframe served by
+SeatLayer and opened with a short-lived session URL from your backend, so your
+secret key never reaches the browser. If you want an iframe for the buyer
+picker, `attachPickerFrame` is exported for that.
 
 ### What is the difference between `SeatPicker` and `SeatingChart`?
 
