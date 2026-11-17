@@ -405,8 +405,10 @@ that, which books no real inventory.
   Native app.
 - [Use the separate `@seatlayer/js` EmbeddedDesigner API](https://docs.seatlayer.io/platform/embedded-designer/)
   when organizers need hosted chart editing inside a Vue product.
-- [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the
-  interactive venue view available through `SeatPickerWidget` in supported browsers.
+- [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the 3D
+  venue and the view from each seat, which `SeatingChart`, `SeasonPicker` and
+  `SeatPickerWidget` all offer on every chart up to 60,000 seats, in supported
+  browsers.
 - [Point AI coding agents at the SeatLayer docs index](https://docs.seatlayer.io/llms.txt)
   (`llms.txt`) for an agent-readable map of the documentation.
 
