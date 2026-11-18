@@ -1,228 +1,220 @@
-# SeatLayer Seat Map SDK for Reserved Seating: React, Vue and Angular
+# SeatLayer SDK for React, Vue and Angular: seat map, seating chart and seat picker
 
-[![CI](https://github.com/seatlayer/seatlayer-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/seatlayer/seatlayer-sdk/actions/workflows/ci.yml)
 [![npm @seatlayer/react](https://img.shields.io/npm/v/@seatlayer/react?label=%40seatlayer%2Freact)](https://www.npmjs.com/package/@seatlayer/react)
 [![npm @seatlayer/vue](https://img.shields.io/npm/v/@seatlayer/vue?label=%40seatlayer%2Fvue)](https://www.npmjs.com/package/@seatlayer/vue)
 [![npm @seatlayer/angular](https://img.shields.io/npm/v/@seatlayer/angular?label=%40seatlayer%2Fangular)](https://www.npmjs.com/package/@seatlayer/angular)
+[![CI](https://github.com/seatlayer/seatlayer-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/seatlayer/seatlayer-sdk/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](LICENSE)
 
-The official React, Vue and Angular components for the SeatLayer seat map SDK.
-`@seatlayer/react`, `@seatlayer/vue` and `@seatlayer/angular` add an interactive
-seating chart and seat picker to a ticketing app, show live seat availability,
-and let buyers take temporary holds on the seats they choose. SeatLayer is
-seating chart and reserved-seat ticketing software built for venues up to
-stadium scale.
+The SeatLayer SDK puts an interactive seat map and a complete seat picker into React, Vue and
+Angular ticketing apps: buyers see live availability, pick seats in 2D or 3D, see the view from
+their seat, and hold the seats while your own checkout takes the payment.
 
-Each wrapper is a real component for its framework with a typed imperative
-handle: the browser selects and **holds**, and your trusted server **books**.
+## What SeatLayer is
 
-Start with the package-specific guide after installation: [React](https://docs.seatlayer.io/buyer-sdk/react/),
-[Vue](https://docs.seatlayer.io/buyer-sdk/vue/), or
-[Angular](https://docs.seatlayer.io/buyer-sdk/angular/). Choose the complete
-picker when you want SeatLayer's ready buyer flow; choose the seating chart
-when your application owns the surrounding controls and sends the opaque hold
-to its trusted checkout server.
+SeatLayer is reserved-seat ticketing and seating software: organizers sell with hosted checkout,
+a box office, door check-in and season tickets, and platforms add the same seat maps, with 3D
+seat views, through the SeatLayer SDK and API. One chart drives the 2D map, the 3D venue and the
+view from each seat (3D for venues up to 60,000 seats; the 2D map benchmarked at 200,000 seats).
 
-[SeatLayer reserved-seating platform](https://seatlayer.io/) ·
-[Buyer SDK documentation](https://docs.seatlayer.io/buyer-sdk/install/) ·
-[Buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) ·
-[All live demos](https://seatlayer.io/demo/) ·
-[SeatLayer JavaScript seat map SDK](https://www.npmjs.com/package/@seatlayer/js) ·
-[SeatLayer React Native SDK](https://github.com/seatlayer/seatlayer-react-native) ·
-[SeatLayer iOS seat map SDK](https://github.com/seatlayer/seatlayer-ios) ·
-[SeatLayer Android seat map SDK](https://github.com/seatlayer/seatlayer-android) ·
-[SeatLayer Flutter seat map SDK](https://github.com/seatlayer/seatlayer-flutter) ·
-[SeatLayer AI Toolkit](https://github.com/seatlayer/seatlayer-ai-toolkit)
+[Website](https://seatlayer.io/) · [For developers](https://seatlayer.io/developers/) ·
+[Season tickets](https://seatlayer.io/season-tickets/) · [Pricing](https://seatlayer.io/pricing/) ·
+[Live demo](https://seatlayer.io/demo/)
 
-Two-step shape: the buyer picks and holds seats in the client with your public key, then your server confirms the booking with your secret key while your platform keeps checkout and its own payment provider.
+This repository holds the [React](./packages/react#readme), [Vue](./packages/vue#readme) and
+[Angular](./packages/angular#readme) packages. Plain JavaScript and the script tag
+are [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js).
+For mobile apps: [iOS](https://github.com/seatlayer/seatlayer-ios),
+[Android](https://github.com/seatlayer/seatlayer-android),
+[Flutter](https://github.com/seatlayer/seatlayer-flutter) and
+[React Native](https://github.com/seatlayer/seatlayer-react-native).
 
-**Start here:** [Quickstart](https://docs.seatlayer.io/start/quickstart/) · [Holds and checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/) · [React, Vue and Angular guides](https://docs.seatlayer.io/buyer-sdk/install/) · [SDK catalog](https://docs.seatlayer.io/sdk-catalog.json) · [Pricing](https://seatlayer.io/pricing/): test mode is free; live, the first 100 sold seats each month are free, then 10¢ down to 5¢ per sold seat, with no subscription, and purchased credits never expire.
+## Try it
 
-## Scale evidence
+- [Pick a seat in a live theatre](https://app.seatlayer.io/demo/play/grand-theatre), no account needed
+- [Open the 200,000-seat stadium](https://app.seatlayer.io/demo/play/century-stadium-200k)
+- [Quick start](https://docs.seatlayer.io/start/quickstart/): your first event and keys
 
-Benchmarked on public 100,000-, 150,000- and 200,000-seat venue fixtures on 15 September 2026: 200,000 seats chart-ready in 1.95 s, desktop, local production build. Tested at 10,000 simulated concurrent buyers on one 12,000-seat event (18 September 2026): engine-side hold latency p99 9 ms, zero server errors. Method, fixtures and run files: https://github.com/seatlayer/seatlayer-performance. Live 200,000-seat stadium demo: https://app.seatlayer.io/demo/play/century-stadium-200k.
-
-## Packages in this repository
-
-| Package | Use it for | README |
-| --- | --- | --- |
-| [`@seatlayer/react`](https://www.npmjs.com/package/@seatlayer/react) | React applications | [packages/react](./packages/react#readme) |
-| [`@seatlayer/vue`](https://www.npmjs.com/package/@seatlayer/vue) | Vue 3 applications | [packages/vue](./packages/vue#readme) |
-| [`@seatlayer/angular`](https://www.npmjs.com/package/@seatlayer/angular) | Angular applications | [packages/angular](./packages/angular#readme) |
-
-Plain JavaScript and the browser runtime API live in
-[`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js), which every
-wrapper here depends on.
-
-## Install
+## React seat map
 
 ```bash
-npm install @seatlayer/react   # or @seatlayer/vue, @seatlayer/angular
+npm install @seatlayer/react
 ```
-
-For plain JavaScript without a framework, install the browser SDK directly:
-
-```bash
-npm install @seatlayer/js
-```
-
-## React quick start
 
 ```tsx
 import { SeatPicker } from '@seatlayer/react';
 
 export function Tickets() {
-  return <SeatPicker event="ev_9f3a" style={{ width: '100%', height: 640 }} />;
+  return (
+    <SeatPicker
+      event="<YOUR_EVENT_KEY>"
+      publicKey="<YOUR_PUBLIC_KEY>"
+      style={{ width: '100%', height: 640 }}
+      onCheckout={async (hold) => {
+        // Send only the hold id. Your server prices the hold and books it.
+        const res = await fetch('/api/checkout', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ holdId: hold.holdId }),
+        });
+        window.location.href = (await res.json()).paymentUrl;
+      }}
+    />
+  );
 }
 ```
 
-Each package README carries the framework's own quick start, props, events, and
-imperative handle.
+`SeatPicker` is the complete buyer flow. `SeatingChart` is the map alone, inside your own UI.
+[React guide](https://docs.seatlayer.io/buyer-sdk/react/)
 
-## Examples
+## Vue seat map
 
-Two complete applications you can clone and run:
+```bash
+npm install @seatlayer/vue
+```
 
-- [seatlayer-react-example](https://github.com/seatlayer/seatlayer-react-example): a Vite and React app that renders the headless `SeatingChart`, picks best available seats, takes a hold, and hands the hold id to checkout.
-- [seatlayer-nextjs-example](https://github.com/seatlayer/seatlayer-nextjs-example): the same flow on Next.js 15 App Router, with an `/api/hold` server route that shows where the trusted half of the integration belongs.
+```vue
+<script setup lang="ts">
+import { ref } from 'vue';
+import { SeatingChart, type SeatingChartExposed } from '@seatlayer/vue';
 
-Each one reads an `.env.local` with your event key and public key, copied from the
-`.env.example` in its repository. The Next.js example has a Deploy with Vercel
-button.
+const chart = ref<SeatingChartExposed | null>(null);
+</script>
 
-## Choose the buyer surface
+<template>
+  <SeatingChart
+    ref="chart"
+    event="<YOUR_EVENT_KEY>"
+    public-key="<YOUR_PUBLIC_KEY>"
+    style="width: 100%; height: 520px"
+    @hold="({ holdId }) => bookOnYourServer(holdId)"
+  />
+  <button @click="chart?.hold()">Continue</button>
+</template>
+```
 
-| Surface | Use it for | Framework support |
-| --- | --- | --- |
-| `SeatPicker` | Complete buyer flow with map, legend, priced tray, holds, and checkout hand-off | React component; `SeatPickerWidget` modal re-exported by all three packages |
-| `SeatingChart` | Lower-level chart inside controls and checkout UI owned by your application | React, Vue, and Angular components |
-| `SeasonPicker` | Fixed-inclusion Season selection and returning-holder intent | React, Vue, and Angular components |
-| `SeatManager` | Event-scoped organizer operations in the live control room | React, Vue, and Angular components (Vue and Angular from their `/manager` entry) |
-| `EmbeddedDesigner` | Hosted chart editing | React component |
+`SeatingChart` is the map alone, so your own button calls `hold()` and `@hold` hands you the
+`holdId`. [Vue guide](https://docs.seatlayer.io/buyer-sdk/vue/)
 
-The complete picker can opt into
-[buyer WebMCP seat-selection tools](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)
-with `webMcp: true`. This registers describe, find, select, and read-selection
-tools in compatible browsers. `webMcp: { holds: true }` separately enables the
-hold tool; payment and booking remain on the trusted checkout path.
+## Angular seat map
 
-## Security boundary
+```bash
+npm install @seatlayer/angular
+```
 
-The browser **selects and holds** inventory. Your trusted backend **inspects and
-books** the hold after payment or order validation.
+```html
+<seatlayer-seating-chart
+  #chart
+  event="<YOUR_EVENT_KEY>"
+  publicKey="<YOUR_PUBLIC_KEY>"
+  style="display:block; height:520px"
+  (hold)="bookOnYourServer($event.holdId)"
+/>
+<button (click)="chart.holdSelection()">Continue</button>
+```
 
-- Never expose a SeatLayer secret key in browser or mobile code.
-- Send only the `holdId` and your normal checkout context to your backend.
-- Calculate the charge from server-inspected hold items, not from browser input.
-- Reuse your stable order id as `bookingRef` so a retried booking is idempotent.
+Import `SeatLayerSeatingChartComponent` from `@seatlayer/angular` into your standalone component.
+The chart is the map alone, so your own button calls `holdSelection()` and `(hold)` hands you the
+`holdId`. [Angular guide](https://docs.seatlayer.io/buyer-sdk/angular/)
 
-Read [how the integration works](https://docs.seatlayer.io/start/how-it-works/)
-before connecting checkout, and see [SECURITY.md](./SECURITY.md) for private
-vulnerability reporting.
+## Your server books the seats
 
-## Public/private boundary
+```ts
+// With @seatlayer/server and your secret key
+const hold = await seatlayer.inventory.retrieveHold(eventKey, holdId); // the real prices
+// ... take the payment with your own provider ...
+await seatlayer.inventory.book(eventKey, { holdId, bookingRef: order.id });
+```
 
-This repository contains the reviewable React, Vue, and Angular integration
-layers. The production renderer, designer, 3D engine, inventory implementation,
-and runtime build pipeline are proprietary SeatLayer components maintained in a
-private repository and distributed as compiled npm and CDN artifacts.
+Server SDKs for Node.js, Python, PHP, Java, Go, Ruby and .NET:
+[server SDK guide](https://docs.seatlayer.io/server-sdk/install/).
 
-The boundary is enforced in CI. A contribution that introduces core renderer,
-designer, 3D source, or public source maps fails `pnpm boundary:check`.
+**Security:** never put a SeatLayer secret key in browser or mobile code, work out the charge on
+your server from the hold, and reuse the same `bookingRef` when you retry a booking.
+
+## Features
+
+- **Live availability and seat holds.** A seat another buyer holds disappears at once. A hold
+  keeps the seats through your checkout and lapses on its own if the buyer leaves.
+  [Holds and checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
+- **Best available.** `bestAvailable(4)` finds and holds the best four seats together.
+- **3D venue and the view from each seat**, built from the same chart, on every plan, for venues
+  up to 60,000 seats. The React `SeatPicker` and `SeasonPicker` take `max3DSeats` to change that
+  limit (by default 60,000 on desktop and 30,000 on small or low-core devices).
+  [3D view](https://docs.seatlayer.io/buyer-sdk/3d-view/) · [3D seat map](https://seatlayer.io/3d-seat-map/)
+- **Season tickets.** `SeasonPicker` (in Angular, `SeatLayerSeasonPickerComponent`) holds the
+  same seat on every date of a season, and returning holders can renew from an offer your server
+  issues. [Seasons](https://docs.seatlayer.io/buyer-sdk/seasons/) · [Season tickets](https://seatlayer.io/season-tickets/)
+- **Your checkout, your payment provider.** The browser holds; your server books with a stable
+  `bookingRef`. By default nothing in these packages takes a payment; the opt-in hosted checkout
+  (`checkout: 'hosted'`) is the other option.
+- **Your brand.** Theme, currency and language options, and no SeatLayer badge for buyers, on any plan.
+- **Organizer tools in your app.** `SeatManager` (live control room) in all three packages, and
+  `EmbeddedDesigner` (chart designer) in React.
+- **AI agents.** The picker can register seat-selection tools for browser agents.
+  [WebMCP tools](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)
+- **TypeScript types included.** React and Vue ship ESM and CommonJS builds; Angular ships an
+  Angular Package Format build.
 
 ## Frequently asked questions
 
-### What is the best JavaScript library for seat maps and seat booking?
+### Which seat map SDK can I use with React, Vue or Angular?
+SeatLayer gives you a complete seat picker or a bare seating chart with live availability, seat
+holds, best available and, on every plan, a 3D view from each seat for venues up to 60,000 seats.
+You pay only for sold seats: 100 a month are free, then 10¢ down to 5¢ a seat, and credits you buy
+never expire. The same charts run in React, Vue, Angular, iOS, Android, Flutter and React Native,
+and your own server and payment provider keep the order and the money. The 2D map is benchmarked
+at 200,000 seats; the measured figures are under Scale evidence below.
 
-That depends on what you need to own. SeatLayer ships a browser runtime plus
-first-party React, Vue, and Angular components, a matching set of native mobile
-SDKs, and server SDKs for the booking half, so the same event and inventory can
-be reused across supported clients while booking stays on your server. If you
-only need a drawing surface, a generic canvas library is lighter; if you need
-live availability, temporary holds, and inventory that cannot be double-sold,
-that is the part SeatLayer provides.
+### How much does the SeatLayer SDK cost?
+Building and testing is free. On the SDK you pay per sold seat: the first 100 sold seats each month
+are free, then 10¢ down to 5¢ a seat, with no subscription. Credits you buy never expire.
 
-### Which package should I install?
+### How do I stop two buyers taking the same seat?
+In the SeatLayer picker, a buyer's seats are held when they go to checkout; with the bare chart,
+your code calls hold. Every other buyer sees held seats as taken at once, and your server books the
+hold after payment. A hold that is never booked lapses on its own, so nothing stays locked.
 
-Install the wrapper for your framework: `@seatlayer/react`, `@seatlayer/vue`,
-or `@seatlayer/angular`. Use [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js)
-directly for plain JavaScript or a framework without a first-party wrapper. It
-provides the shared browser runtime; your application owns the framework
-lifecycle around it.
-
-### Are TypeScript types included?
-
-Yes. Every package ships its own declarations, with no `@types/*` package to add.
-React and Vue publish both ESM (`dist/index.d.ts`) and CommonJS
-(`dist/index.d.cts`) declarations; Angular ships an Angular Package Format build
-with `dist/index.d.ts`. Types are checked at release by `publint` and
-`arethetypeswrong`.
-
-### How do temporary seat holds work?
-
-When a buyer commits to a selection, the SDK reserves that inventory against
-concurrent buyers for a limited checkout window and returns an opaque `holdId`.
-The hold lapses on its own if checkout never completes, and it can be resumed
-after a checkout navigation or reload. Your server then books the hold with a
-secret key, which is what prevents double-selling without locking seats forever.
+### Can I move from seats.io?
+Yes. You rebuild each chart in the SeatLayer Designer (from your floor plan, a template or an SVG or DXF file, or by
+describing the venue to a chat AI and pasting the venue file it writes), and the migration guide maps seats.io events, categories, hold tokens,
+labels, channels, seasons and webhooks to their SeatLayer equivalents. The rebuilt chart opens in
+3D with the view from each seat, for venues up to 60,000 seats.
 
 ### Can I use my own payment provider?
+Yes. By default nothing in these packages takes a payment: your server reads the held seats and
+their prices, charges through the provider you already use, and books the hold. The opt-in hosted
+checkout is the other option, for a site with no backend of its own.
 
-Yes. Nothing in the browser takes a payment. Your backend receives the `holdId`
-and priced line items, charges through whatever provider you already use, and
-books the hold through the
-[server-side checkout flow](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/).
+### Does it work with Next.js?
+Yes. Import the component in a client component. The Next.js example in this organization shows
+the full flow, including the server route that books the hold.
 
-## Continue your JavaScript integration
+## Where to go next
 
-- [Follow the buyer SDK installation guide](https://docs.seatlayer.io/buyer-sdk/install/)
-  for the full browser integration, options, and events.
-- [Read the SeatingChart reference](https://docs.seatlayer.io/buyer-sdk/seating-chart/)
-  for the complete chart API.
-- [Connect seat holds to secure server-side checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
-  without putting booking credentials in the browser.
-- [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
-  to connect a buyer hold id to payment and idempotent booking.
-- [Compare SeatLayer's mobile seat map SDKs](https://docs.seatlayer.io/buyer-sdk/mobile/)
-  when the same event also has to render in native apps.
-- [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the
-  interactive venue view available in the complete picker on supported browsers.
-- [Try the 200,000-seat stadium demo](https://app.seatlayer.io/demo/play/century-stadium-200k)
-  and read the [renderer performance and measurement guide](https://docs.seatlayer.io/platform/renderer-performance/).
-- [Point AI coding agents at the SeatLayer docs index](https://docs.seatlayer.io/llms.txt)
-  (`llms.txt`) for an agent-readable map of the documentation.
+| Topic | Docs | On seatlayer.io |
+|---|---|---|
+| React, Vue, Angular | [React](https://docs.seatlayer.io/buyer-sdk/react/) · [Vue](https://docs.seatlayer.io/buyer-sdk/vue/) · [Angular](https://docs.seatlayer.io/buyer-sdk/angular/) | [For developers](https://seatlayer.io/developers/) |
+| Checkout and booking | [Holds and checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/) | [JavaScript seating chart guide](https://seatlayer.io/guides/javascript-seating-chart/) |
+| 3D and the view from a seat | [3D view](https://docs.seatlayer.io/buyer-sdk/3d-view/) | [3D seat map](https://seatlayer.io/3d-seat-map/) · [View from seat](https://seatlayer.io/view-from-seat/) |
+| Season tickets | [Seasons](https://docs.seatlayer.io/buyer-sdk/seasons/) | [Season tickets](https://seatlayer.io/season-tickets/) |
+| Moving from seats.io | [Migration guide](https://docs.seatlayer.io/integrations/migrate-from-seatsio/) | [SeatLayer vs seats.io](https://seatlayer.io/vs/seats-io/) |
+| Examples | [React example](https://github.com/seatlayer/seatlayer-react-example) · [Next.js example](https://github.com/seatlayer/seatlayer-nextjs-example) | [Live demos](https://seatlayer.io/demo/) |
+| Mobile and server SDKs | [Mobile SDKs](https://docs.seatlayer.io/buyer-sdk/mobile/) · [Server SDKs](https://docs.seatlayer.io/server-sdk/install/) | |
 
-## SeatLayer SDK ecosystem
+## Scale evidence
 
-| Surface | Package or source |
-| --- | --- |
-| JavaScript | [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js) |
-| React | [`@seatlayer/react`](https://www.npmjs.com/package/@seatlayer/react) (this repository) |
-| Vue | [`@seatlayer/vue`](https://www.npmjs.com/package/@seatlayer/vue) (this repository) |
-| Angular | [`@seatlayer/angular`](https://www.npmjs.com/package/@seatlayer/angular) (this repository) |
-| React Native | [`@seatlayer/react-native`](https://www.npmjs.com/package/@seatlayer/react-native) |
-| iOS | [`seatlayer-ios`](https://github.com/seatlayer/seatlayer-ios) |
-| Flutter | [`seatlayer`](https://pub.dev/packages/seatlayer) |
-| Android | [`seatlayer-android`](https://github.com/seatlayer/seatlayer-android) |
-| Server SDKs | [Node.js, Python, PHP, Ruby, .NET, Java, and Go](https://docs.seatlayer.io/server-sdk/install/) |
+Benchmarked on public 100,000-, 150,000- and 200,000-seat venue fixtures on 15 September 2026: 200,000 seats chart-ready in 1.95 s, desktop, local production build. Tested at 10,000 simulated concurrent buyers on one 12,000-seat event (18 September 2026): engine-side hold latency p99 9 ms, zero server errors. Method, fixtures and run files: https://github.com/seatlayer/seatlayer-performance. Live 200,000-seat stadium demo: https://app.seatlayer.io/demo/play/century-stadium-200k.
 
-## Development
+## Versions and support
 
-```bash
-pnpm install
-pnpm verify
-```
-
-`pnpm verify` runs the public boundary check, builds every package, typechecks,
-runs the test suite, and lints the published package manifests.
-
-The wrappers resolve the released `@seatlayer/js` runtime from npm. Runtime
-changes are released independently before wrapper dependency versions move. See
-[MIGRATION.md](./MIGRATION.md) for repository ownership, release order, artifact
-rules, and the `0.52.x` to `0.53.0` migration boundary, and
-[CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request.
+The three packages release together with `@seatlayer/js` and share its version number. Release
+notes: [changelog](https://docs.seatlayer.io/changelog/) and
+[GitHub Releases](https://github.com/seatlayer/seatlayer-sdk/releases). Security issues:
+[SECURITY.md](./SECURITY.md). Contributing:
+[CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Licence
 
-The framework wrapper source in this repository is MIT licensed. The separately
-distributed SeatLayer runtime is not covered by this repository's MIT licence.
+The React, Vue and Angular wrapper source in this repository is MIT licensed. The SeatLayer runtime
+it loads (`@seatlayer/js`, `@seatlayer/core`) is distributed under its own licence.

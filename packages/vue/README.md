@@ -101,7 +101,6 @@ async function checkout() {
     public-key="pk_live_your_publishable_key"
     style="width: 100%; height: 520px"
     @selection-change="onSelectionChange"
-    @hold="({ holdId }) => bookOnYourServer(holdId)"
   />
   <button @click="checkout">Continue</button>
 </template>
@@ -353,13 +352,24 @@ availability, and holds come from the SeatLayer API at runtime.
 
 ## Frequently asked questions
 
+### Which Vue seating chart component can I use?
+
+`@seatlayer/vue` gives you a live seat map (`SeatingChart`) and a ready buyer
+modal (`SeatPickerWidget`), with seat holds, best available, season tickets
+and, on every plan, a 3D view from each seat for venues up to 60,000 seats. A
+200,000-seat stadium chart is ready in 1.95 s on desktop, and the same charts
+run in React, Angular, iOS, Android, Flutter and React Native. You pay only for
+sold seats, and your own server and payment provider keep the order and the
+money.
+
 ### How do I add a seat map to a Vue app?
 
-Install `@seatlayer/vue`, render `<SeatingChart event="ev_…" />` in a container
-with a definite height, and handle `@selection-change`. That is a complete
-interactive seating chart with live availability; the
-[seat-picker documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
-covers props, events, holds, and checkout in depth.
+Install `@seatlayer/vue` and render `SeatingChart` for a live seat map inside
+your own Vue UI, with seat holds, best available and the 3D view from each seat
+on charts up to 60,000 seats. For the ready buyer modal with its priced tray,
+hold timer and checkout hand-off, call `SeatPickerWidget.open()`. Give the
+container a definite height, call `hold()` from your own button and handle
+`@hold`; your server then books the hold.
 
 ### Is this a real Vue component or an iframe?
 
@@ -371,9 +381,10 @@ buyer picker in an iframe, `attachPickerFrame` is exported for that.
 
 ### How do temporary seat holds work?
 
-When a buyer commits to a selection, `hold()` reserves that inventory against
-concurrent buyers for a limited checkout window and returns an opaque `holdId`.
-The hold lapses on its own if checkout never completes. `@hold-expired` tells
+In the SeatLayer picker, a buyer's seats are held when they go to checkout;
+with the bare chart, your code calls `hold()`, which reserves that inventory
+against concurrent buyers for a limited checkout window and returns an opaque
+`holdId`. The hold lapses on its own if checkout never completes. `@hold-expired` tells
 the app to return the buyer to the map, and `resumeHold()` restores it after a
 same-tab checkout navigation or a reload. This is what prevents double-selling
 without locking seats forever.
@@ -386,16 +397,33 @@ provider you already use, then books the hold.
 
 ### Can I evaluate it without a SeatLayer account?
 
-You can explore a live seating chart in the browser at the
-[buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) with no
-account. Rendering your own venue needs an event key, because the chart and its
-availability are served by the SeatLayer API: create a free test event for
-that, which books no real inventory.
+Yes. The live Grand Theatre demo runs in your browser with no account. To show
+your own venue you need an event key, and test mode is free with no time limit
+and no card: test events, holds and webhooks work like production and use no
+credits.
+
+### How much does the SeatLayer SDK cost?
+
+Building and testing is free, and going live costs $0. You pay one credit per
+sold seat: the first 100 sold seats each month are free, then 10¢ down to 5¢ a
+seat, with no subscription, and credits you buy never expire. Browsing the map,
+holds and the 3D view never use a credit.
+
+### Can I sell season tickets with it?
+
+Yes. `SeasonPicker` holds the same seat on every date of a season in one step,
+with best available across every date and a price type such as adult or child
+for each seat, and returning holders can tell you they will renew. The hand-off
+carries no price; by default your server applies the package price and books
+it, and the opt-in `checkout: 'hosted'` takes the payment through SeatLayer's
+checkout instead, into the organizer's own payment account. `SeasonPicker` is in `@seatlayer/vue` 0.72.0 and newer.
 
 ## Continue your Vue integration
 
 - [Follow the buyer SDK installation guide](https://docs.seatlayer.io/buyer-sdk/install/)
   for the full browser integration, options, and events.
+- [Read the seat picker documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
+  for props, events, holds, and checkout in depth.
 - [Connect seat holds to secure server-side checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
   without putting booking credentials in the browser.
 - [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
@@ -406,7 +434,7 @@ that, which books no real inventory.
 - [Use the separate `@seatlayer/js` EmbeddedDesigner API](https://docs.seatlayer.io/platform/embedded-designer/)
   when organizers need hosted chart editing inside a Vue product.
 - [Explore the 3D seating chart](https://seatlayer.io/3d-seat-map/) for the 3D
-  venue and the view from each seat, which `SeatingChart`, `SeasonPicker` and `SeatPickerWidget` all offer in supported browsers. 3D is offered for venues up to 30,000 seats on phones and 60,000 on desktop by default.
+  venue and the view from each seat, which `SeatingChart`, `SeasonPicker` and `SeatPickerWidget` all offer in supported browsers. 3D is offered for venues up to 60,000 seats.
 - [Point AI coding agents at the SeatLayer docs index](https://docs.seatlayer.io/llms.txt)
   (`llms.txt`) for an agent-readable map of the documentation.
 

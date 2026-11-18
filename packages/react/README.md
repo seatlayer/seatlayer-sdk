@@ -481,14 +481,24 @@ throwing, so a ref used one frame early is safe.
 
 ## Frequently asked questions
 
+### Which React seating chart component can I use?
+
+`@seatlayer/react` gives you a complete seat picker (`SeatPicker`) or the map
+alone (`SeatingChart`), with live availability, seat holds, best available,
+season tickets and, on every plan, a 3D view from each seat for venues up to
+60,000 seats. A 200,000-seat stadium chart is ready in 1.95 s on desktop, and
+the same charts run in Vue, Angular, iOS, Android, Flutter and React Native.
+You pay only for sold seats, and your own server and payment provider keep the
+order and the money.
+
 ### How do I add a seat map to a React app?
 
-Install `@seatlayer/react`, render `<SeatingChart event="ev_…" />` inside a
-container with a definite height, and read the buyer's choice from
-`onSelectionChange`. That is a complete interactive seating chart with live
-availability; the quick start above is the whole integration, and the
-[seat-picker documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
-covers props, events, holds, and checkout in depth.
+Install `@seatlayer/react` and render `SeatPicker` for the whole buyer flow:
+live availability, a priced tray, seat holds with a timer, best available, the
+3D view from each seat on charts up to 60,000 seats, and the checkout hand-off.
+For the map alone inside your own UI, render `SeatingChart` and read the
+buyer's choice from `onSelectionChange`. Give the container a definite height
+and pass your event key and publishable key; your server then books the hold.
 
 ### Is this a real React component or an iframe?
 
@@ -509,30 +519,28 @@ and drop to `SeatingChart` when your design system owns the chrome.
 
 ### How do temporary seat holds work?
 
-When a buyer commits to a selection, `hold()` reserves that inventory against
-concurrent buyers for a limited checkout window and returns an opaque `holdId`.
-The hold lapses on its own if checkout never completes. `onHoldExpired` tells
+In the SeatLayer picker, a buyer's seats are held when they go to checkout;
+with the bare chart, your code calls `hold()`, which reserves that inventory
+against concurrent buyers for a limited checkout window and returns an opaque
+`holdId`. The hold lapses on its own if checkout never completes. `onHoldExpired` tells
 the app to return the buyer to the map, and `resumeHold()` restores it after a
 same-tab checkout navigation or a reload. This is what prevents double-selling
 without locking seats forever.
 
 ### Can I use my own payment provider?
 
-Yes. Nothing in this package takes a payment. The browser hands you a `holdId`
-and a self-contained `CheckoutHandoff` with the priced line items, your backend
-charges through whatever provider you already use, and it then books the hold
-through the
-[server-side checkout flow](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/).
-The opt-in `checkout: 'hosted'` mode exists for hosts with no backend at all;
-without it, no payment code is downloaded.
+Yes. By default nothing in this package takes a payment: the browser hands you
+a `holdId` and a `CheckoutHandoff` with the priced line items, and your backend
+charges through the provider you already use, then books the hold. For a host
+with no backend, the opt-in `checkout: 'hosted'` mode sends the buyer through
+SeatLayer's checkout instead; without it, no payment code is downloaded.
 
 ### Can I evaluate it without a SeatLayer account?
 
-You can explore a live seating chart in the browser at the
-[buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) with no
-account. Rendering your own venue needs an event key, because the chart and its
-availability are served by the SeatLayer API: create a free test event for
-that, which books no real inventory.
+Yes. The live Grand Theatre demo runs in your browser with no account. To show
+your own venue you need an event key, and test mode is free with no time limit
+and no card: test events, holds and webhooks work like production and use no
+credits.
 
 ### Does it work with Next.js and other React frameworks?
 
@@ -541,12 +549,30 @@ there, so a server render emits the empty container. This package ships no
 `'use client'` banner of its own, so in the App Router mark your own component
 that imports it, or load it through `next/dynamic` with `ssr: false`.
 
+### How much does the SeatLayer SDK cost?
+
+Building and testing is free, and going live costs $0. You pay one credit per
+sold seat: the first 100 sold seats each month are free, then 10¢ down to 5¢ a
+seat, with no subscription, and credits you buy never expire. Browsing the map,
+holds and the 3D view never use a credit.
+
+### Can I sell season tickets with it?
+
+Yes. `SeasonPicker` holds the same seat on every date of a season in one step,
+with best available across every date and a price type such as adult or child
+for each seat, and returning holders can tell you they will renew. The hand-off
+carries no price; by default your server applies the package price and books
+it, and the opt-in `checkout: 'hosted'` takes the payment through SeatLayer's
+checkout instead, into the organizer's own payment account. `SeasonPicker` is in `@seatlayer/react` 0.72.0 and newer.
+
 ## Continue your React integration
 
 - [Follow the buyer SDK installation guide](https://docs.seatlayer.io/buyer-sdk/install/)
   for the full browser integration, options, and events.
 - [Build a React or Next.js seating chart](https://docs.seatlayer.io/buyer-sdk/react-seating-chart/)
   with the framework-specific tutorial and client-mounting guidance.
+- [Read the seat picker documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
+  for props, events, holds, and checkout in depth.
 - [Connect seat holds to secure server-side checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
   without putting booking credentials in the browser.
 - [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
