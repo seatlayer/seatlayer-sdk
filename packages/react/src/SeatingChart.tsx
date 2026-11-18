@@ -8,6 +8,7 @@ import {
 import {
   SeatingChart as CoreSeatingChart,
   bindSeatingChartHandle,
+  prewarmSeatPicker,
   buildSeatingChartOptions,
   type SeatingChartHandle,
   type SeatingChartIdentityProp,
@@ -51,6 +52,24 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
     // Always call the latest callbacks without rebuilding the chart.
     const callbacks = useRef(props);
     callbacks.current = props;
+
+    // Start the chart's first request during render, not after React commits:
+    // the mount below adopts it, so the page still makes ONE bootstrap. Once per
+    // chart identity (an adopted request is gone, and a later render must not
+    // start one nobody takes), in the browser only, and only when the mount will
+    // adopt it (a public key, no host-supplied buyer access).
+    const prewarmedFor = useRef<string | null>(null);
+    const prewarmIdentity = `${apiBase ?? ''}\n${event}\n${publicKey ?? ''}`;
+    if (
+      typeof window !== 'undefined'
+      && prewarmedFor.current !== prewarmIdentity
+      && publicKey
+      && !props.buyerAccessToken
+      && !props.buyerAccessTokenProvider
+    ) {
+      prewarmedFor.current = prewarmIdentity;
+      prewarmSeatPicker({ event, publicKey, apiBase });
+    }
 
     useEffect(() => {
       const el = containerRef.current;
