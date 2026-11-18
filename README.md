@@ -24,6 +24,10 @@ view from each seat (3D for venues up to 60,000 seats; the 2D map benchmarked at
 This repository holds the [React](./packages/react#readme), [Vue](./packages/vue#readme) and
 [Angular](./packages/angular#readme) packages. Plain JavaScript and the script tag
 are [`@seatlayer/js`](https://www.npmjs.com/package/@seatlayer/js).
+For mobile apps: [iOS](https://github.com/seatlayer/seatlayer-ios),
+[Android](https://github.com/seatlayer/seatlayer-android),
+[Flutter](https://github.com/seatlayer/seatlayer-flutter) and
+[React Native](https://github.com/seatlayer/seatlayer-react-native).
 
 ## Try it
 
@@ -125,6 +129,9 @@ await seatlayer.inventory.book(eventKey, { holdId, bookingRef: order.id });
 Server SDKs for Node.js, Python, PHP, Java, Go, Ruby and .NET:
 [server SDK guide](https://docs.seatlayer.io/server-sdk/install/).
 
+**Security:** never put a SeatLayer secret key in browser or mobile code, work out the charge on
+your server from the hold, and reuse the same `bookingRef` when you retry a booking.
+
 ## Features
 
 - **Live availability and seat holds.** A seat another buyer holds disappears at once. A hold
@@ -169,8 +176,8 @@ your code calls hold. Every other buyer sees held seats as taken at once, and yo
 hold after payment. A hold that is never booked lapses on its own, so nothing stays locked.
 
 ### Can I move from seats.io?
-Yes. You rebuild each chart in the SeatLayer Designer (from your floor plan, a template, an SVG or
-DXF file, or a description), and the migration guide maps seats.io events, categories, hold tokens,
+Yes. You rebuild each chart in the SeatLayer Designer (from your floor plan, a template or an SVG or DXF file, or by
+describing the venue to a chat AI and pasting the venue file it writes), and the migration guide maps seats.io events, categories, hold tokens,
 labels, channels, seasons and webhooks to their SeatLayer equivalents. The rebuilt chart opens in
 3D with the view from each seat, for venues up to 60,000 seats.
 
@@ -204,7 +211,7 @@ Benchmarked on public 100,000-, 150,000- and 200,000-seat venue fixtures on 15 S
 The three packages release together with `@seatlayer/js` and share its version number. Release
 notes: [changelog](https://docs.seatlayer.io/changelog/) and
 [GitHub Releases](https://github.com/seatlayer/seatlayer-sdk/releases). Security issues:
-[SECURITY.md](./SECURITY.md). Questions: hello@seatlayer.io. Contributing:
+[SECURITY.md](./SECURITY.md). Contributing:
 [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Licence

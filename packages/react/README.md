@@ -563,7 +563,7 @@ with best available across every date and a price type such as adult or child
 for each seat, and returning holders can tell you they will renew. The hand-off
 carries no price; by default your server applies the package price and books
 it, and the opt-in `checkout: 'hosted'` takes the payment through SeatLayer's
-checkout instead. `SeasonPicker` is in `@seatlayer/react` 0.72.0 and newer.
+checkout instead, into the organizer's own payment account. `SeasonPicker` is in `@seatlayer/react` 0.72.0 and newer.
 
 ## Continue your React integration
 
