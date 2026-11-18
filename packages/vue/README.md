@@ -355,11 +355,12 @@ availability, and holds come from the SeatLayer API at runtime.
 
 ### How do I add a seat map to a Vue app?
 
-Install `@seatlayer/vue`, render `<SeatingChart event="ev_…" />` in a container
-with a definite height, and handle `@selection-change`. That is a complete
-interactive seating chart with live availability; the
-[seat-picker documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
-covers props, events, holds, and checkout in depth.
+Install `@seatlayer/vue` and render `SeatingChart` for a live seat map inside
+your own Vue UI, with seat holds, best available and the 3D view from each seat
+on charts up to 60,000 seats. For the ready buyer modal with its priced tray,
+hold timer and checkout hand-off, call `SeatPickerWidget.open()`. Give the
+container a definite height, call `hold()` from your own button and handle
+`@hold`; your server then books the hold.
 
 ### Is this a real Vue component or an iframe?
 
@@ -371,9 +372,10 @@ buyer picker in an iframe, `attachPickerFrame` is exported for that.
 
 ### How do temporary seat holds work?
 
-When a buyer commits to a selection, `hold()` reserves that inventory against
-concurrent buyers for a limited checkout window and returns an opaque `holdId`.
-The hold lapses on its own if checkout never completes. `@hold-expired` tells
+In the SeatLayer picker, a buyer's seats are held when they go to checkout;
+with the bare chart, your code calls `hold()`, which reserves that inventory
+against concurrent buyers for a limited checkout window and returns an opaque
+`holdId`. The hold lapses on its own if checkout never completes. `@hold-expired` tells
 the app to return the buyer to the map, and `resumeHold()` restores it after a
 same-tab checkout navigation or a reload. This is what prevents double-selling
 without locking seats forever.
@@ -386,16 +388,17 @@ provider you already use, then books the hold.
 
 ### Can I evaluate it without a SeatLayer account?
 
-You can explore a live seating chart in the browser at the
-[buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) with no
-account. Rendering your own venue needs an event key, because the chart and its
-availability are served by the SeatLayer API: create a free test event for
-that, which books no real inventory.
+Yes. The live Grand Theatre demo runs in your browser with no account. To show
+your own venue you need an event key, and test mode is free with no time limit
+and no card: test events, holds and webhooks work like production and use no
+credits.
 
 ## Continue your Vue integration
 
 - [Follow the buyer SDK installation guide](https://docs.seatlayer.io/buyer-sdk/install/)
   for the full browser integration, options, and events.
+- [Read the seat picker documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
+  for props, events, holds, and checkout in depth.
 - [Connect seat holds to secure server-side checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
   without putting booking credentials in the browser.
 - [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)

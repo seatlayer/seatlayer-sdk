@@ -381,11 +381,12 @@ and holds come from the SeatLayer API at runtime.
 ### How do I add a seat map to an Angular app?
 
 Install `@seatlayer/angular`, import the standalone
-`SeatLayerSeatingChartComponent`, and put `<seatlayer-seating-chart
-event="ev_…">` on screen inside a block with a definite height. That is a
-complete interactive seating chart with live availability; the
-[seat-picker documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
-covers inputs, outputs, holds, and checkout in depth.
+`SeatLayerSeatingChartComponent` and put `<seatlayer-seating-chart>` in a block
+with a definite height: you get a live seat map with seat holds, best available
+and the 3D view from each seat on charts up to 60,000 seats. For the ready buyer
+modal with its priced tray, hold timer and checkout hand-off, call
+`SeatPickerWidget.open()`. Call `holdSelection()` from your own button and
+handle `(hold)`; your server then books the hold.
 
 ### Is this a real Angular component or an iframe?
 
@@ -398,9 +399,10 @@ exported for that.
 
 ### How do temporary seat holds work?
 
-When a buyer commits to a selection, `holdSelection()` reserves that inventory
-against concurrent buyers for a limited checkout window and returns an opaque
-`holdId`. The hold lapses on its own if checkout never completes.
+In the SeatLayer picker, a buyer's seats are held when they go to checkout;
+with the bare chart, your code calls `holdSelection()`, which reserves that
+inventory against concurrent buyers for a limited checkout window and returns
+an opaque `holdId`. The hold lapses on its own if checkout never completes.
 `(holdExpired)` tells the app to return the buyer to the map, and
 `resumeHold()` restores it after a same-tab checkout navigation or a reload.
 This is what prevents double-selling without locking seats forever.
@@ -413,16 +415,17 @@ provider you already use, then books the hold.
 
 ### Can I evaluate it without a SeatLayer account?
 
-You can explore a live seating chart in the browser at the
-[buyer seat-map demo](https://app.seatlayer.io/demo/play/grand-theatre) with no
-account. Rendering your own venue needs an event key, because the chart and its
-availability are served by the SeatLayer API: create a free test event for
-that, which books no real inventory.
+Yes. The live Grand Theatre demo runs in your browser with no account. To show
+your own venue you need an event key, and test mode is free with no time limit
+and no card: test events, holds and webhooks work like production and use no
+credits.
 
 ## Continue your Angular integration
 
 - [Follow the buyer SDK installation guide](https://docs.seatlayer.io/buyer-sdk/install/)
   for the full browser integration, options, and events.
+- [Read the seat picker documentation](https://docs.seatlayer.io/buyer-sdk/seat-picker/)
+  for inputs, outputs, holds, and checkout in depth.
 - [Connect seat holds to secure server-side checkout](https://docs.seatlayer.io/buyer-sdk/holds-and-checkout/)
   without putting booking credentials in the browser.
 - [Run the complete checkout example](https://docs.seatlayer.io/examples/complete-checkout/)
