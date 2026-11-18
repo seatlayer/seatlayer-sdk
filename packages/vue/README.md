@@ -101,7 +101,6 @@ async function checkout() {
     public-key="pk_live_your_publishable_key"
     style="width: 100%; height: 520px"
     @selection-change="onSelectionChange"
-    @hold="({ holdId }) => bookOnYourServer(holdId)"
   />
   <button @click="checkout">Continue</button>
 </template>
