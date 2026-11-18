@@ -481,6 +481,16 @@ throwing, so a ref used one frame early is safe.
 
 ## Frequently asked questions
 
+### Which React seating chart component can I use?
+
+`@seatlayer/react` gives you a complete seat picker (`SeatPicker`) or the map
+alone (`SeatingChart`), with live availability, seat holds, best available,
+season tickets and, on every plan, a 3D view from each seat for venues up to
+60,000 seats. A 200,000-seat stadium chart is ready in 1.95 s on desktop, and
+the same charts run in Vue, Angular, iOS, Android, Flutter and React Native.
+You pay only for sold seats, and your own server and payment provider keep the
+order and the money.
+
 ### How do I add a seat map to a React app?
 
 Install `@seatlayer/react` and render `SeatPicker` for the whole buyer flow:
@@ -538,6 +548,22 @@ Yes, on the client. The chart is built inside an effect and touches the DOM only
 there, so a server render emits the empty container. This package ships no
 `'use client'` banner of its own, so in the App Router mark your own component
 that imports it, or load it through `next/dynamic` with `ssr: false`.
+
+### How much does the SeatLayer SDK cost?
+
+Building and testing is free, and going live costs $0. You pay one credit per
+sold seat: the first 100 sold seats each month are free, then 10¢ down to 5¢ a
+seat, with no subscription, and credits you buy never expire. Browsing the map,
+holds and the 3D view never use a credit.
+
+### Can I sell season tickets with it?
+
+Yes. `SeasonPicker` holds the same seat on every date of a season in one step,
+with best available across every date and a price type such as adult or child
+for each seat, and returning holders can tell you they will renew. The hand-off
+carries no price; by default your server applies the package price and books
+it, and the opt-in `checkout: 'hosted'` takes the payment through SeatLayer's
+checkout instead. `SeasonPicker` is in `@seatlayer/react` 0.72.0 and newer.
 
 ## Continue your React integration
 

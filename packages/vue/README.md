@@ -353,6 +353,16 @@ availability, and holds come from the SeatLayer API at runtime.
 
 ## Frequently asked questions
 
+### Which Vue seating chart component can I use?
+
+`@seatlayer/vue` gives you a live seat map (`SeatingChart`) and a ready buyer
+modal (`SeatPickerWidget`), with seat holds, best available, season tickets
+and, on every plan, a 3D view from each seat for venues up to 60,000 seats. A
+200,000-seat stadium chart is ready in 1.95 s on desktop, and the same charts
+run in React, Angular, iOS, Android, Flutter and React Native. You pay only for
+sold seats, and your own server and payment provider keep the order and the
+money.
+
 ### How do I add a seat map to a Vue app?
 
 Install `@seatlayer/vue` and render `SeatingChart` for a live seat map inside
@@ -392,6 +402,22 @@ Yes. The live Grand Theatre demo runs in your browser with no account. To show
 your own venue you need an event key, and test mode is free with no time limit
 and no card: test events, holds and webhooks work like production and use no
 credits.
+
+### How much does the SeatLayer SDK cost?
+
+Building and testing is free, and going live costs $0. You pay one credit per
+sold seat: the first 100 sold seats each month are free, then 10¢ down to 5¢ a
+seat, with no subscription, and credits you buy never expire. Browsing the map,
+holds and the 3D view never use a credit.
+
+### Can I sell season tickets with it?
+
+Yes. `SeasonPicker` holds the same seat on every date of a season in one step,
+with best available across every date and a price type such as adult or child
+for each seat, and returning holders can tell you they will renew. The hand-off
+carries no price; by default your server applies the package price and books
+it, and the opt-in `checkout: 'hosted'` takes the payment through SeatLayer's
+checkout instead. `SeasonPicker` is in `@seatlayer/vue` 0.72.0 and newer.
 
 ## Continue your Vue integration
 
