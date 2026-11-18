@@ -49,6 +49,21 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 0.113.0
+
+Nothing needs a code change, and no type changed. What a buyer sees:
+
+- **A short server stall heals on its own.** A hold, release or resume that
+  gets no answer is sent again (at most three tries, seven seconds of waiting),
+  and the map's first load tries again for up to about 30 seconds while the
+  picker says it is taking longer. A real outage still ends on the same panel
+  and Try again button, only later.
+- **"Check your connection and try again."** A hold or best-available that
+  still gets no answer says this and keeps the selection, where it used to say
+  the seats were taken.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.113.0 as well.
+
 ## Upgrading to 0.112.0
 
 Nothing needs a code change. Four things to know:
