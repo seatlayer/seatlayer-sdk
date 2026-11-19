@@ -54,6 +54,13 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 0.116.2
+
+Nothing needs a code change, and no type or prop changed. What a buyer sees is unchanged: this release adds single dates for Season pages that supply their own session or checkout (the `singleDates` option of `@seatlayer/js`), which is off unless a page asks for it.
+
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.116.2 as well.
+
 ## Upgrading to 0.116.1
 
 Nothing needs a code change, and no type or prop changed. What a buyer may now see:
