@@ -11,9 +11,11 @@ import {
 } from 'vue';
 import {
   SeasonPicker as CoreSeasonPicker,
+  type CheckoutSessionResult,
   type SeasonAvailability,
   type SeasonBestAvailableOptions,
   type SeasonCheckoutHandoff,
+  type SeasonDatesCheckoutInput,
   type SeasonDescriptor,
   type SeasonHeldOrder,
   type SeasonPickerOptions,
@@ -62,6 +64,14 @@ export interface SeasonPickerExposed {
    * Display only: checkout prices the order on the server.
    */
   getHeldOrder(): SeasonHeldOrder | null;
+  /**
+   * Pay a single-dates hold (`singleDates`) on your own checkout page: the
+   * handoff the `continue` event gave you carries `dates`. Same contract as
+   * `@seatlayer/js` `startDatesCheckout`. Always present on the handle this
+   * package gives you; optional in the type only so an object you typed as
+   * this handle before it existed still compiles.
+   */
+  startDatesCheckout?(input: SeasonDatesCheckoutInput): Promise<CheckoutSessionResult>;
 }
 
 /** Vue lifecycle adapter for the distinct fixed-inclusion Season buyer flow. */
@@ -96,8 +106,9 @@ export const SeasonPicker = defineComponent({
      * Do not turn this on if you rebuild the picker (changing props the
      * wrapper rebuilds on: season, apiBase, publicKey, checkout, returnUrl,
      * buyerAccessTokenProvider (by identity), buyerAccessToken,
-     * initialOperationId, package, ticketsByEmail, recoveryTimeoutMs, the 3D
-     * props, fetch (by identity), priceTypes) or hand the hold to your own
+     * initialOperationId, package, ticketsByEmail, singleDates,
+     * recoveryTimeoutMs, the 3D props, fetch (by identity), priceTypes) or
+     * hand the hold to your own
      * checkout without the continue event.
      */
     releaseHoldOnDestroy: { type: Boolean, default: undefined },
@@ -105,6 +116,13 @@ export const SeasonPicker = defineComponent({
     package: { type: String, default: undefined },
     /** The host emails a ticket per date itself: step 1 says so. */
     ticketsByEmail: { type: Boolean, default: undefined },
+    /**
+     * Offer the Season's single dates beside the passes on a page with its own
+     * checkout or session: continue on a dates hold emits a handoff whose
+     * `dates` names the run, the dates and the held lines; pay it with
+     * `startDatesCheckout`. Off by default. Changing it rebuilds.
+     */
+    singleDates: { type: Boolean, default: undefined },
     recoveryTimeoutMs: { type: Number, default: undefined },
     /** Offer the 3D venue view (default true). Changing it rebuilds. */
     enable3D: { type: Boolean, default: undefined },
@@ -166,6 +184,7 @@ export const SeasonPicker = defineComponent({
         initialOperationId: props.initialOperationId,
         package: props.package,
         ticketsByEmail: props.ticketsByEmail,
+        singleDates: props.singleDates,
         recoveryTimeoutMs: props.recoveryTimeoutMs,
         enable3D: props.enable3D,
         enable3DCrowd: props.enable3DCrowd,
@@ -201,6 +220,7 @@ export const SeasonPicker = defineComponent({
         props.initialOperationId,
         props.package,
         props.ticketsByEmail,
+        props.singleDates,
         props.recoveryTimeoutMs,
         props.enable3D,
         props.enable3DCrowd,
@@ -229,6 +249,7 @@ export const SeasonPicker = defineComponent({
       getAvailability: () => picker.value?.getAvailability() ?? null,
       getHandoff: () => picker.value?.getHandoff() ?? null,
       getHeldOrder: () => picker.value?.getHeldOrder() ?? null,
+      startDatesCheckout: (input) => current().startDatesCheckout(input),
     };
     expose(exposed);
     return () => h('div', { ref: container });

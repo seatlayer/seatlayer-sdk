@@ -20,6 +20,7 @@ import type { SeatPickerHandle } from '../src/SeatPicker';
 
 const constructorCalls: Array<Record<string, unknown>> = [];
 const imperativeCalls: Array<{ method: string; args: unknown[] }> = [];
+const hostHeadElement = document.createElement('div');
 
 vi.mock('@seatlayer/js', () => ({
   SeatPicker: class {
@@ -73,6 +74,11 @@ vi.mock('@seatlayer/js', () => ({
       return 'venue3d';
     }
     setBuyerView(...args: unknown[]) { imperativeCalls.push({ method: 'setBuyerView', args }); }
+    hostHead() {
+      imperativeCalls.push({ method: 'hostHead', args: [] });
+      return hostHeadElement;
+    }
+    setHost(...args: unknown[]) { imperativeCalls.push({ method: 'setHost', args }); }
     destroy() { imperativeCalls.push({ method: 'destroy', args: [] }); }
   },
 }));
@@ -254,5 +260,87 @@ describe('SeatPicker prop forwarding', () => {
       { method: 'markBooked', args: ['hold-2'] },
       { method: 'close', args: [] },
     ]);
+  });
+
+  it('forwards the host option with every field', async () => {
+    const host = {
+      head: true,
+      foldedLine: 'Two guests',
+      givenSeats: [{ label: 'A-1', note: 'Your seat' }],
+      categories: ['stalls'],
+      findTogether: false as const,
+    };
+    const options = await mountWith({ host });
+    expect(options.host).toEqual(host);
+  });
+
+  it('leaves host undefined when the host page passed none', async () => {
+    const options = await mountWith({});
+    expect(options.host).toBeUndefined();
+  });
+
+  it('calls the latest host functions without rebuilding, and keeps the first when a later render drops one', async () => {
+    const { SeatPicker } = await import('../src/SeatPicker');
+    const firstPress = vi.fn();
+    const nextPress = vi.fn();
+    await act(async () => {
+      root.render(createElement(SeatPicker, {
+        event: 'evt_test',
+        host: { buttonWords: (count: number) => `Add ${count}`, onPress: firstPress },
+      }));
+    });
+    const host = constructorCalls[0]!.host as {
+      buttonWords: (count: number) => string;
+      onPress: (seats: unknown[]) => unknown;
+    };
+    expect(host.buttonWords(2)).toBe('Add 2');
+
+    await act(async () => {
+      root.render(createElement(SeatPicker, {
+        event: 'evt_test',
+        host: { buttonWords: (count: number) => `Confirm ${count}`, onPress: nextPress },
+      }));
+    });
+    expect(constructorCalls).toHaveLength(1);
+    expect(host.buttonWords(3)).toBe('Confirm 3');
+    await host.onPress([{ label: 'A-1' }]);
+    expect(nextPress).toHaveBeenCalledWith([{ label: 'A-1' }]);
+    expect(firstPress).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.render(createElement(SeatPicker, { event: 'evt_test', host: {} }));
+    });
+    expect(constructorCalls).toHaveLength(1);
+    expect(host.buttonWords(1)).toBe('Add 1');
+    await host.onPress([]);
+    expect(firstPress).toHaveBeenCalledWith([]);
+  });
+
+  it('adds no host function the host page did not pass', async () => {
+    const options = await mountWith({ host: { foldedLine: 'Row A' } });
+    expect(options.host).toEqual({ foldedLine: 'Row A' });
+    expect(options.host).not.toHaveProperty('onPress');
+    expect(options.host).not.toHaveProperty('buttonWords');
+  });
+
+  it('forwards hostHead and setHost, and answers safely once the picker is gone', async () => {
+    const { SeatPicker } = await import('../src/SeatPicker');
+    const ref = createRef<SeatPickerHandle>();
+    await act(async () => {
+      root.render(createElement(SeatPicker, { event: 'evt_test', host: { head: true }, ref }));
+    });
+    const handle = ref.current!;
+    expect(handle.hostHead!()).toBe(hostHeadElement);
+    handle.setHost!({ foldedLine: 'Three seats', categories: ['vip'] });
+    expect(imperativeCalls).toEqual([
+      { method: 'hostHead', args: [] },
+      { method: 'setHost', args: [{ foldedLine: 'Three seats', categories: ['vip'] }] },
+    ]);
+
+    handle.close();
+    imperativeCalls.length = 0;
+    expect(handle.hostHead!()).toBeNull();
+    expect(() => handle.setHost!({ foldedLine: 'late' })).not.toThrow();
+    expect(imperativeCalls).toEqual([]);
   });
 });

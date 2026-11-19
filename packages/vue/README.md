@@ -49,6 +49,16 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 0.117.0
+
+Nothing needs a code change. What a buyer may now see:
+
+- **A free event's cart:** an amount of exactly 0 in the cart (the total, a ticket card, a standing-area line, the seat card and the table dialog) reads "Free" instead of "$0", as the price list already did. A page with its own `pricing.formatter` keeps its own words for 0.
+- **A dark page with a very dark brand colour:** the main buttons (the cart button, "Find best seats", a Season's "Choose seats") turn to stay visible: the colour's ink fills them and the colour becomes their text. Light pages and pages with no `theme.mode` are unchanged.
+- **New, opt-in:** `<SeasonPicker :single-dates="true">` and `startDatesCheckout()` on its exposed API, for a page with its own session or checkout. The `SeatPickerWidget` class takes the picker's `host` option, with `hostHead()` and `setHost(patch)`.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.117.0 as well.
+
 ## Upgrading to 0.116.2
 
 Nothing needs a code change, and no type or prop changed. What a buyer sees is unchanged: this release adds single dates for Season pages that supply their own session or checkout (the `singleDates` option of `@seatlayer/js`), which is off unless a page asks for it.
@@ -251,6 +261,11 @@ hold. These tools do not take payment or book seats. See the
 [buyer WebMCP seat-selection guide](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)
 for the full contract and iframe origin controls.
 
+Since 0.117.0, the widget's `host` option (type `SeatPickerHostOptions`, also
+exported here) puts your page's words, head and confirm step into its panel and
+cart, and the widget's `hostHead()` and `setHost(patch)` methods fill and
+change them.
+
 ### Season tickets: the same seat on every date
 
 ```vue
@@ -295,6 +310,14 @@ Since 0.111.0, `season.value.getHeldOrder()` gives the held order for your own s
 seat with its price type and package price, the currency and the total in
 minor units (null with no live hold). It is for display; checkout prices the
 order on the server.
+
+Since 0.117.0, a page with its own checkout or session can pass
+`:single-dates="true"` to offer the Season's single dates beside the passes
+(off by default; changing it rebuilds the picker). Continue on a dates hold
+emits `@continue` with a handoff whose `dates` names the run, the dates and the
+held lines. To take the payment on SeatLayer's checkout from your own page, call
+`season.value.startDatesCheckout({ buyerEmail, buyerName?, returnUrl? })`. Like
+the hold methods, it throws while the picker is not mounted.
 
 ## Props
 

@@ -7,9 +7,11 @@ import {
 } from 'react';
 import {
   SeasonPicker as CoreSeasonPicker,
+  type CheckoutSessionResult,
   type SeasonAvailability,
   type SeasonBestAvailableOptions,
   type SeasonCheckoutHandoff,
+  type SeasonDatesCheckoutInput,
   type SeasonDescriptor,
   type SeasonHeldOrder,
   type SeasonPickerOptions,
@@ -18,10 +20,13 @@ import {
 } from '@seatlayer/js';
 
 export type {
+  CheckoutSessionResult,
   SeasonAvailability,
   SeasonBestAvailableOptions,
   SeasonCheckoutHandoff,
   SeasonCheckoutSeat,
+  SeasonDatesCheckoutInput,
+  SeasonDatesHandoff,
   SeasonDescriptor,
   SeasonHeldOrder,
   SeasonHeldSeat,
@@ -73,6 +78,14 @@ export interface SeasonPickerHandle {
    * Display only: checkout prices the order on the server.
    */
   getHeldOrder(): SeasonHeldOrder | null;
+  /**
+   * Pay a single-dates hold (`singleDates`) on your own checkout page: the
+   * handoff `onContinue` gave you carries `dates`. Same contract as
+   * `@seatlayer/js` `startDatesCheckout`. Always present on the handle this
+   * package gives you; optional in the type only so an object you typed as
+   * this handle before it existed still compiles.
+   */
+  startDatesCheckout?(input: SeasonDatesCheckoutInput): Promise<CheckoutSessionResult>;
 }
 
 /** Props accepted by the React Season wrapper. */
@@ -87,7 +100,7 @@ export interface SeasonPickerProps extends Omit<SeasonPickerOptions, 'container'
    * rebuilds on: season, apiBase, publicKey, checkout, returnUrl,
    * buyerAccessToken, initialOperationId, recoveryTimeoutMs, fetch,
    * maxSelection, numberOfPlacesToSelect, locale, initialView, the 3D props,
-   * theme, priceTypes, package, ticketsByEmail) or hand the hold to your own
+   * theme, priceTypes, package, ticketsByEmail, singleDates) or hand the hold to your own
    * checkout without onContinue.
    */
   releaseHoldOnDestroy?: boolean;
@@ -124,6 +137,7 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
       // `package` is a reserved word as a variable name, not as a property.
       package: packageKey,
       ticketsByEmail,
+      singleDates,
       className,
       style,
     } = props;
@@ -169,7 +183,7 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
       season, apiBase, publicKey, checkout, returnUrl,
       buyerAccessToken, initialOperationId, recoveryTimeoutMs, fetch,
       maxSelection, numberOfPlacesToSelect, locale, initialView, enable3D, enable3DCrowd, touchNavigation3D, themeKey,
-      priceTypesKey, packageKey, ticketsByEmail,
+      priceTypesKey, packageKey, ticketsByEmail, singleDates,
     ]);
 
     useImperativeHandle(ref, (): SeasonPickerHandle => ({
@@ -186,6 +200,7 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
       getAvailability: () => pickerRef.current?.getAvailability() ?? null,
       getHandoff: () => pickerRef.current?.getHandoff() ?? null,
       getHeldOrder: () => pickerRef.current?.getHeldOrder() ?? null,
+      startDatesCheckout: (input) => required(pickerRef).startDatesCheckout(input),
     }), []);
 
     return <div ref={containerRef} className={className} style={style} />;

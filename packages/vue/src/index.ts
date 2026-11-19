@@ -20,6 +20,8 @@ export type {
   SeasonBestAvailableOptions,
   SeasonCheckoutHandoff,
   SeasonCheckoutSeat,
+  SeasonDatesCheckoutInput,
+  SeasonDatesHandoff,
   SeasonDescriptor,
   SeasonHeldOrder,
   SeasonHeldSeat,
@@ -30,6 +32,7 @@ export type {
   SeasonRenewalIntent,
   SeasonSeatPriceTypes,
   SeasonStatusEvent,
+  CheckoutSessionResult,
 } from '@seatlayer/js';
 
 // Sales Channels — buyer access sessions for private channel inventory.
@@ -45,6 +48,8 @@ export type {
 
 // The framework-agnostic widget class — for the one-call modal (SeatPickerWidget.open()).
 export { SeatPicker as SeatPickerWidget } from '@seatlayer/js';
+// Its `host` option (the host's own words, head and confirm step in its panel and cart).
+export type { SeatPickerHostOptions } from '@seatlayer/js';
 
 // Host-side embed helper: grows the iframe on `seatlayer:height` and pins it on
 // `seatlayer:fullscreen`. Vue hosts depend on this package alone, so it has to be

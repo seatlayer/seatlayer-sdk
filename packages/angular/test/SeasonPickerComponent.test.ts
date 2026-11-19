@@ -32,6 +32,10 @@ vi.mock('@seatlayer/js', () => ({
     getAvailability() { return { freeCount: 4 }; }
     getHandoff() { return { operationId: 'sop_1' }; }
     getHeldOrder() { return { operationId: 'sop_1', expiresAt: 1, currency: 'USD', seats: [], totalMinor: 0 }; }
+    startDatesCheckout(...args: unknown[]) {
+      state.calls.push({ method: 'startDatesCheckout', args });
+      return Promise.resolve({ sessionId: 'cs_1' });
+    }
   },
 }));
 
@@ -41,6 +45,7 @@ type Component = Record<string, unknown> & {
   holdBestAvailable(qty: number, operationId: string, options?: unknown): Promise<unknown>;
   markBooked(): Promise<boolean>;
   getDescriptor(): unknown;
+  startDatesCheckout(input: unknown): Promise<unknown>;
 };
 
 async function makeComponent(): Promise<Component> {
@@ -169,5 +174,26 @@ describe('@seatlayer/angular SeasonPicker', () => {
     expect(state.constructed[0]?.releaseHoldOnDestroy).toBe(false);
     // One render and no destroy: the picker was never rebuilt for this option.
     expect(state.calls.map((c) => c.method)).toEqual(['render']);
+  });
+
+  it('forwards singleDates (unset unless given), and rebuilds when it changes', async () => {
+    const value = await makeComponent();
+    value.ngOnChanges({ season: { currentValue: 'sea_1' } });
+    expect(state.constructed[0]?.singleDates).toBeUndefined();
+    value.singleDates = true;
+    value.ngOnChanges({ singleDates: { currentValue: true } });
+    expect(state.constructed).toHaveLength(2);
+    expect(state.constructed[1]).toMatchObject({ season: 'sea_1', singleDates: true });
+  });
+
+  it('delegates startDatesCheckout, and throws before the picker exists, as the other holds do', async () => {
+    const value = await makeComponent();
+    expect(() => value.startDatesCheckout({ buyerEmail: 'member@example.com' }))
+      .toThrow('seatlayer: Angular SeasonPicker is not mounted');
+    value.ngOnChanges({ season: { currentValue: 'sea_1' } });
+    const input = { buyerEmail: 'member@example.com', buyerName: 'Asha Rao', returnUrl: 'https://tickets.example.com/done' };
+    await expect(value.startDatesCheckout(input)).resolves.toEqual({ sessionId: 'cs_1' });
+    expect(state.calls.filter((call) => call.method === 'startDatesCheckout').map((call) => call.args))
+      .toEqual([[input]]);
   });
 });

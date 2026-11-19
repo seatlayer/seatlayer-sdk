@@ -54,6 +54,16 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 0.117.0
+
+Nothing needs a code change. What a buyer may now see:
+
+- **A free event's cart:** an amount of exactly 0 in the cart (the total, a ticket card, a standing-area line, the seat card and the table dialog) reads "Free" instead of "$0", as the price list already did. A page with its own `pricing.formatter` keeps its own words for 0.
+- **A dark page with a very dark brand colour:** the main buttons (the cart button, "Find best seats", a Season's "Choose seats") turn to stay visible: the colour's ink fills them and the colour becomes their text. Light pages and pages with no `theme.mode` are unchanged.
+- **New, opt-in:** `<SeatPicker host={…}>` (the picker's `host` option: a head element, a folded phone line, button words, `onPress` before any hold, read-only cards for seats already the buyer's, the categories listed, `findTogether: false`), with `hostHead()` and `setHost(patch)` on the ref. `<SeasonPicker singleDates>` and `startDatesCheckout()` on its ref, for a page with its own session or checkout.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.117.0 as well.
+
 ## Upgrading to 0.116.2
 
 Nothing needs a code change, and no type or prop changed. What a buyer sees is unchanged: this release adds single dates for Season pages that supply their own session or checkout (the `singleDates` option of `@seatlayer/js`), which is off unless a page asks for it.
@@ -267,6 +277,14 @@ show a crowd and one finger moves the view like the 2D map; pass
 `enable3DCrowd={false}` or `touchNavigation3D="classic"` to `SeatPicker` or
 `SeasonPicker` to keep the earlier look or gestures.
 
+Since 0.117.0, a page with its own checkout or session can pass `singleDates`
+to offer the Season's single dates beside the passes (off by default; changing
+it rebuilds the picker). Continue on a dates hold calls `onContinue` with a
+handoff whose `dates` names the run, the dates and the held lines. To take the
+payment on SeatLayer's checkout from your own page, call
+`season.current?.startDatesCheckout({ buyerEmail, buyerName?, returnUrl? })`.
+Like the hold methods, it throws while the picker is not mounted.
+
 For the complete buyer experience (map, legend, priced tray, and the checkout
 hand-off), render `SeatPicker` instead:
 
@@ -310,6 +328,8 @@ The full-experience `SeatPicker` exposes the canonical safe widget controls thro
 | `getViewMode()`, `setViewMode()` | Read and update the 2D map projection. |
 | `getBuyerView()`, `setBuyerView()` | Switch between the map and [interactive 3D seat views](https://seatlayer.io/3d-seat-map/), including optional camera intent. |
 | `refreshAccess()` | Re-acquire a private buyer-access session. |
+| `hostHead()` | The empty element `host={{ head: true }}` asked for, at the head of the ticket panel and the top of the opened phone sheet. Fill it with a portal. Null without `host.head` or while the picker is not mounted; a rebuild makes a new element. |
+| `setHost(patch)` | Change `host` fields on the live picker (a shallow merge): the button's words, the folded line, the given seats, the categories. Does nothing while the picker is not mounted. |
 | `destroy()` | Intentionally omitted: React owns teardown through component unmount. |
 
 **`markBooked` after a rebuild.** When the picker rebuilds (a prop change that
@@ -317,6 +337,16 @@ remounts it, or a page reload), it restores a live hold asynchronously.
 `markBooked(holdId)` called before the hold is back resolves `false`, and the
 restored hold then offers checkout again. Call it after `onHoldRestored` fires,
 or call it again when it resolves `false` while you expect a hold.
+
+**Your own words in the picker (`host`).** Since 0.117.0, the `host` prop puts
+your page's words, head and confirm step into the picker's panel and cart
+instead of a second panel beside it: `head`, `foldedLine`, `buttonWords`,
+`onPress`, `givenSeats`, `categories` and `findTogether: false` (see
+`SeatPickerHostOptions`). Every field is optional. `host` is read when the
+picker is built and is not a rebuild trigger, so an inline object never remounts
+it. `onPress` and `buttonWords` always call the function from your latest
+render. To change any other field on a live picker, call
+`ref.current?.setHost(patch)`: a changed `host` prop does not reach it.
 
 ### Buyer WebMCP tools
 
