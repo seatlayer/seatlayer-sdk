@@ -53,6 +53,23 @@ npm install @seatlayer/angular
 
 The component is **standalone**: import it directly, no NgModule needed.
 
+## Upgrading to 0.116.1
+
+Nothing needs a code change, and no type or prop changed. What a buyer may now see:
+
+- **Season ✕ on a held seat:** Continue is disabled while the ✕ runs, instead
+  of ignoring the press.
+- **Season single dates:** a price whose top is not known reads "from €25" in
+  the price list.
+- **The map toolbar:** on a map about 500 px wide, Zones / Sections / Seats
+  takes its own row instead of sitting under Map / 3D.
+- **Test mode:** the "Test mode" chip never covers seats. On a phone it sits in
+  the head of the sheet.
+- **A Season with `theme.mode`:** its first step follows the mode, as its map
+  already did. Without a mode, nothing changes.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.116.1 as well.
+
 ## Upgrading to 0.116.0
 
 Nothing needs a code change, and no type or prop changed. What a buyer may now see:
