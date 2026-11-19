@@ -54,6 +54,24 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 0.116.0
+
+Nothing needs a code change, and no type or prop changed. What a buyer may now see:
+
+- **A held Season seat has a ✕.** Removing one seat from a Season hold lets the
+  whole hold go and holds the seats kept again as one new hold, so your
+  `onHoldChange` sees `null` and then a hold with a new operation id. The last
+  seat's ✕ simply releases it. There is no ✕ where your selection rules
+  (`numberOfPlacesToSelect`, `selectionValidators`) would refuse the seats
+  kept, nor while sales are closed.
+- **Season single dates**, only on a Season the organizer sells by date as
+  well, with SeatLayer's own checkout, on a page that mints its own session:
+  step 1 offers "Single dates" beside the passes, and the buyer books the same
+  seat on the dates they tick, each at its own price, in one checkout.
+  Everywhere else nothing changes.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.116.0 as well.
+
 ## Upgrading to 0.115.0
 
 Nothing needs a code change, and no type or prop changed. What a buyer may now see:
