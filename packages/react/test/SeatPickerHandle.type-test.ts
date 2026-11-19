@@ -5,6 +5,7 @@ import type {
   SeatPickerBuyerView,
   SeatPickerBuyerViewOptions,
   SeatPickerHandle,
+  SeatPickerHostOptions,
   SeatPickerPricing,
 } from '../src/index';
 
@@ -40,4 +41,8 @@ export type SeatPickerHandleTypeContract = [
     >
   >,
   Assert<Equal<'destroy' extends keyof SeatPickerHandle ? true : false, false>>,
+  // New in 0.117.0, optional in the type so an object typed as the handle before still compiles.
+  Assert<Equal<SeatPickerHandle['hostHead'], (() => HTMLElement | null) | undefined>>,
+  Assert<Equal<SeatPickerHandle['setHost'], ((patch: Partial<SeatPickerHostOptions>) => void) | undefined>>,
+  Assert<Omit<SeatPickerHandle, 'hostHead' | 'setHost'> extends SeatPickerHandle ? true : false>,
 ];

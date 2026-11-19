@@ -251,6 +251,11 @@ hold. These tools do not take payment or book seats. See the
 [buyer WebMCP seat-selection guide](https://docs.seatlayer.io/buyer-sdk/webmcp-agent-tools/)
 for the full contract and iframe origin controls.
 
+Since 0.117.0, the widget's `host` option (type `SeatPickerHostOptions`, also
+exported here) puts your page's words, head and confirm step into its panel and
+cart, and the widget's `hostHead()` and `setHost(patch)` methods fill and
+change them.
+
 ### Season tickets: the same seat on every date
 
 ```vue
@@ -295,6 +300,14 @@ Since 0.111.0, `season.value.getHeldOrder()` gives the held order for your own s
 seat with its price type and package price, the currency and the total in
 minor units (null with no live hold). It is for display; checkout prices the
 order on the server.
+
+Since 0.117.0, a page with its own checkout or session can pass
+`:single-dates="true"` to offer the Season's single dates beside the passes
+(off by default; changing it rebuilds the picker). Continue on a dates hold
+emits `@continue` with a handoff whose `dates` names the run, the dates and the
+held lines. To take the payment on SeatLayer's checkout from your own page, call
+`season.value.startDatesCheckout({ buyerEmail, buyerName?, returnUrl? })`. Like
+the hold methods, it throws while the picker is not mounted.
 
 ## Props
 

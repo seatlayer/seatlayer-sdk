@@ -26,6 +26,10 @@ vi.mock('@seatlayer/js', () => ({
     getAvailability() { return { freeCount: 4 }; }
     getHandoff() { return { operationId: 'sop_1' }; }
     getHeldOrder() { return { operationId: 'sop_1', expiresAt: 1, currency: 'USD', seats: [], totalMinor: 0 }; }
+    startDatesCheckout(...args: unknown[]) {
+      calls.push({ method: 'startDatesCheckout', args });
+      return Promise.resolve({ sessionId: 'cs_1' });
+    }
   },
 }));
 
@@ -189,5 +193,40 @@ describe('@seatlayer/vue SeasonPicker', () => {
     expect(constructed[0]?.releaseHoldOnDestroy).toBe(false);
     // One render and no destroy: the picker was never rebuilt for this option.
     expect(calls.map((c) => c.method)).toEqual(['render']);
+  });
+
+  it('forwards singleDates (unset unless given), and rebuilds when it changes', async () => {
+    const single = ref<boolean | undefined>(undefined);
+    app = createApp(defineComponent({
+      setup: () => () => h(SeasonPicker, { season: 'sea_1', singleDates: single.value }),
+    }));
+    app.mount(host);
+    await nextTick();
+    expect(constructed[0]?.singleDates).toBeUndefined();
+    single.value = true;
+    await nextTick();
+    expect(constructed).toHaveLength(2);
+    expect(constructed[1]).toMatchObject({ season: 'sea_1', singleDates: true });
+  });
+
+  it('exposes startDatesCheckout, and throws once the picker is unmounted, as the other holds do', async () => {
+    const exposed = ref<SeasonPickerExposed | null>(null);
+    app = createApp(defineComponent({
+      setup: () => () => h(SeasonPicker, { ref: exposed, season: 'sea_1', singleDates: true }),
+    }));
+    app.mount(host);
+    await nextTick();
+    const handle = exposed.value!;
+    const input = { buyerEmail: 'member@example.com', buyerName: 'Asha Rao', returnUrl: 'https://tickets.example.com/done' };
+    await expect(handle.startDatesCheckout!(input)).resolves.toEqual({ sessionId: 'cs_1' });
+    expect(calls.filter((call) => call.method === 'startDatesCheckout').map((call) => call.args))
+      .toEqual([[input]]);
+
+    app.unmount();
+    app = null;
+    expect(() => handle.startDatesCheckout!({ buyerEmail: 'member@example.com' }))
+      .toThrow('seatlayer: Vue SeasonPicker is not mounted');
+    expect(() => handle.holdSameSeat(['A-1'], 'sop_1'))
+      .toThrow('seatlayer: Vue SeasonPicker is not mounted');
   });
 });

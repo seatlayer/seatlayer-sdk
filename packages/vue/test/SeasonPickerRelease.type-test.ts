@@ -3,7 +3,7 @@
  * tryRelease() is new and optional in the type, so an object a user typed as
  * the handle before it existed still compiles.
  */
-import type { SeasonPickerExposed as SeasonPickerHandle } from '../src/index';
+import type { CheckoutSessionResult, SeasonDatesCheckoutInput, SeasonPickerExposed as SeasonPickerHandle } from '../src/index';
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2)
@@ -18,6 +18,12 @@ export type SeasonPickerReleaseContract = [
   Assert<Equal<SeasonPickerHandle['tryRelease'], ((releaseActionId: string) => Promise<boolean>) | undefined>>,
   // Every object that satisfied the handle before tryRelease still does.
   Assert<Omit<SeasonPickerHandle, 'tryRelease'> extends SeasonPickerHandle ? true : false>,
+  // startDatesCheckout (0.117.0) is optional in the type for the same reason.
+  Assert<Equal<
+    SeasonPickerHandle['startDatesCheckout'],
+    ((input: SeasonDatesCheckoutInput) => Promise<CheckoutSessionResult>) | undefined
+  >>,
+  Assert<Omit<SeasonPickerHandle, 'tryRelease' | 'startDatesCheckout'> extends SeasonPickerHandle ? true : false>,
 ];
 
 declare const handle: SeasonPickerHandle;

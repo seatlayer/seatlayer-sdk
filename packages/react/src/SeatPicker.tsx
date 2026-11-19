@@ -8,6 +8,7 @@ import {
 import {
   SeatPicker as CoreSeatPicker,
   type SeatPickerOptions,
+  type SeatPickerHostOptions,
   type SeatPickerTheme,
   type SeatPickerPricing,
   type SeatPickerBestAvailableOptions,
@@ -23,6 +24,7 @@ import {
 
 export type {
   SeatPickerOptions,
+  SeatPickerHostOptions,
   SeatPickerTheme,
   SeatPickerPricing,
   SeatPickerBestAvailableOptions,
@@ -102,6 +104,23 @@ export interface SeatPickerHandle {
   getBuyerView(): SeatPickerBuyerView;
   /** Switch the buyer surface, optionally carrying a 3D camera intent. */
   setBuyerView(view: SeatPickerBuyerView, options?: SeatPickerBuyerViewOptions): void;
+  /**
+   * The empty element the `host={{ head: true }}` prop asked for, at the head
+   * of the ticket panel and the top of the opened phone sheet; null without it
+   * or while the picker is not mounted. Fill it with a portal. A rebuild makes
+   * a new element, so read it again after one. Always present on the handle
+   * this package gives you; optional in the type only so an object you typed
+   * as this handle before it existed still compiles.
+   */
+  hostHead?(): HTMLElement | null;
+  /**
+   * Change `host` fields on the live picker (a shallow merge): the button's
+   * words, the folded line, the given seats, the categories. A changed `host`
+   * prop does not reach a live picker, so call this instead. Does nothing
+   * while the picker is not mounted. Always present on the handle this package
+   * gives you; optional in the type only, as `hostHead`.
+   */
+  setHost?(patch: Partial<SeatPickerHostOptions>): void;
 }
 
 export interface SeatPickerProps extends Omit<SeatPickerOptions, 'container'> {
@@ -142,6 +161,7 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
       const picker = new CoreSeatPicker({
         ...options,
         container: el,
+        host: liveHost(options.host, () => callbacks.current.host),
         onCheckout: (hold, seats, handoff) => callbacks.current.onCheckout?.(hold, seats, handoff),
         onBooked: (handoff) => callbacks.current.onBooked?.(handoff),
         onSelectionChange: (seats) => callbacks.current.onSelectionChange?.(seats),
@@ -223,6 +243,8 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
         getViewMode: () => pickerRef.current?.getViewMode() ?? 'flat',
         getBuyerView: () => pickerRef.current?.getBuyerView() ?? 'map',
         setBuyerView: (view, options) => pickerRef.current?.setBuyerView(view, options),
+        hostHead: () => pickerRef.current?.hostHead() ?? null,
+        setHost: (patch) => pickerRef.current?.setHost(patch),
       }),
       [],
     );
@@ -230,3 +252,24 @@ export const SeatPicker = forwardRef<SeatPickerHandle, SeatPickerProps>(
     return <div ref={containerRef} className={className} style={style} />;
   },
 );
+
+/**
+ * The `host` prop as the picker receives it: the same fields, with its two
+ * functions read from the latest props when the picker calls them, like every
+ * other callback here. A host may pass `host={{ onPress: () => ... }}` inline;
+ * the spread alone would freeze that first arrow and its stale closure. Which
+ * functions exist is fixed at construction (the picker reads their presence),
+ * and a function the latest props no longer carry falls back to the first one.
+ * Other `host` fields change only through `setHost()`.
+ */
+function liveHost(
+  initial: SeatPickerHostOptions | undefined,
+  latest: () => SeatPickerHostOptions | undefined,
+): SeatPickerHostOptions | undefined {
+  if (!initial) return initial;
+  const { onPress, buttonWords } = initial;
+  const host: SeatPickerHostOptions = { ...initial };
+  if (onPress) host.onPress = (seats) => (latest()?.onPress ?? onPress)(seats);
+  if (buttonWords) host.buttonWords = (count) => (latest()?.buttonWords ?? buttonWords)(count);
+  return host;
+}

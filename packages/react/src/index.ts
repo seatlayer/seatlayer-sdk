@@ -19,6 +19,7 @@ export type {
   SeatPickerHandle,
   SeatPickerProps,
   SeatPickerOptions,
+  SeatPickerHostOptions,
   SeatPickerTheme,
   SeatPickerPricing,
   SeatPickerBestAvailableOptions,
@@ -38,6 +39,8 @@ export type {
   SeasonBestAvailableOptions,
   SeasonCheckoutHandoff,
   SeasonCheckoutSeat,
+  SeasonDatesCheckoutInput,
+  SeasonDatesHandoff,
   SeasonDescriptor,
   SeasonHeldOrder,
   SeasonHeldSeat,
@@ -47,6 +50,7 @@ export type {
   SeasonRenewalIntent,
   SeasonSeatPriceTypes,
   SeasonStatusEvent,
+  CheckoutSessionResult,
 } from './SeasonPicker';
 // The framework-agnostic widget class — for the one-call modal (SeatPickerWidget.open()).
 export { SeatPicker as SeatPickerWidget } from '@seatlayer/js';

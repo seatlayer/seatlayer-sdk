@@ -14,9 +14,11 @@ import {
 } from '@angular/core';
 import {
   SeasonPicker as CoreSeasonPicker,
+  type CheckoutSessionResult,
   type SeasonAvailability,
   type SeasonBestAvailableOptions,
   type SeasonCheckoutHandoff,
+  type SeasonDatesCheckoutInput,
   type SeasonDescriptor,
   type SeasonHeldOrder,
   type SeasonPickerOptions,
@@ -81,6 +83,14 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   /** The host emails a ticket per date itself: step 1 says so. */
   @Input() ticketsByEmail?: boolean;
 
+  /**
+   * Offer the Season's single dates beside the passes on a page with its own
+   * checkout or session: continuing on a dates hold emits a `continued`
+   * handoff whose `dates` names the run, the dates and the held lines; pay it
+   * with `startDatesCheckout`. Off by default. Changing it rebuilds.
+   */
+  @Input() singleDates?: boolean;
+
   /** Maximum recovery polling time. */
   @Input() recoveryTimeoutMs?: number;
 
@@ -135,7 +145,7 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   private static readonly REBUILD_INPUTS = new Set([
     'season', 'apiBase', 'publicKey', 'checkout', 'returnUrl',
     'buyerAccessTokenProvider', 'buyerAccessToken',
-    'initialOperationId', 'package', 'ticketsByEmail', 'recoveryTimeoutMs', 'fetch', 'priceTypes',
+    'initialOperationId', 'package', 'ticketsByEmail', 'singleDates', 'recoveryTimeoutMs', 'fetch', 'priceTypes',
     'enable3D', 'enable3DCrowd', 'touchNavigation3D',
   ]);
   private readonly zone = inject(NgZone);
@@ -222,6 +232,15 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
     return this.picker?.getHeldOrder() ?? null;
   }
 
+  /**
+   * Pay a single-dates hold (`singleDates`) on your own checkout page: the
+   * `continued` handoff carries `dates`. Same contract as `@seatlayer/js`
+   * `startDatesCheckout`.
+   */
+  startDatesCheckout(input: SeasonDatesCheckoutInput): Promise<CheckoutSessionResult> {
+    return this.current().startDatesCheckout(input);
+  }
+
   private build(): void {
     this.destroy();
     const inputs = this;
@@ -240,6 +259,7 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
         initialOperationId: this.initialOperationId,
         package: this.package,
         ticketsByEmail: this.ticketsByEmail,
+        singleDates: this.singleDates,
         recoveryTimeoutMs: this.recoveryTimeoutMs,
         enable3D: this.enable3D,
         enable3DCrowd: this.enable3DCrowd,

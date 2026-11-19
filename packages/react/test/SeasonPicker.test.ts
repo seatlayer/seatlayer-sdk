@@ -33,6 +33,10 @@ vi.mock('@seatlayer/js', () => ({
     getAvailability() { return { freeCount: 4 }; }
     getHandoff() { return { operationId: 'sop_1' }; }
     getHeldOrder() { return { operationId: 'sop_1', expiresAt: 1, currency: 'USD', seats: [], totalMinor: 0 }; }
+    startDatesCheckout(...args: unknown[]) {
+      calls.push({ method: 'startDatesCheckout', args });
+      return Promise.resolve({ sessionId: 'cs_1' });
+    }
   },
 }));
 
@@ -188,5 +192,33 @@ describe('@seatlayer/react SeasonPicker', () => {
     const { SeasonPicker } = await import('../src/SeasonPicker');
     await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1', releaseHoldOnDestroy: true })));
     expect(constructed[0]).toMatchObject({ season: 'sea_1', releaseHoldOnDestroy: true });
+  });
+
+  it('forwards singleDates (unset unless given), and rebuilds when it changes', async () => {
+    const { SeasonPicker } = await import('../src/SeasonPicker');
+    await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1' })));
+    expect(constructed[0]?.singleDates).toBeUndefined();
+    await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1', singleDates: true })));
+    expect(constructed).toHaveLength(2);
+    expect(constructed[1]).toMatchObject({ season: 'sea_1', singleDates: true });
+    await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1', singleDates: true })));
+    expect(constructed).toHaveLength(2);
+  });
+
+  it('forwards startDatesCheckout, and throws once the picker is unmounted, as the other holds do', async () => {
+    const { SeasonPicker } = await import('../src/SeasonPicker');
+    const ref = createRef<SeasonPickerHandle>();
+    await act(async () => root.render(createElement(SeasonPicker, { ref, season: 'sea_1', singleDates: true })));
+    const handle = ref.current!;
+    const input = { buyerEmail: 'member@example.com', buyerName: 'Asha Rao', returnUrl: 'https://tickets.example.com/done' };
+    await expect(handle.startDatesCheckout!(input)).resolves.toEqual({ sessionId: 'cs_1' });
+    expect(calls.filter((call) => call.method === 'startDatesCheckout').map((call) => call.args))
+      .toEqual([[input]]);
+
+    act(() => root.unmount());
+    expect(() => handle.startDatesCheckout!({ buyerEmail: 'member@example.com' }))
+      .toThrow('seatlayer: React SeasonPicker is not mounted');
+    expect(() => handle.holdSameSeat(['A-1'], 'sop_1'))
+      .toThrow('seatlayer: React SeasonPicker is not mounted');
   });
 });
