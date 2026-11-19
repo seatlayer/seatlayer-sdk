@@ -49,6 +49,16 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 0.117.1
+
+Nothing needs a code change, and no type or prop changed. What a buyer may now see:
+
+- **A Season's ✕ on a held seat:** where the server supports it, the seat is given back from the same hold, which keeps its expiry. Your `onHoldChange` sees the same operation with fewer seats instead of `null` and a new one.
+- **A page with `theme.mode`:** a chart whose map ground the organiser chose keeps it; template charts follow the page as before.
+- **Seats already the buyer's (`host.givenSeats`):** they wear the buyer's own colour on the map.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.117.1 as well.
+
 ## Upgrading to 0.117.0
 
 Nothing needs a code change. What a buyer may now see:
