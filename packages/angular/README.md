@@ -53,6 +53,16 @@ npm install @seatlayer/angular
 
 The component is **standalone**: import it directly, no NgModule needed.
 
+## Upgrading to 0.117.0
+
+Nothing needs a code change. What a buyer may now see:
+
+- **A free event's cart:** an amount of exactly 0 in the cart (the total, a ticket card, a standing-area line, the seat card and the table dialog) reads "Free" instead of "$0", as the price list already did. A page with its own `pricing.formatter` keeps its own words for 0.
+- **A dark page with a very dark brand colour:** the main buttons (the cart button, "Find best seats", a Season's "Choose seats") turn to stay visible: the colour's ink fills them and the colour becomes their text. Light pages and pages with no `theme.mode` are unchanged.
+- **New, opt-in:** `[singleDates]="true"` on the season picker and its `startDatesCheckout()` method, for a page with its own session or checkout. The `SeatPickerWidget` class takes the picker's `host` option, with `hostHead()` and `setHost(patch)`.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.117.0 as well.
+
 ## Upgrading to 0.116.2
 
 Nothing needs a code change, and no type or prop changed. What a buyer sees is unchanged: this release adds single dates for Season pages that supply their own session or checkout (the `singleDates` option of `@seatlayer/js`), which is off unless a page asks for it.
