@@ -3,5 +3,9 @@
   "compilerOptions": {
     "jsx": "react-jsx"
   },
-  "include": ["src", "test/SeatPickerHandle.type-test.ts"]
+  "include": [
+    "src",
+    "test/SeatPickerHandle.type-test.ts",
+    "test/SeasonPickerRelease.type-test.ts"
+  ]
 }

@@ -170,4 +170,24 @@ describe('@seatlayer/vue SeasonPicker', () => {
     expect(constructed[0]?.enable3DCrowd).toBeUndefined();
     expect(constructed[0]?.touchNavigation3D).toBeUndefined();
   });
+
+  it('forwards releaseHoldOnDestroy (off unless set), never rebuilds on it, and the picker reads the current value', async () => {
+    const release = ref<boolean | undefined>(undefined);
+    app = createApp(defineComponent({
+      setup: () => () => h(SeasonPicker, { season: 'sea_1', releaseHoldOnDestroy: release.value }),
+    }));
+    app.mount(host);
+    await nextTick();
+    expect(constructed[0]?.releaseHoldOnDestroy).toBeUndefined();
+    release.value = true;
+    await nextTick();
+    expect(constructed).toHaveLength(1);
+    expect(constructed[0]).toMatchObject({ season: 'sea_1', releaseHoldOnDestroy: true });
+    release.value = false;
+    await nextTick();
+    expect(constructed).toHaveLength(1);
+    expect(constructed[0]?.releaseHoldOnDestroy).toBe(false);
+    // One render and no destroy: the picker was never rebuilt for this option.
+    expect(calls.map((c) => c.method)).toEqual(['render']);
+  });
 });

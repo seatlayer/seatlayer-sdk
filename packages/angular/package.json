@@ -37,7 +37,7 @@
   ],
   "scripts": {
     "build": "ng-packagr -p ng-package.json && node ./check-entry-points.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.lib.json"
+    "typecheck": "tsc --noEmit -p tsconfig.lib.json && tsc -p tsconfig.type-test.json"
   },
   "dependencies": {
     "@seatlayer/core": "0.113.0",

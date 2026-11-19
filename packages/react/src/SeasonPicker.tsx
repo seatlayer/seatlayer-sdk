@@ -56,6 +56,13 @@ export interface SeasonPickerHandle {
   /** Your server booked the held seats: show booked and stop the hold clock. */
   markBooked(): Promise<boolean>;
   release(releaseActionId: string): Promise<void>;
+  /**
+   * As release(), resolving `true` when the seats were let go and `false` when
+   * nothing was held or the server kept the hold (booked, or being booked).
+   * Always present on the handle this package gives you; optional in the type
+   * only so an object you typed as this handle before it existed still compiles.
+   */
+  tryRelease?(releaseActionId: string): Promise<boolean>;
   createRenewalIntent(offerId: string): Promise<SeasonRenewalIntent>;
   getDescriptor(): SeasonDescriptor | null;
   getAvailability(): SeasonAvailability | null;
@@ -70,6 +77,20 @@ export interface SeasonPickerHandle {
 
 /** Props accepted by the React Season wrapper. */
 export interface SeasonPickerProps extends Omit<SeasonPickerOptions, 'container'> {
+  /**
+   * Release, on unmount, a hold the buyer left unfinished (`@seatlayer/js`
+   * `releaseHoldOnDestroy`). Default false: unmounting releases nothing.
+   * Changing it does not rebuild the picker; the picker reads the current value
+   * when it is destroyed.
+   *
+   * Do not turn this on if you rebuild the picker (changing props the wrapper
+   * rebuilds on: season, apiBase, publicKey, checkout, returnUrl,
+   * buyerAccessToken, initialOperationId, recoveryTimeoutMs, fetch,
+   * maxSelection, numberOfPlacesToSelect, locale, initialView, the 3D props,
+   * theme, priceTypes, package, ticketsByEmail) or hand the hold to your own
+   * checkout without onContinue.
+   */
+  releaseHoldOnDestroy?: boolean;
   className?: string;
   style?: CSSProperties;
 }
@@ -134,6 +155,8 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
         onAccessUnavailable: (event) => latest.current.onAccessUnavailable?.(event),
         onStatusChange: (event) => latest.current.onStatusChange?.(event),
         onError: (error) => latest.current.onError?.(error),
+        // Not a rebuild trigger: read from the latest props when the picker is destroyed.
+        get releaseHoldOnDestroy() { return latest.current.releaseHoldOnDestroy; },
       });
       pickerRef.current = picker;
       void picker.render().catch(() => undefined);
@@ -157,6 +180,7 @@ export const SeasonPicker = forwardRef<SeasonPickerHandle, SeasonPickerProps>(
       restoreOperation: (operationId) => required(pickerRef).restoreOperation(operationId),
       markBooked: () => required(pickerRef).markBooked(),
       release: (releaseActionId) => required(pickerRef).release(releaseActionId),
+      tryRelease: (releaseActionId) => required(pickerRef).tryRelease(releaseActionId),
       createRenewalIntent: (offerId) => required(pickerRef).createRenewalIntent(offerId),
       getDescriptor: () => pickerRef.current?.getDescriptor() ?? null,
       getAvailability: () => pickerRef.current?.getAvailability() ?? null,
