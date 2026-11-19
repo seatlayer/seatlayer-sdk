@@ -53,6 +53,25 @@ npm install @seatlayer/angular
 
 The component is **standalone**: import it directly, no NgModule needed.
 
+## Upgrading to 0.115.0
+
+Nothing needs a code change, and no type or prop changed. What a buyer may now see:
+
+- **A Season map shows the package price.** The map's hover card, its
+  screen-reader line and the price legend show the price of the package being
+  bought, not one date's ticket price. If a category has no package price, the
+  map shows no price rather than a wrong one.
+- **A Season hold that runs out says so on screen**, above the map, in one
+  sentence. On a phone the step line no longer shows a step number, and a
+  Season of several dates no longer shows only its first date in the map's
+  header.
+- **With `webMcp` on**, the browser tools load from one more small file, so
+  they register a moment later. If you serve your own copy of the CDN files,
+  copy `seatlayer-webmcp.mjs` beside `seatlayer.js`. Without it, the tools are
+  not registered (a console warning says why) and the picker works as usual.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.115.0 as well.
+
 ## Upgrading to 0.114.0
 
 No existing type or prop changed. Two additions, and what a buyer may now see.
