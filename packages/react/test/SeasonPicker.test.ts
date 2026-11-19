@@ -169,4 +169,24 @@ describe('@seatlayer/react SeasonPicker', () => {
     expect(constructed[0]?.enable3DCrowd).toBeUndefined();
     expect(constructed[0]?.touchNavigation3D).toBeUndefined();
   });
+
+  it('forwards releaseHoldOnDestroy (off unless set), never rebuilds on it, and the picker reads the latest value', async () => {
+    const { SeasonPicker } = await import('../src/SeasonPicker');
+    await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1' })));
+    expect(constructed[0]?.releaseHoldOnDestroy).toBeUndefined();
+    await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1', releaseHoldOnDestroy: true })));
+    expect(constructed).toHaveLength(1);
+    expect(constructed[0]?.releaseHoldOnDestroy).toBe(true);
+    await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1', releaseHoldOnDestroy: false })));
+    expect(constructed).toHaveLength(1);
+    expect(constructed[0]?.releaseHoldOnDestroy).toBe(false);
+    // One render and no destroy: the picker was never rebuilt for this option.
+    expect(calls.map((c) => c.method)).toEqual(['render']);
+  });
+
+  it('releaseHoldOnDestroy set from the start reaches the picker options', async () => {
+    const { SeasonPicker } = await import('../src/SeasonPicker');
+    await act(async () => root.render(createElement(SeasonPicker, { season: 'sea_1', releaseHoldOnDestroy: true })));
+    expect(constructed[0]).toMatchObject({ season: 'sea_1', releaseHoldOnDestroy: true });
+  });
 });

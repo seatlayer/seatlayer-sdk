@@ -45,6 +45,13 @@ export interface SeasonPickerExposed {
   /** Your server booked the held seats: show booked and stop the hold clock. */
   markBooked(): Promise<boolean>;
   release(releaseActionId: string): Promise<void>;
+  /**
+   * As release(), resolving `true` when the seats were let go and `false` when
+   * nothing was held or the server kept the hold (booked, or being booked).
+   * Always present on the handle this package gives you; optional in the type
+   * only so an object you typed as this handle before it existed still compiles.
+   */
+  tryRelease?(releaseActionId: string): Promise<boolean>;
   createRenewalIntent(offerId: string): Promise<SeasonRenewalIntent>;
   getDescriptor(): SeasonDescriptor | null;
   getAvailability(): SeasonAvailability | null;
@@ -80,6 +87,20 @@ export const SeasonPicker = defineComponent({
       default: undefined,
     },
     initialOperationId: { type: String, default: undefined },
+    /**
+     * Release, on unmount, a hold the buyer left unfinished (`@seatlayer/js`
+     * `releaseHoldOnDestroy`). Default false: unmounting releases nothing.
+     * Changing it does not rebuild the picker; the picker reads the current
+     * value when it is destroyed.
+     *
+     * Do not turn this on if you rebuild the picker (changing props the
+     * wrapper rebuilds on: season, apiBase, publicKey, checkout, returnUrl,
+     * buyerAccessTokenProvider (by identity), buyerAccessToken,
+     * initialOperationId, package, ticketsByEmail, recoveryTimeoutMs, the 3D
+     * props, fetch (by identity), priceTypes) or hand the hold to your own
+     * checkout without the continue event.
+     */
+    releaseHoldOnDestroy: { type: Boolean, default: undefined },
     /** The package to open on, by its key; the first package without it. */
     package: { type: String, default: undefined },
     /** The host emails a ticket per date itself: step 1 says so. */
@@ -160,6 +181,8 @@ export const SeasonPicker = defineComponent({
         onOrderConfirmed: (order) => emit('order-confirmed', order),
         onStatusChange: (event) => emit('status-change', event),
         onError: (error) => emit('error', error),
+        // Not a rebuild trigger: read from the current prop when the picker is destroyed.
+        get releaseHoldOnDestroy() { return props.releaseHoldOnDestroy; },
       });
       picker.value = instance;
       void instance.render().catch(() => undefined);
@@ -200,6 +223,7 @@ export const SeasonPicker = defineComponent({
       restoreOperation: (operationId) => current().restoreOperation(operationId),
       markBooked: () => current().markBooked(),
       release: (releaseActionId) => current().release(releaseActionId),
+      tryRelease: (releaseActionId) => current().tryRelease(releaseActionId),
       createRenewalIntent: (offerId) => current().createRenewalIntent(offerId),
       getDescriptor: () => picker.value?.getDescriptor() ?? null,
       getAvailability: () => picker.value?.getAvailability() ?? null,

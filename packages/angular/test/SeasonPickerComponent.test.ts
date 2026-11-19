@@ -154,4 +154,20 @@ describe('@seatlayer/angular SeasonPicker', () => {
     expect(state.constructed[0]?.enable3DCrowd).toBeUndefined();
     expect(state.constructed[0]?.touchNavigation3D).toBeUndefined();
   });
+
+  it('forwards releaseHoldOnDestroy (off unless set), never rebuilds on it, and the picker reads the current input', async () => {
+    const value = await makeComponent();
+    value.ngOnChanges({ season: { currentValue: 'sea_1' } });
+    expect(state.constructed[0]?.releaseHoldOnDestroy).toBeUndefined();
+    value.releaseHoldOnDestroy = true;
+    value.ngOnChanges({ releaseHoldOnDestroy: { currentValue: true } });
+    expect(state.constructed).toHaveLength(1);
+    expect(state.constructed[0]).toMatchObject({ season: 'sea_1', releaseHoldOnDestroy: true });
+    value.releaseHoldOnDestroy = false;
+    value.ngOnChanges({ releaseHoldOnDestroy: { currentValue: false } });
+    expect(state.constructed).toHaveLength(1);
+    expect(state.constructed[0]?.releaseHoldOnDestroy).toBe(false);
+    // One render and no destroy: the picker was never rebuilt for this option.
+    expect(state.calls.map((c) => c.method)).toEqual(['render']);
+  });
 });

@@ -63,6 +63,18 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   /** Operation restored after an uncertain create response. */
   @Input() initialOperationId?: string;
 
+  /**
+   * Release, on destroy, a hold the buyer left unfinished (`@seatlayer/js`
+   * `releaseHoldOnDestroy`). Default false: destroying the component releases
+   * nothing. Not in REBUILD_INPUTS: changing it does not rebuild the picker,
+   * which reads the current value when it is destroyed.
+   *
+   * Do not turn this on if you rebuild the picker (changing inputs the
+   * component rebuilds on, REBUILD_INPUTS) or hand the hold to your own
+   * checkout without the `continued` output.
+   */
+  @Input() releaseHoldOnDestroy?: boolean;
+
   /** The package to open on, by its key; the first package without it. */
   @Input() package?: string;
 
@@ -176,6 +188,11 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
     return this.current().release(releaseActionId);
   }
 
+  /** As release(), resolving true when the seats were let go, false when nothing was held or the server kept the hold. */
+  tryRelease(releaseActionId: string): Promise<boolean> {
+    return this.current().tryRelease(releaseActionId);
+  }
+
   /** Records renewal intent; trusted server code still inspects and commits it. */
   createRenewalIntent(offerId: string): Promise<SeasonRenewalIntent> {
     return this.current().createRenewalIntent(offerId);
@@ -207,6 +224,7 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
 
   private build(): void {
     this.destroy();
+    const inputs = this;
     this.zone.runOutsideAngular(() => {
       const picker = new CoreSeasonPicker({
         container: this.container.nativeElement,
@@ -237,6 +255,8 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
         onOrderConfirmed: (value) => this.zone.run(() => this.orderConfirmed.emit(value)),
         onStatusChange: (value) => this.zone.run(() => this.statusChange.emit(value)),
         onError: (value) => this.zone.run(() => this.errored.emit(value)),
+        // Not a rebuild input: read from the current input when the picker is destroyed.
+        get releaseHoldOnDestroy() { return inputs.releaseHoldOnDestroy; },
       });
       this.picker = picker;
       void picker.render().catch(() => undefined);

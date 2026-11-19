@@ -53,6 +53,37 @@ npm install @seatlayer/angular
 
 The component is **standalone**: import it directly, no NgModule needed.
 
+## Upgrading to 0.114.0
+
+No existing type or prop changed. Two additions, and what a buyer may now see.
+
+New on `SeasonPicker`:
+- `tryRelease(releaseActionId)` on the `seatlayer-season-picker` component resolves `true` when the seats were
+  let go and `false` when nothing was held or the server kept them. It never
+  rejects for a failed release; `release()` stays as it was.
+- a `releaseHoldOnDestroy` input (default `false`). When true, destroying the component releases a hold the buyer left
+  unfinished. A hold that was continued, handed off, restored, booked or kept
+  is never released. It is off by default because hosts that rebuild the
+  picker, or hand the hold to their own checkout, rely on the hold surviving.
+
+What changes without asking for it:
+- **A short server stall heals on its own in more places.** A read of the map,
+  its availability or an order's status that meets a `503` with
+  `retryable: true` is sent again (at most three times, 2, 4 and 8 seconds
+  apart, at least the server's `Retry-After`), so it may resolve up to about
+  14 seconds later instead of failing at once. A busy Season is tried again
+  for up to 7 seconds before its error. Writes are never resent.
+- **A Season release says what really happened.** A release the server refuses
+  no longer announces that the seats were released, and the buyer stays on the
+  map. A release that ends booked or expired reports once through `onError`.
+  When the picker had to send the release itself, `release()` then rejects
+  with that error (`SeasonApiError`, code `season_already_booked` or
+  `hold_not_active`) where it used to resolve; `tryRelease()` answers `false`.
+- **A `release()` just before the picker is destroyed now reaches the server.**
+  Before, it could be dropped unsent.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.114.0 as well.
+
 ## Upgrading to 0.113.0
 
 Nothing needs a code change, and no type changed. What a buyer sees:
