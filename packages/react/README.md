@@ -54,6 +54,18 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 0.117.3
+
+Nothing needs a code change, and no type, prop or string changed. What a buyer may now see, **on a phone only** (the picker's narrow layout, under 640 px wide; a computer is unchanged):
+
+- **The cart is one row** (64 px): an arrow, the count and total over the chosen seats, and the main button on the right. It was a round handle over the map, a count line and a full-width button. A tap on the row opens the ticket list; a swipe on it climbs or drops one step, as before.
+- **If your CSS or tests query the old handle:** `.sl-sheet-head` and `.sl-sheet-toggle` no longer exist; use `.sl-foot .sl-cart-chev` (same labels and `aria-expanded`). Read the count and total with `[data-ref=count]` and `[data-ref=total]`, not `.sl-total > span` / `> b`.
+- **`host.foldedLine`** shows as the row's second line while nothing is chosen, instead of floating over the map.
+- **The Test mode chip** sits in the map's top row, as on a computer.
+- **A closed, invite-only or read-only picker** shows its words in the row and no dead button.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.117.3 as well.
+
 ## Upgrading to 0.117.2
 
 Nothing needs a code change. What a buyer may now see:
