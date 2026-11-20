@@ -106,7 +106,7 @@ export const SeasonPicker = defineComponent({
      * Do not turn this on if you rebuild the picker (changing props the
      * wrapper rebuilds on: season, apiBase, publicKey, checkout, returnUrl,
      * buyerAccessTokenProvider (by identity), buyerAccessToken,
-     * initialOperationId, package, ticketsByEmail, singleDates,
+     * initialOperationId, package, ticketsByEmail, singleDates, followOpening,
      * recoveryTimeoutMs, the 3D props, fetch (by identity), priceTypes) or
      * hand the hold to your own
      * checkout without the continue event.
@@ -123,6 +123,12 @@ export const SeasonPicker = defineComponent({
      * `startDatesCheckout`. Off by default. Changing it rebuilds.
      */
     singleDates: { type: Boolean, default: undefined },
+    /**
+     * Open on what the Season's page opens with: the map, the passes, or its
+     * dates first (where single dates are offered; else the passes). Off by
+     * default: the package step, as before. Changing it rebuilds.
+     */
+    followOpening: { type: Boolean, default: undefined },
     recoveryTimeoutMs: { type: Number, default: undefined },
     /** Offer the 3D venue view (default true). Changing it rebuilds. */
     enable3D: { type: Boolean, default: undefined },
@@ -185,6 +191,7 @@ export const SeasonPicker = defineComponent({
         package: props.package,
         ticketsByEmail: props.ticketsByEmail,
         singleDates: props.singleDates,
+        followOpening: props.followOpening,
         recoveryTimeoutMs: props.recoveryTimeoutMs,
         enable3D: props.enable3D,
         enable3DCrowd: props.enable3DCrowd,
@@ -221,6 +228,7 @@ export const SeasonPicker = defineComponent({
         props.package,
         props.ticketsByEmail,
         props.singleDates,
+        props.followOpening,
         props.recoveryTimeoutMs,
         props.enable3D,
         props.enable3DCrowd,

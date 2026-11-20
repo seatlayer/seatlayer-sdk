@@ -22,6 +22,7 @@ export type SeasonPickerReleaseContract = [
     (input: SeasonDatesCheckoutInput) => Promise<CheckoutSessionResult>
   >>,
   Assert<Equal<SeatLayerSeasonPickerComponent['singleDates'], boolean | undefined>>,
+  Assert<Equal<SeatLayerSeasonPickerComponent['followOpening'], boolean | undefined>>,
 ];
 
 declare const component: SeatLayerSeasonPickerComponent;
