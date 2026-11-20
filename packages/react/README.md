@@ -54,6 +54,17 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 0.117.2
+
+Nothing needs a code change. What a buyer may now see:
+
+- **Prices of exactly 0 read "Free"** in the seat card, the map's hover card and loupe, the screen-reader line and the map's zone labels (a zone with any paid place still reads "From <price>"). A range starting at 0 reads "Free–€20", as the price list does. A paid price and your own `pricing.formatter` are unchanged.
+- **The screen-reader line for a focused seat** names its block, row and seat, as the cart does.
+- **With the `host` option:** what it draws (the head, the folded line, the given-seat cards) loads as a separate chunk on first render; the picker waits for it (at most 4 s), so `hostHead()` is ready once it has rendered, as before. `host.categories` also limits the "Find seats together" card. If that chunk cannot load, `onError` hears `host_parts_unavailable` and the picker keeps working without those parts.
+- **New, opt-in:** `host.closedNotice: false` (a closed or read-only picker stops saying sales are closed) and `host.titleRow: false` (hides the logo and event name under your own bar).
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.117.2 as well.
+
 ## Upgrading to 0.117.1
 
 Nothing needs a code change, and no type or prop changed. What a buyer may now see:
