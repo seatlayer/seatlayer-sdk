@@ -49,6 +49,20 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 0.118.0
+
+Nothing needs a code change. What a buyer may now see, in the Season picker unless named:
+
+- **Step 1 in the buyer's language** from its first frame, not only once the map loads. An Arabic step 1 is right to left from the start.
+- **"Change package?"**: Escape keeps the seats, as "Keep my seats" does, and Tab stays inside the prompt.
+- **A package card that failed to load** can be pressed again, and the package that was on screen comes back chosen.
+- **Single dates' times** on a 12-hour clock read "7:30 PM" (was "07:30 PM"). With `theme.mode`, a dark picker's date ticks are dark.
+- **The phone cart names a table once** ("FLEX-8", was "FLEX-8-FLEX-8"), in every picker.
+- **If you pay single dates yourself (`singleDates`):** a handoff that carries `dates` now has `planActivationId: ''`, because the hold is the run's. Read `handoff.dates` as before.
+- **New, opt-in: `followOpening`.** The Season picker opens on what the Season's page opens with: the map, the passes, or its dates first with the passes as set chips (where single dates are offered; otherwise the passes). Off by default: every Season opens on the package step, as before.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.118.0 as well.
+
 ## Upgrading to 0.117.3
 
 Nothing needs a code change, and no type, prop or string changed. What a buyer may now see, **on a phone only** (the picker's narrow layout, under 640 px wide; a computer is unchanged):
