@@ -91,6 +91,13 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
    */
   @Input() singleDates?: boolean;
 
+  /**
+   * Open on what the Season's page opens with: the map, the passes, or its
+   * dates first (where single dates are offered; else the passes). Off by
+   * default: the package step, as before. Changing it rebuilds.
+   */
+  @Input() followOpening?: boolean;
+
   /** Maximum recovery polling time. */
   @Input() recoveryTimeoutMs?: number;
 
@@ -145,7 +152,7 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
   private static readonly REBUILD_INPUTS = new Set([
     'season', 'apiBase', 'publicKey', 'checkout', 'returnUrl',
     'buyerAccessTokenProvider', 'buyerAccessToken',
-    'initialOperationId', 'package', 'ticketsByEmail', 'singleDates', 'recoveryTimeoutMs', 'fetch', 'priceTypes',
+    'initialOperationId', 'package', 'ticketsByEmail', 'singleDates', 'followOpening', 'recoveryTimeoutMs', 'fetch', 'priceTypes',
     'enable3D', 'enable3DCrowd', 'touchNavigation3D',
   ]);
   private readonly zone = inject(NgZone);
@@ -260,6 +267,7 @@ export class SeatLayerSeasonPickerComponent implements OnChanges {
         package: this.package,
         ticketsByEmail: this.ticketsByEmail,
         singleDates: this.singleDates,
+        followOpening: this.followOpening,
         recoveryTimeoutMs: this.recoveryTimeoutMs,
         enable3D: this.enable3D,
         enable3DCrowd: this.enable3DCrowd,

@@ -209,6 +209,20 @@ describe('@seatlayer/vue SeasonPicker', () => {
     expect(constructed[1]).toMatchObject({ season: 'sea_1', singleDates: true });
   });
 
+  it('forwards followOpening (unset unless given), and rebuilds when it changes', async () => {
+    const follow = ref<boolean | undefined>(undefined);
+    app = createApp(defineComponent({
+      setup: () => () => h(SeasonPicker, { season: 'sea_1', followOpening: follow.value }),
+    }));
+    app.mount(host);
+    await nextTick();
+    expect(constructed[0]?.followOpening).toBeUndefined();
+    follow.value = true;
+    await nextTick();
+    expect(constructed).toHaveLength(2);
+    expect(constructed[1]).toMatchObject({ season: 'sea_1', followOpening: true });
+  });
+
   it('exposes startDatesCheckout, and throws once the picker is unmounted, as the other holds do', async () => {
     const exposed = ref<SeasonPickerExposed | null>(null);
     app = createApp(defineComponent({

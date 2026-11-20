@@ -186,6 +186,16 @@ describe('@seatlayer/angular SeasonPicker', () => {
     expect(state.constructed[1]).toMatchObject({ season: 'sea_1', singleDates: true });
   });
 
+  it('forwards followOpening (unset unless given), and rebuilds when it changes', async () => {
+    const value = await makeComponent();
+    value.ngOnChanges({ season: { currentValue: 'sea_1' } });
+    expect(state.constructed[0]?.followOpening).toBeUndefined();
+    value.followOpening = true;
+    value.ngOnChanges({ followOpening: { currentValue: true } });
+    expect(state.constructed).toHaveLength(2);
+    expect(state.constructed[1]).toMatchObject({ season: 'sea_1', followOpening: true });
+  });
+
   it('delegates startDatesCheckout, and throws before the picker exists, as the other holds do', async () => {
     const value = await makeComponent();
     expect(() => value.startDatesCheckout({ buyerEmail: 'member@example.com' }))
