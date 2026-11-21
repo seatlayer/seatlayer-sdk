@@ -49,6 +49,15 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 0.118.2
+
+Nothing needs a code change. What a buyer may now see:
+
+- **`initialReads` when the API doesn't answer:** a read your page started through `PubApi` that failed after `PubApi`'s own resends now fails in the picker at once, so the buyer gets the panel and its Try again without waiting through the same resends a second time. A read your page made with a single `fetch` is still read again. Nothing else changes.
+- **Not here yet, as in 0.118.1:** `testChip`, `telemetry` and `theme.modeMap` are not props of these components.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.118.2 as well.
+
 ## Upgrading to 0.118.1
 
 Nothing needs a code change. What a buyer may now see:
