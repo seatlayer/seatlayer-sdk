@@ -54,6 +54,22 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 0.118.1
+
+Nothing needs a code change. What a buyer may now see:
+
+- **Season date lists in the buyer's language:** the language's own separator, the month said once where the language puts it, and the weekday where the language says it before the day ("Wed Aug 4, Thu 5, Sun 8" in US English, "Wed 4, Thu 5, Sun 8 Aug" in British English).
+- **A Season range in one year** says the year once ("1 Feb to 8 Feb 2027"). A range never breaks inside a date.
+- **An event free throughout** names its categories on the price rail and in the panel ("Floor", "Balcony"), not "Free" for each.
+- **An invite-only event** says "Invited guests only" once: the head pill goes while the phone's cart row or the computer's tray card says it.
+- **New, opt-in, on `SeatPicker` and `SeasonPicker`** (both pass every option through):
+  - `host: { testChip: false }` on `SeatPicker`, or `testChip={false}` on `SeasonPicker`: hides the map's Test mode chip on a test event, for a page that says test mode itself.
+  - `telemetry={false}`: the page sends SeatLayer no load or error reports. `SeatingChart` takes it in the next patch.
+  - `theme.modeMap`: the map ground a `theme.mode` paints, per side, for a page whose own ground differs.
+  - `initialReads` on `SeatPicker`: the picker's first chart, seat and availability reads, answered from ones your page already started with the buyer's session.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.118.1 as well.
+
 ## Upgrading to 0.118.0
 
 Nothing needs a code change. What a buyer may now see, in the Season picker unless named:
