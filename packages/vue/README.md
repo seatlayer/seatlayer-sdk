@@ -49,6 +49,18 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 0.118.1
+
+Nothing needs a code change. What a buyer may now see:
+
+- **Season date lists in the buyer's language:** the language's own separator, the month said once where the language puts it, and the weekday where the language says it before the day ("Wed Aug 4, Thu 5, Sun 8" in US English, "Wed 4, Thu 5, Sun 8 Aug" in British English).
+- **A Season range in one year** says the year once ("1 Feb to 8 Feb 2027"). A range never breaks inside a date.
+- **An event free throughout** names its categories on the price rail and in the panel ("Floor", "Balcony"), not "Free" for each.
+- **An invite-only event** says "Invited guests only" once: the head pill goes while the phone's cart row or the computer's tray card says it.
+- **Not here yet:** `@seatlayer/js` 0.118.1's new opt-in options (`testChip`, `telemetry`, `theme.modeMap`) are not props of these components. They come in the next patch.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.118.1 as well.
+
 ## Upgrading to 0.118.0
 
 Nothing needs a code change. What a buyer may now see, in the Season picker unless named:
