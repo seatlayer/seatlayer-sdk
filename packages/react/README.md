@@ -54,6 +54,17 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 0.119.1
+
+Nothing needs a code change. What a buyer may now see:
+
+- **Calmer seat cards and right panel:** each card sits on the panel's own background with a hairline, the tier's colour is a small dot beside the ticket type, and a held card says "Held" under its price. On a computer the panel's spacing and controls are on one scale.
+- **On a phone, the cart row's fee words lead its second line:** line 1 is the count and the total, and line 2 starts with "includes booking fee · " before the seats.
+- **The map's Test mode chip in full screen:** with `host.testChip: false`, the chip shows again while the map is in full screen, where the host's own bar is off the screen.
+- **A stylesheet that targets `.sl-chip-dot` or `.sl-ticket-state svg`** no longer matches anything: those elements are gone.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.119.1 as well.
+
 ## Upgrading to 0.119.0
 
 Nothing needs a code change. What a buyer may now see:
