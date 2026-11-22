@@ -54,6 +54,17 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 0.119.0
+
+Nothing needs a code change. What a buyer may now see:
+
+- **The booking fee in the Season picker's price lines**, when the organiser set one: "includes £1.50 booking fee" under a date's from-price and a pass chip's price, the ticked single dates' fees added up, and on the pass's map the strip's "· includes £2 booking fee" and one line in the prices panel.
+- **No Best Available card on single dates:** their hold is the run's, which has no Best Available.
+- **The checkout confirmation in plain words:** "We’ve emailed your tickets."
+- **New in `@seatlayer/js`:** `SeasonPicker.datesCodeCall()`, a code function for held single dates, for a page that draws its own checkout card. `SeasonPickerHandle` doesn't expose it yet; use `@seatlayer/js` for it.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 0.119.0 as well.
+
 ## Upgrading to 0.118.2
 
 Nothing needs a code change. What a buyer may now see:
