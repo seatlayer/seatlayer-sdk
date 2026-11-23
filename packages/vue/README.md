@@ -49,6 +49,18 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 1.0.0
+
+Nothing needs a code change. What a buyer may now see:
+
+- **One seat card for a run and a Season:** on a run, a seat opens a card with the run's dates. The buyer ticks dates, and the button counts and totals them, with the booking fee once per seat. On a Season's pass map that sells single dates, a free seat's card lists the open dates.
+- **The cart's levels:** on a chart with two or more levels, each level button counts its cart lines, a cart line names its level, and a tap on it opens that level.
+- **The Held clock in the map's toolbar row** when the host hides the title row.
+- **A Season or run hold stays live** when the buyer comes back to the tab.
+- **The Season picker's status line and the 3D seat card's profile chip in the buyer's language.** The `season.status` event's `message` follows the page's language too: decide on `kind`, never on `message`.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 1.0.0 as well.
+
 ## Upgrading to 0.119.1
 
 Nothing needs a code change. What a buyer may now see:
