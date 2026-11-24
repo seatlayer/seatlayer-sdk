@@ -54,6 +54,20 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 1.0.2
+
+Nothing needs a code change. What a buyer or an organizer may now see:
+
+- **Moving the map over a standing area** no longer opens its number. A tap still does.
+- **Standing areas, live:** on a page with a publishable key or a buyer token, the number left follows live sales.
+- **Whole map:** the outermost seats are drawn whole. The right column and the last row could lose a slice.
+- **Control room, standing areas:** Block and Reserve pick a standing area and how many of its places. Find blocked and Release give back some of them. `block()` takes a standing area's labels.
+- **Control room, tables:** a table sold as one counts as 1 table, by its name, in Block, Reserve, the live line and Live activity.
+- **Control room on a phone:** at its lowest the sheet is one line.
+- **Season, in other languages:** the line a screen reader says about free seats is in the buyer's language.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 1.0.2 as well.
+
 ## Upgrading to 1.0.1
 
 Nothing needs a code change. What a buyer may now see:

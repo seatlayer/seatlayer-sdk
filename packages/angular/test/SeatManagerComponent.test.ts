@@ -328,12 +328,12 @@ describe('Angular SeatManager inputs', () => {
     await expect(component.getReport()).rejects.toThrow('not ready');
   });
 
-  it('forwards the organisation name at mount (CR16)', () => {
+  it('forwards the organisation name at mount', () => {
     mount({ eventKey: 'ev_1', token: 'mse', organizationName: 'Jazz Nights Ltd' });
     expect(instances[0]!.options.organizationName).toBe('Jazz Nights Ltd');
   });
 
-  it('passes the sale facts at mount and changes them in place, by value (CR18)', () => {
+  it('passes the sale facts at mount and changes them in place, by value', () => {
     const component = mount({ eventKey: 'ev_1', token: 'mse', sale: { status: 'On sale', pageUrl: 'https://x.test/e' } });
     const instance = instances[0]!;
     expect(instance.options.sale).toEqual({ status: 'On sale', pageUrl: 'https://x.test/e' });
@@ -345,7 +345,7 @@ describe('Angular SeatManager inputs', () => {
     expect(instances).toHaveLength(1);
   });
 
-  it('passes the host’s map insets at mount and changes them in place, by value (CR18)', () => {
+  it('passes the host’s map insets at mount and changes them in place, by value', () => {
     const component = mount({ eventKey: 'ev_1', token: 'mse', mapInsets: { bottom: 124 } });
     const instance = instances[0]!;
     expect(instance.options.mapInsets).toEqual({ bottom: 124 });
