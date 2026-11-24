@@ -269,12 +269,12 @@ describe('Vue SeatManager reactive props', () => {
     expect(view.instance().options.onOpenTrend).toBeUndefined();
   });
 
-  it('forwards the organisation name at mount (CR16)', async () => {
+  it('forwards the organisation name at mount', async () => {
     const view = await mount({ eventKey: 'ev_1', token: 'mse', organizationName: 'Jazz Nights Ltd' });
     expect(view.instance().options.organizationName).toBe('Jazz Nights Ltd');
   });
 
-  it('passes the sale facts at mount and changes them in place, by value (CR18)', async () => {
+  it('passes the sale facts at mount and changes them in place, by value', async () => {
     const view = await mount({ eventKey: 'ev_1', token: 'mse', sale: { status: 'On sale', pageUrl: 'https://x.test/e' } });
     const instance = view.instance();
     expect(instance.options.sale).toEqual({ status: 'On sale', pageUrl: 'https://x.test/e' });
@@ -286,7 +286,7 @@ describe('Vue SeatManager reactive props', () => {
     expect(instances).toHaveLength(1);
   });
 
-  it('passes the host’s map insets at mount and changes them in place, by value (CR18)', async () => {
+  it('passes the host’s map insets at mount and changes them in place, by value', async () => {
     const view = await mount({ eventKey: 'ev_1', token: 'mse', mapInsets: { bottom: 124 } });
     const instance = view.instance();
     expect(instance.options.mapInsets).toEqual({ bottom: 124 });

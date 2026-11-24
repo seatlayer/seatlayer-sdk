@@ -262,7 +262,7 @@ describe('SeatManager reactive props', () => {
     expect(instances[0]!.options.onOpenOrder).toBeUndefined();
   });
 
-  it('forwards the organisation name at mount (CR16)', async () => {
+  it('forwards the organisation name at mount', async () => {
     const { SeatManager } = await import('../src/SeatManager');
     await act(async () => {
       root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse', organizationName: 'Jazz Nights Ltd' }));
@@ -270,7 +270,7 @@ describe('SeatManager reactive props', () => {
     expect(instances[0]!.options.organizationName).toBe('Jazz Nights Ltd');
   });
 
-  it('passes the sale facts at mount and changes them in place, by value (CR18)', async () => {
+  it('passes the sale facts at mount and changes them in place, by value', async () => {
     const { SeatManager } = await import('../src/SeatManager');
     await act(async () => {
       root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse', sale: { status: 'On sale', pageUrl: 'https://x.test/e' } }));
@@ -290,7 +290,7 @@ describe('SeatManager reactive props', () => {
     expect(instances).toHaveLength(1);
   });
 
-  it('passes the host’s map insets at mount and changes them in place, by value (CR18)', async () => {
+  it('passes the host’s map insets at mount and changes them in place, by value', async () => {
     const { SeatManager } = await import('../src/SeatManager');
     await act(async () => {
       root.render(createElement(SeatManager, { eventKey: 'ev_1', token: 'mse', mapInsets: { bottom: 124 } }));
@@ -326,7 +326,7 @@ describe('SeatManager reactive props', () => {
     expect(instances[0]!.options.tools).toEqual(['view', 'block', 'categories']);
   });
 
-  it('hands the Closed seats and the channel words to the cockpit through the handle (CR26)', async () => {
+  it('hands the Closed seats and the channel words to the cockpit through the handle', async () => {
     const { SeatManager } = await import('../src/SeatManager');
     const { createRef } = await import('react');
     const ref = createRef<import('../src/SeatManager').SeatManagerHandle>();

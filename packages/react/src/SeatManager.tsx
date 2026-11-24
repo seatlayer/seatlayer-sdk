@@ -106,11 +106,11 @@ export interface SeatManagerHandle {
    */
   getConnection(): SeatManagerConnection | null;
   zoomToFit(): void;
-  /** Light these seats and frame them, named in the legend; null clears (CR18). */
+  /** Light these seats and frame them, named in the legend; null clears. */
   showObjects(labels: readonly string[] | null, name?: string): void;
-  /** The Closed seats, drawn hollow with "Not for sale" on their card; [] clears (CR26). */
+  /** The Closed seats, drawn hollow with "Not for sale" on their card; [] clears. */
   setClosedObjects(labels: readonly string[]): void;
-  /** The legend's channel line and each seat's channel name, from the event's own channels (CR26). */
+  /** The legend's channel line and each seat's channel name, from the event's own channels. */
   setChannelSeats(seats: SeatManagerOptions['channelSeats']): void;
 }
 
@@ -175,22 +175,22 @@ export const SeatManager = forwardRef<SeatManagerHandle, SeatManagerProps>(
         // `minimal` = just the map (a host with its own search, totals and
         // actions). Read once at mount, like `tools`.
         chrome,
-        // false when the host shows the numbers in its own header (CR04). Read once at mount.
+        // false when the host shows the numbers in its own header. Read once at mount.
         kpis,
-        // The event's clock for every time the room shows (audit M8). Read once at mount.
+        // The event's clock for every time the room shows. Read once at mount.
         timeZone,
-        // "Ask an admin of <organisation>" (CR16). Read once at mount.
+        // "Ask an admin of <organisation>". Read once at mount.
         organizationName: callbacks.current.organizationName,
-        // The host's sale facts (CR18); updated in place below.
+        // The host's sale facts; updated in place below.
         sale: callbacks.current.sale,
-        // The host's overlays over the map (CR18 resale strip); updated in place below.
+        // The host's overlays over the map; updated in place below.
         mapInsets: callbacks.current.mapInsets,
         theme: callbacks.current.theme,
         // Light / dark / follow the operator's own preference. Applied before
         // first paint so a cockpit asked for light never flashes the war-room
         // dark on the way in.
         themeMode: callbacks.current.themeMode,
-        // Where a link opens the room (board CR24): read once at mount, like `mode`.
+        // Where a link opens the room: read once at mount, like `mode`.
         colourBy: callbacks.current.colourBy,
         focusSection: callbacks.current.focusSection,
         focusSeat: callbacks.current.focusSeat,
