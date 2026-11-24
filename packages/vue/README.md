@@ -49,6 +49,20 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 1.0.1
+
+Nothing needs a code change. What a buyer may now see:
+
+- **No "Sold out" over a buyer's own seats:** a buyer who holds the last places keeps their map, also after a reload. Anyone else still sees the sold-out cover.
+- **White text on mid-tone accents:** text on the accent is the chart's own ink where it reads at 3:1, else white where white reads at 3:1, else near-black. `theme.accentInk` is taken as it is. The "Select them again" button and the immersive view follow the same rule.
+- **In the buyer's language:** the price filter in the side panel follows the event's language, and the payment card counts seats with the language's own plural.
+- **A chair sold on its own at a table** reads "Table", not "Row", on the payment card and in the 3D view.
+- **Standing tickets read the area's name**, in the phone cart, in the picker's messages and in the Control room's search.
+- **Control room, whole and flexible tables:** Block, Reserve, Undo, Release, put-back times, saved selections, ticket types and channels now work on them. Picking one chair picks its table, and every count is in seats.
+- **Run and Season pages need https, or localhost when you test:** on a plain `http://` address a browser has no `crypto.randomUUID`, and a hold can't start.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 1.0.1 as well.
+
 ## Upgrading to 1.0.0
 
 Nothing needs a code change. What a buyer may now see:
