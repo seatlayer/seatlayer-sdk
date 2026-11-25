@@ -54,6 +54,15 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 1.0.3
+
+Nothing needs a code change. What a buyer may now see:
+
+- **Standing areas:** the Areas row and an open number box follow live sales, as the map does. A choice larger than what is left is lowered to it.
+- **All levels view:** names placed by hand and rows drawn on a curve stay with their level, and a level's code sits in the middle of its ring.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 1.0.3 as well.
+
 ## Upgrading to 1.0.2
 
 Nothing needs a code change. What a buyer or an organizer may now see:
