@@ -49,6 +49,19 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 1.0.4
+
+Nothing needs a code change. What a buyer may now see:
+
+- **Runs sold date by date, and Season tickets by date:** the map says "Sold out" only when no seat can be booked on any date. On a Season's single dates a seat free on some of the chosen dates is half-coloured too. Its card lists only dates that were checked, and the button names the price, for example "Book 1 date · €23".
+- **A hold that gets no answer** ends after 40 seconds with "Check your connection and try again." The seats stay picked, and on an event or a Season the next press gets the hold the server may have made. A server error no longer says that the seats were taken. `onError` can now come 40 seconds after a hold was sent, with an `AbortError`.
+- **Phone held sideways:** the top of the seat card (section, row, seat and price) is no longer cut.
+- **Show whole venue, levels and sections** while a seat card is open show the map. It could stand empty.
+- **The Seats button** lands where a seat can be pressed.
+- **Test mode:** the badge says "Test mode" and nothing more.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 1.0.4 as well.
+
 ## Upgrading to 1.0.3
 
 Nothing needs a code change. What a buyer may now see:
