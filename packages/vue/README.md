@@ -49,6 +49,15 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 1.0.5
+
+Nothing needs a code change. What a buyer may now see:
+
+- **Standing areas after a theme or language change** keep their live count, for example "48 left". They showed the area's capacity until the next sale.
+- **A pressed seat card** that would stand under the edge of the window is scrolled into view.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 1.0.5 as well.
+
 ## Upgrading to 1.0.4
 
 Nothing needs a code change. What a buyer may now see:
