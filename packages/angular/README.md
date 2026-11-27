@@ -53,6 +53,16 @@ npm install @seatlayer/angular
 
 The component is **standalone**: import it directly, no NgModule needed.
 
+## Upgrading to 1.0.7
+
+Nothing needs a code change. What a buyer may now see:
+
+- **A connection line over the map** when the network drops ("You're offline", with "Your seats are still held." while a hold has time left), while the map catches up ("Updating…", then "Back online"), and when a press has no answer after 10 seconds.
+- **"+" stays live on a wide map** until seat numbers show.
+- **Screen readers** read the two ⓘ buttons and the display options button in the page's language.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 1.0.7 as well.
+
 ## Upgrading to 1.0.6
 
 Nothing needs a code change. What a buyer may now see:
