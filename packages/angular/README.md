@@ -53,6 +53,15 @@ npm install @seatlayer/angular
 
 The component is **standalone**: import it directly, no NgModule needed.
 
+## Upgrading to 1.0.6
+
+Nothing needs a code change. What a buyer may now see:
+
+- **A seat selected from your code on another level** is in the cart at once, without the buyer opening that level first.
+- **On a phone, a venue with levels** uses the full width of the map, and the level buttons never cover seats.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 1.0.6 as well.
+
 ## Upgrading to 1.0.5
 
 Nothing needs a code change. What a buyer may now see:
