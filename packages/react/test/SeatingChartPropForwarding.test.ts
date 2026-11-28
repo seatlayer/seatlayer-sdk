@@ -19,6 +19,9 @@ vi.mock('@seatlayer/js', async () => ({
   },
 }));
 
+/** The added callbacks the chart calls without an argument. */
+const VOID_CALLBACKS = new Set(['onStatusChange', 'onSalesClosed', 'onViewChange', 'onMapStateChange']);
+
 let container: HTMLDivElement;
 let root: Root;
 
@@ -103,5 +106,39 @@ describe('SeatingChart prop forwarding', () => {
     expect(constructed[0]?.enable3D).toBeUndefined();
     expect(constructed[0]?.enable3DCrowd).toBeUndefined();
     expect(constructed[0]?.touchNavigation3D).toBeUndefined();
+  });
+
+  it('forwards the nine display options and calls the nine added callbacks', async () => {
+    const { SeatingChart } = await import('../src/SeatingChart');
+    const values = {
+      theme: { mode: 'dark' as const },
+      pricing: { prices: [] },
+      telemetry: false,
+      languages: ['en', 'de'],
+      mapTheme: {},
+      chrome: { view3dCaption: false },
+      floorLabelStyle: 'number' as const,
+      enableSeatView: true,
+      max3DSeats: 1200,
+    };
+    const callbacks = {
+      onConnectionChange: vi.fn(), onStatusChange: vi.fn(), onSalesClosed: vi.fn(),
+      onViewChange: vi.fn(), onMapStateChange: vi.fn(), onSectionFocus: vi.fn(),
+      onSeatRetap: vi.fn(), onSeatViewChange: vi.fn(), onBuyerViewChange: vi.fn(),
+    };
+    await act(async () => {
+      root.render(createElement(SeatingChart, { event: 'ev_1', ...values, ...callbacks } as never));
+    });
+    expect(constructed).toHaveLength(1);
+    expect(constructed[0]).toMatchObject(values);
+
+    const options = constructed[0] as Record<string, (arg?: unknown) => void>;
+    for (const [name, spy] of Object.entries(callbacks)) {
+      const arg = { from: name };
+      options[name]!(arg);
+      expect(spy, `${name} did not reach the host`).toHaveBeenCalledTimes(1);
+      if (VOID_CALLBACKS.has(name)) expect(spy).toHaveBeenCalledWith();
+      else expect(spy).toHaveBeenCalledWith(arg);
+    }
   });
 });

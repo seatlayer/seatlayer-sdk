@@ -34,6 +34,10 @@ import {
   type SelectedObjectUnavailableEvent,
 } from '@seatlayer/js';
 
+/** The argument a `SeatingChart` callback option is called with. */
+type CallbackArg<K extends keyof SeatingChartOptions> =
+  NonNullable<SeatingChartOptions[K]> extends (arg: infer A) => unknown ? A : never;
+
 /**
  * Angular wrapper around the framework-agnostic `@seatlayer/js` SDK.
  *
@@ -138,6 +142,33 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
   /** One-shot session for hosts that own the lifecycle. Cannot be renewed. */
   @Input() buyerAccessToken?: string | BuyerAccessToken;
 
+  /** Light, dark or auto (`{ mode }`). Read once per mount. */
+  @Input() theme?: SeatingChartOptions['theme'];
+
+  /** Your own prices per category or object. Read once per mount. */
+  @Input() pricing?: SeatingChartOptions['pricing'];
+
+  /** Usage telemetry; false turns it off. Read once per mount. */
+  @Input() telemetry?: boolean;
+
+  /** Languages offered to the buyer. Read once per mount. */
+  @Input() languages?: string[];
+
+  /** Map colours. Read once per mount. */
+  @Input() mapTheme?: SeatingChartOptions['mapTheme'];
+
+  /** Turn off built-in 3D and seat-view captions you draw yourself. Read once per mount. */
+  @Input() chrome?: SeatingChartOptions['chrome'];
+
+  /** Level labels by `'name'` or `'number'`. Read once per mount. */
+  @Input() floorLabelStyle?: SeatingChartOptions['floorLabelStyle'];
+
+  /** Offer the view from a seat. Read once per mount. */
+  @Input() enableSeatView?: boolean;
+
+  /** Cap on seats drawn in 3D. Read once per mount. */
+  @Input() max3DSeats?: number;
+
   /** The buyer's selection changed. */
   @Output() readonly selectionChange: EventEmitter<SelectedSeat[]> = new EventEmitter<SelectedSeat[]>();
 
@@ -190,6 +221,38 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
   /** Selected-but-unheld units stopped being selectable. */
   @Output() readonly selectedObjectUnavailable: EventEmitter<SelectedObjectUnavailableEvent> =
     new EventEmitter<SelectedObjectUnavailableEvent>();
+
+  /** The page's line to the server changed. */
+  @Output() readonly connectionChange: EventEmitter<CallbackArg<'onConnectionChange'>> =
+    new EventEmitter<CallbackArg<'onConnectionChange'>>();
+
+  /** The status line over the map changed. */
+  @Output() readonly statusChange: EventEmitter<void> = new EventEmitter<void>();
+
+  /** Sales for the event closed. */
+  @Output() readonly salesClosed: EventEmitter<void> = new EventEmitter<void>();
+
+  /** The camera moved (once per frame at most). */
+  @Output() readonly viewChange: EventEmitter<void> = new EventEmitter<void>();
+
+  /** The map's state changed. */
+  @Output() readonly mapStateChange: EventEmitter<void> = new EventEmitter<void>();
+
+  /** A section was focused, or focus left (`null`). */
+  @Output() readonly sectionFocus: EventEmitter<CallbackArg<'onSectionFocus'>> =
+    new EventEmitter<CallbackArg<'onSectionFocus'>>();
+
+  /** The buyer tapped a seat already in the selection. */
+  @Output() readonly seatRetap: EventEmitter<CallbackArg<'onSeatRetap'>> =
+    new EventEmitter<CallbackArg<'onSeatRetap'>>();
+
+  /** The view from a seat opened, or closed (`null`). */
+  @Output() readonly seatViewChange: EventEmitter<CallbackArg<'onSeatViewChange'>> =
+    new EventEmitter<CallbackArg<'onSeatViewChange'>>();
+
+  /** The buyer's view changed (2D, 3D, a seat). */
+  @Output() readonly buyerViewChange: EventEmitter<CallbackArg<'onBuyerViewChange'>> =
+    new EventEmitter<CallbackArg<'onBuyerViewChange'>>();
 
   @ViewChild('container', { static: true })
   private readonly container!: ElementRef<HTMLDivElement>;
@@ -387,6 +450,15 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
           seatTooltip: this.seatTooltip,
           buyerAccessTokenProvider: this.buyerAccessTokenProvider,
           buyerAccessToken: this.buyerAccessToken,
+          theme: this.theme,
+          pricing: this.pricing,
+          telemetry: this.telemetry,
+          languages: this.languages,
+          mapTheme: this.mapTheme,
+          chrome: this.chrome,
+          floorLabelStyle: this.floorLabelStyle,
+          enableSeatView: this.enableSeatView,
+          max3DSeats: this.max3DSeats,
         },
         {
           onSelectionChange: (seats) => emit(this.selectionChange, seats),
@@ -405,6 +477,15 @@ export class SeatLayerSeatingChartComponent implements OnChanges {
           onAccessExpired: (state) => emit(this.accessExpired, state),
           onAccessUnavailable: (state) => emit(this.accessUnavailable, state),
           onSelectedObjectUnavailable: (state) => emit(this.selectedObjectUnavailable, state),
+          onConnectionChange: (state) => emit(this.connectionChange, state),
+          onStatusChange: () => this.zone.run(() => this.statusChange.emit()),
+          onSalesClosed: () => this.zone.run(() => this.salesClosed.emit()),
+          onViewChange: () => this.zone.run(() => this.viewChange.emit()),
+          onMapStateChange: () => this.zone.run(() => this.mapStateChange.emit()),
+          onSectionFocus: (summary) => emit(this.sectionFocus, summary),
+          onSeatRetap: (seat) => emit(this.seatRetap, seat),
+          onSeatViewChange: (info) => emit(this.seatViewChange, info),
+          onBuyerViewChange: (state) => emit(this.buyerViewChange, state),
         },
       ));
 

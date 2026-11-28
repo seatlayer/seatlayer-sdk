@@ -83,6 +83,16 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
             ? (context) => callbacks.current.buyerAccessTokenProvider!(context)
             : undefined,
           buyerAccessToken: callbacks.current.buyerAccessToken,
+          // Read once per mount, as `messages` is: changing one does not rebuild.
+          theme: callbacks.current.theme,
+          pricing: callbacks.current.pricing,
+          telemetry: callbacks.current.telemetry,
+          languages: callbacks.current.languages,
+          mapTheme: callbacks.current.mapTheme,
+          chrome: callbacks.current.chrome,
+          floorLabelStyle: callbacks.current.floorLabelStyle,
+          enableSeatView: callbacks.current.enableSeatView,
+          max3DSeats: callbacks.current.max3DSeats,
         },
         {
           onAccessExpired: (state) => callbacks.current.onAccessExpired?.(state),
@@ -102,6 +112,15 @@ export const SeatingChart = forwardRef<SeatingChartHandle, SeatingChartProps>(
           onDeckTap: (floorId) => callbacks.current.onDeckTap?.(floorId),
           onHint: (message) => callbacks.current.onHint?.(message),
           onSeatHover: (details) => callbacks.current.onSeatHover?.(details),
+          onConnectionChange: (state) => callbacks.current.onConnectionChange?.(state),
+          onStatusChange: () => callbacks.current.onStatusChange?.(),
+          onSalesClosed: () => callbacks.current.onSalesClosed?.(),
+          onViewChange: () => callbacks.current.onViewChange?.(),
+          onMapStateChange: () => callbacks.current.onMapStateChange?.(),
+          onSectionFocus: (summary) => callbacks.current.onSectionFocus?.(summary),
+          onSeatRetap: (seat) => callbacks.current.onSeatRetap?.(seat),
+          onSeatViewChange: (info) => callbacks.current.onSeatViewChange?.(info),
+          onBuyerViewChange: (state) => callbacks.current.onBuyerViewChange?.(state),
         },
       ));
       chartRef.current = chart;
