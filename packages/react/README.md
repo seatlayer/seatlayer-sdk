@@ -54,6 +54,20 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 1.0.10
+
+Nothing needs a code change. What a buyer may now see:
+
+- **A Season hold this buyer session may not read no longer stops the map.**
+  With `initialOperationId` or `restoreOperation()`, an operation of another
+  buyer session (for example after your token server minted a new one) or an
+  unknown id now restores nothing: `restoreOperation()` resolves `null`, the
+  error callback gets code `season_operation_not_found`, and the Season opens
+  as if no id were given. Before, the map failed to load. The other session's
+  hold is not released; it runs out on its own clock.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 1.0.10 as well.
+
 ## Upgrading to 1.0.9
 
 Nothing needs a code change. What a buyer may now see:
