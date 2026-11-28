@@ -81,7 +81,8 @@ async function makeComponent(inputs: Record<string, unknown> = {}): Promise<Comp
     'selectionChange', 'hold', 'holdRestored', 'holdExpired', 'gaClick', 'errored',
     'deckTap', 'hint', 'seatHover', 'accessExpired', 'accessUnavailable',
     'selectedObjectUnavailable', 'selectionValidityChange', 'selectionValid',
-    'selectionInvalid', 'selectionLimit',
+    'selectionInvalid', 'selectionLimit', 'connectionChange', 'statusChange', 'salesClosed',
+    'viewChange', 'mapStateChange', 'sectionFocus', 'seatRetap', 'seatViewChange', 'buyerViewChange',
   ]) {
     if (!(output in component)) component[output] = { emit: vi.fn() };
   }
@@ -220,5 +221,43 @@ describe('@seatlayer/angular SeatingChart — rebuild policy', () => {
     expect(constructed[0]?.enable3D).toBeUndefined();
     expect(constructed[0]?.enable3DCrowd).toBeUndefined();
     expect(constructed[0]?.touchNavigation3D).toBeUndefined();
+  });
+
+  it('forwards the nine display inputs and emits the nine added outputs', async () => {
+    const values = {
+      theme: { mode: 'dark' },
+      pricing: { prices: [] },
+      telemetry: false,
+      languages: ['en', 'de'],
+      mapTheme: {},
+      chrome: { view3dCaption: false },
+      floorLabelStyle: 'number',
+      enableSeatView: true,
+      max3DSeats: 1200,
+    };
+    // Core callback name → the @Output it must emit through.
+    const outputs: Record<string, string> = {
+      onConnectionChange: 'connectionChange', onStatusChange: 'statusChange',
+      onSalesClosed: 'salesClosed', onViewChange: 'viewChange',
+      onMapStateChange: 'mapStateChange', onSectionFocus: 'sectionFocus',
+      onSeatRetap: 'seatRetap', onSeatViewChange: 'seatViewChange',
+      onBuyerViewChange: 'buyerViewChange',
+    };
+    const spies = Object.fromEntries(Object.values(outputs).map((name) => [name, { emit: vi.fn() }]));
+    const component = await makeComponent({ event: 'ev_1', ...values, ...spies });
+    component.ngOnChanges(changes('event'));
+    expect(constructed).toHaveLength(1);
+    expect(constructed[0]).toMatchObject(values);
+
+    const voidOutputs = new Set(['statusChange', 'salesClosed', 'viewChange', 'mapStateChange']);
+    const options = constructed[0] as Record<string, (arg?: unknown) => void>;
+    for (const [callback, output] of Object.entries(outputs)) {
+      const arg = { from: callback };
+      options[callback]!(arg);
+      const emit = spies[output]!.emit;
+      expect(emit, `${output} was not emitted`).toHaveBeenCalledTimes(1);
+      if (voidOutputs.has(output)) expect(emit).toHaveBeenCalledWith();
+      else expect(emit).toHaveBeenCalledWith(arg);
+    }
   });
 });

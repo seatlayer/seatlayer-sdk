@@ -30,6 +30,10 @@ import {
   type SelectedObjectUnavailableEvent,
 } from '@seatlayer/js';
 
+/** The argument a `SeatingChart` callback option is called with. */
+type CallbackArg<K extends keyof SeatingChartOptions> =
+  NonNullable<SeatingChartOptions[K]> extends (arg: infer A) => unknown ? A : never;
+
 /**
  * What `ref="chart"` gives you — call these to drive the picker from your app.
  *
@@ -151,6 +155,27 @@ export const SeatingChart = defineComponent({
       type: [String, Object] as PropType<string | BuyerAccessToken>,
       default: undefined,
     },
+    /** Light, dark or auto (`{ mode }`). Read once per mount. */
+    theme: { type: Object as PropType<SeatingChartOptions['theme']>, default: undefined },
+    /** Your own prices per category or object. Read once per mount. */
+    pricing: { type: Object as PropType<SeatingChartOptions['pricing']>, default: undefined },
+    /** Usage telemetry; false turns it off. Read once per mount. */
+    telemetry: { type: Boolean, default: undefined },
+    /** Languages offered to the buyer. Read once per mount. */
+    languages: { type: Array as PropType<string[]>, default: undefined },
+    /** Map colours. Read once per mount. */
+    mapTheme: { type: Object as PropType<SeatingChartOptions['mapTheme']>, default: undefined },
+    /** Turn off built-in 3D and seat-view captions you draw yourself. Read once per mount. */
+    chrome: { type: Object as PropType<SeatingChartOptions['chrome']>, default: undefined },
+    /** Level labels by `'name'` or `'number'`. Read once per mount. */
+    floorLabelStyle: {
+      type: String as PropType<SeatingChartOptions['floorLabelStyle']>,
+      default: undefined,
+    },
+    /** Offer the view from a seat. Read once per mount. */
+    enableSeatView: { type: Boolean, default: undefined },
+    /** Cap on seats drawn in 3D. Read once per mount. */
+    max3DSeats: { type: Number, default: undefined },
   },
 
   emits: {
@@ -186,6 +211,24 @@ export const SeatingChart = defineComponent({
     'access-unavailable': (_event: BuyerAccessUnavailableEvent) => true,
     /** Selected-but-unheld units stopped being selectable. */
     'selected-object-unavailable': (_event: SelectedObjectUnavailableEvent) => true,
+    /** The page's line to the server changed. */
+    'connection-change': (_state: CallbackArg<'onConnectionChange'>) => true,
+    /** The status line over the map changed. */
+    'status-change': () => true,
+    /** Sales for the event closed. */
+    'sales-closed': () => true,
+    /** The camera moved (once per frame at most). */
+    'view-change': () => true,
+    /** The map's state changed. */
+    'map-state-change': () => true,
+    /** A section was focused, or focus left (`null`). */
+    'section-focus': (_summary: CallbackArg<'onSectionFocus'>) => true,
+    /** The buyer tapped a seat already in the selection. */
+    'seat-retap': (_seat: CallbackArg<'onSeatRetap'>) => true,
+    /** The view from a seat opened, or closed (`null`). */
+    'seat-view-change': (_info: CallbackArg<'onSeatViewChange'>) => true,
+    /** The buyer's view changed (2D, 3D, a seat). */
+    'buyer-view-change': (_state: CallbackArg<'onBuyerViewChange'>) => true,
   },
 
   setup(props, { emit, expose }) {
@@ -228,6 +271,15 @@ export const SeatingChart = defineComponent({
         emit('access-unavailable', state);
       const onSelectedObjectUnavailable = (state: SelectedObjectUnavailableEvent) =>
         emit('selected-object-unavailable', state);
+      const onConnectionChange = (state: CallbackArg<'onConnectionChange'>) => emit('connection-change', state);
+      const onStatusChange = () => emit('status-change');
+      const onSalesClosed = () => emit('sales-closed');
+      const onViewChange = () => emit('view-change');
+      const onMapStateChange = () => emit('map-state-change');
+      const onSectionFocus = (summary: CallbackArg<'onSectionFocus'>) => emit('section-focus', summary);
+      const onSeatRetap = (seat: CallbackArg<'onSeatRetap'>) => emit('seat-retap', seat);
+      const onSeatViewChange = (info: CallbackArg<'onSeatViewChange'>) => emit('seat-view-change', info);
+      const onBuyerViewChange = (state: CallbackArg<'onBuyerViewChange'>) => emit('buyer-view-change', state);
 
       const instance = new CoreSeatingChart(buildSeatingChartOptions(
         element,
@@ -252,6 +304,15 @@ export const SeatingChart = defineComponent({
           seatTooltip: props.seatTooltip,
           buyerAccessTokenProvider: props.buyerAccessTokenProvider,
           buyerAccessToken: props.buyerAccessToken,
+          theme: props.theme,
+          pricing: props.pricing,
+          telemetry: props.telemetry,
+          languages: props.languages,
+          mapTheme: props.mapTheme,
+          chrome: props.chrome,
+          floorLabelStyle: props.floorLabelStyle,
+          enableSeatView: props.enableSeatView,
+          max3DSeats: props.max3DSeats,
         },
         {
           onAccessExpired,
@@ -270,6 +331,15 @@ export const SeatingChart = defineComponent({
           onDeckTap,
           onHint,
           onSeatHover,
+          onConnectionChange,
+          onStatusChange,
+          onSalesClosed,
+          onViewChange,
+          onMapStateChange,
+          onSectionFocus,
+          onSeatRetap,
+          onSeatViewChange,
+          onBuyerViewChange,
         },
       ));
 

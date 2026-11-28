@@ -227,4 +227,45 @@ describe('SeatingChart prop forwarding', () => {
     expect(constructorCalls[0]?.enable3DCrowd).toBeUndefined();
     expect(constructorCalls[0]?.touchNavigation3D).toBeUndefined();
   });
+
+  it('forwards the nine display options and emits the nine added events', async () => {
+    const values = {
+      theme: { mode: 'dark' },
+      pricing: { prices: [] },
+      telemetry: false,
+      languages: ['en', 'de'],
+      mapTheme: {},
+      chrome: { view3dCaption: false },
+      floorLabelStyle: 'number',
+      enableSeatView: true,
+      max3DSeats: 1200,
+    };
+    const listeners = {
+      onConnectionChange: vi.fn(), onStatusChange: vi.fn(), onSalesClosed: vi.fn(),
+      onViewChange: vi.fn(), onMapStateChange: vi.fn(), onSectionFocus: vi.fn(),
+      onSeatRetap: vi.fn(), onSeatViewChange: vi.fn(), onBuyerViewChange: vi.fn(),
+    };
+    mount({ event: 'summer-gala', ...values }, listeners);
+    await nextTick();
+
+    expect(constructorCalls).toHaveLength(1);
+    expect(constructorCalls[0]).toMatchObject(values);
+
+    const voidEvents = new Set(['onStatusChange', 'onSalesClosed', 'onViewChange', 'onMapStateChange']);
+    const options = constructorCalls[0] as Record<string, (arg?: unknown) => void>;
+    for (const [name, spy] of Object.entries(listeners)) {
+      const arg = { from: name };
+      options[name]!(arg);
+      expect(spy, `${name} was not emitted`).toHaveBeenCalledTimes(1);
+      if (voidEvents.has(name)) expect(spy).toHaveBeenCalledWith();
+      else expect(spy).toHaveBeenCalledWith(arg);
+    }
+  });
+
+  it('sends telemetry and enableSeatView as undefined when the host sets neither', async () => {
+    mount({ event: 'summer-gala' });
+    await nextTick();
+    expect(constructorCalls[0]?.telemetry).toBeUndefined();
+    expect(constructorCalls[0]?.enableSeatView).toBeUndefined();
+  });
 });
