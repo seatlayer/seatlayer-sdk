@@ -49,6 +49,23 @@ also re-exports the plain JavaScript `SeatPickerWidget` class and the
 npm install @seatlayer/vue
 ```
 
+## Upgrading to 1.0.9
+
+Nothing needs a code change. What a buyer may now see:
+
+- **A restored Season hold comes back as the buyer's own.** With
+  `initialOperationId` or `restoreOperation()`, the hold's seats and price types
+  come back in the handoff, the held order and checkout pricing, and the map
+  shows the seats as the buyer's own, with the cart, timer and Continue. This
+  needs an API that names the hold's seats; with an older one, nothing changes.
+  `release()` on such a hold now resolves when the release is refused (before,
+  it rejected); the refusal still reaches the error callback.
+- **Level codes only on a phone.** The picker's level column shows the codes
+  (2 / 1 / G / All); each button keeps its full name for screen readers.
+- **Map controls clear an app's bottom safe area** in the wide layout.
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 1.0.9 as well.
+
 ## Upgrading to 1.0.8
 
 Nothing needs a code change. New and optional:
