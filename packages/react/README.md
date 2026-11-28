@@ -54,6 +54,25 @@ selects and **holds**, and your trusted server **books** the hold.
 npm install @seatlayer/react
 ```
 
+## Upgrading to 1.0.8
+
+Nothing needs a code change. New and optional:
+
+- **18 more `SeatingChart` props reach the chart.** `theme`, `pricing`, `telemetry`, `languages`, `mapTheme`, `chrome`, `floorLabelStyle`, `enableSeatView`, `max3DSeats`, and the callbacks
+  `onConnectionChange`, `onStatusChange`, `onSalesClosed`, `onViewChange`,
+  `onMapStateChange`, `onSectionFocus`, `onSeatRetap`, `onSeatViewChange`,
+  `onBuyerViewChange`. They type-checked before but did not reach the chart.
+
+What a buyer may now see:
+
+- **No false "just taken" after a standing-area hold.** Holding standing
+  tickets while seats or tables were selected no longer reports those seats as
+  taken by another buyer when the hold lands.
+- **The top row mirrors on a right-to-left page** (the test-mode badge, the
+  connection line and the Map/3D switch).
+- **One version of the SDK.** If your app also installs `@seatlayer/js`
+  itself, move it to 1.0.8 as well.
+
 ## Upgrading to 1.0.7
 
 Nothing needs a code change. What a buyer may now see:
